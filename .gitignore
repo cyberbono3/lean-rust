@@ -5,7 +5,7 @@
 *.swp
 *.swo
 *~
-target/
+target/*
 
 # OS
 .DS_Store
