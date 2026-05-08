@@ -5,9 +5,14 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "SSZ-compatible primitive types: wide integers, byte arrays, bitfields. Implementation lands in Issue #2 (Tier 0 — leaf, no project deps)."
+description   = "Foundation primitives for Lean Ethereum: wide integers, Boolean, BasisPoint, error type. Tier 0 — no project deps."
 
 [lints]
 workspace = true
 
 [dependencies]
+ruint     = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
