@@ -89,10 +89,11 @@ clap       = { version = "4", features = ["derive"] }
 hex        = "0.4"
 
 # test
-proptest   = "1"
-insta      = { version = "1", features = ["yaml"] }
-wiremock   = "0.6"
-tokio-test = "0.4"
+proptest          = "1"
+insta             = { version = "1", features = ["yaml"] }
+wiremock          = "0.6"
+tokio-test        = "0.4"
+static_assertions = "1"
 
 [profile.release]
 lto           = "thin"
