@@ -38,4 +38,15 @@ pub enum TypesError {
         /// Value that violated the invariant.
         value: u64,
     },
+
+    /// [`ByteList::try_new`](crate::ByteList::try_new) or
+    /// [`ByteListLimit::try_new`](crate::ByteListLimit::try_new) received
+    /// `bytes` longer than the declared `limit`.
+    #[error("byte list length {got} exceeds limit {limit}")]
+    ByteListLimitExceeded {
+        /// Maximum byte length allowed.
+        limit: usize,
+        /// Actual byte length received.
+        got: usize,
+    },
 }

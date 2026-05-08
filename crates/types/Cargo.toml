@@ -5,7 +5,7 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Foundation primitives for Lean Ethereum: wide integers, Boolean, BasisPoint, error type. Tier 0 — no project deps."
+description   = "Foundation primitives for Lean Ethereum: wide integers, Boolean, BasisPoint, byte arrays, error type. Tier 0 — no project deps."
 
 [lints]
 workspace = true
@@ -15,4 +15,5 @@ ruint     = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-proptest = { workspace = true }
+proptest          = { workspace = true }
+static_assertions = { workspace = true }
