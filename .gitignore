@@ -1,0 +1,50 @@
+# --- Claude Kit (managed by install.sh -- do not edit this section) ---
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Third-party research sources (not part of this project)
+superpowers-main/
+caveman/
+
+# --- Claude Kit (managed by install.sh -- do not edit this section) ---
+# Claude Code local settings (personal dev overrides)
+.claude/settings.local.json
+.claude/*.local.*
+
+# Runtime state (generated during workflow)
+.claude/workflow-state/
+.claude/prompts/
+.claude/docs/
+.claude/
+Claude.md
+.mcp.json
+skills-lock.json
+
+# Meta-agent session state (ephemeral)
+.meta-agent/runs/
+!.meta-agent/runs/.gitkeep
+# --- End Claude Kit ---
+# --- End Claude Kit ---

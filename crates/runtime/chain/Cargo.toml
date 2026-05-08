@@ -1,0 +1,13 @@
+[package]
+name          = "runtime-chain"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Chain + sync + duties services (consensus-coupled). Implementation lands in a later issue (Tier 6)."
+
+[lints]
+workspace = true
+
+[dependencies]

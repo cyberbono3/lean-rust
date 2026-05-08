@@ -1,0 +1,10 @@
+[build]
+# Use all available cores by default; override with `cargo build -j N`.
+incremental = true
+
+[net]
+retry            = 3
+git-fetch-with-cli = true
+
+[term]
+color = "auto"

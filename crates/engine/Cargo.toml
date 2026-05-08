@@ -1,0 +1,13 @@
+[package]
+name          = "engine"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Consensus boundary: results + Store wrappers. Implementation lands in a later issue (Tier 4)."
+
+[lints]
+workspace = true
+
+[dependencies]

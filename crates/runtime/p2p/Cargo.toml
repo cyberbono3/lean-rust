@@ -1,0 +1,13 @@
+[package]
+name          = "runtime-p2p"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "libp2p QUIC-v1 host, gossip + req/resp. Implementation lands in a later issue (Tier 6)."
+
+[lints]
+workspace = true
+
+[dependencies]

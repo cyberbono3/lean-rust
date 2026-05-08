@@ -1,0 +1,13 @@
+[package]
+name          = "runtime-core"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Service trait, Node, lifecycle, leanlog formatter, httpsvc shell. Implementation lands in a later issue (Tier 5)."
+
+[lints]
+workspace = true
+
+[dependencies]

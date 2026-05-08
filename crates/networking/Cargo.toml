@@ -1,0 +1,13 @@
+[package]
+name          = "networking"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Wire codecs, gossipsub message-id, snappy framing. Implementation lands in a later issue (Tier 4)."
+
+[lints]
+workspace = true
+
+[dependencies]

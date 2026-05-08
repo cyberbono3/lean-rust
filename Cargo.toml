@@ -1,0 +1,106 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/types",
+    "crates/ssz",
+    "crates/config",
+    "crates/protocol",
+    "crates/statetransition",
+    "crates/forkchoice",
+    "crates/engine",
+    "crates/storage",
+    "crates/networking",
+    "crates/runtime/core",
+    "crates/runtime/chain",
+    "crates/runtime/p2p",
+    "crates/runtime/api",
+    "crates/node",
+    "crates/beacon",
+]
+
+[workspace.package]
+version       = "0.1.0"
+edition       = "2021"
+rust-version  = "1.80"
+license       = "MIT OR Apache-2.0"
+repository    = "https://github.com/cyberbono3/lean-rust"
+
+[workspace.lints.rust]
+unsafe_code  = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all         = { level = "deny", priority = -1 }
+pedantic    = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic       = "deny"
+
+[workspace.dependencies]
+# foundation
+ruint     = { version = "1", features = ["std"] }
+blake3    = "1"
+thiserror = "2"
+anyhow    = "1"
+
+# ssz
+ethereum_ssz        = "0.7"
+ethereum_ssz_derive = "0.7"
+
+# async + concurrency
+tokio       = { version = "1", features = ["full"] }
+tokio-util  = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+futures     = "0.3"
+parking_lot = "0.12"
+
+# net
+libp2p = { version = "0.55", features = [
+    "tokio",
+    "quic",
+    "gossipsub",
+    "request-response",
+    "identify",
+    "macros",
+    "noise",
+    "yamux",
+    "ping",
+] }
+snap = "1"
+
+# observability
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# api
+axum       = "0.7"
+tower      = "0.4"
+tower-http = { version = "0.5", features = ["trace"] }
+prometheus = "0.13"
+
+# config + cli
+serde      = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+clap       = { version = "4", features = ["derive"] }
+hex        = "0.4"
+
+# test
+proptest   = "1"
+insta      = { version = "1", features = ["yaml"] }
+wiremock   = "0.6"
+tokio-test = "0.4"
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+opt-level     = 3
+debug         = false
+strip         = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug     = true
+
+[profile.test]
+opt-level = 0
+debug     = true

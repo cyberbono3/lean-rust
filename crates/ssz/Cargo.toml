@@ -1,0 +1,13 @@
+[package]
+name          = "ssz"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "SSZ encode/decode + BLAKE3 merkleization facade. Implementation lands in Issues #5–#7 (Tier 1)."
+
+[lints]
+workspace = true
+
+[dependencies]

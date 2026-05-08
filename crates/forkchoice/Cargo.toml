@@ -1,0 +1,13 @@
+[package]
+name          = "forkchoice"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "LMD-GHOST + 4-phase interval ticking. Implementation lands in Issues #16–#19 (Tier 3)."
+
+[lints]
+workspace = true
+
+[dependencies]

@@ -1,0 +1,13 @@
+[package]
+name          = "config"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Frozen chain constants + devnet0 YAML config. Implementation lands in Issue #8 (Tier 1)."
+
+[lints]
+workspace = true
+
+[dependencies]

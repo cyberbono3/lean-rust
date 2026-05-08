@@ -1,0 +1,13 @@
+[package]
+name          = "types"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "SSZ-compatible primitive types: wide integers, byte arrays, bitfields. Implementation lands in Issue #2 (Tier 0 — leaf, no project deps)."
+
+[lints]
+workspace = true
+
+[dependencies]
