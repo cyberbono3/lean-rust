@@ -49,4 +49,38 @@ pub enum TypesError {
         /// Actual byte length received.
         got: usize,
     },
+
+    /// [`Bitlist::set`](crate::Bitlist::set) /
+    /// [`Bitlist::with_length`](crate::Bitlist::with_length) received an
+    /// index or length at or above the compile-time `LIMIT`.
+    #[error("bitlist limit {limit} exceeded by {got} bits")]
+    BitlistLimitExceeded {
+        /// Maximum number of bits allowed.
+        limit: usize,
+        /// Index or length that violated the cap.
+        got: usize,
+    },
+
+    /// [`Bitlist::from_bytes`](crate::Bitlist::from_bytes) received an empty
+    /// slice or a slice whose final byte is `0x00` (no SSZ delimiter bit).
+    #[error("invalid bitlist encoding (missing delimiter bit)")]
+    InvalidBitlistEncoding,
+
+    /// [`Bitvector::from_bytes`](crate::Bitvector::from_bytes) received a
+    /// canonically-correct number of bytes but the trailing bits beyond
+    /// position `length - 1` in the final byte are non-zero.
+    #[error("invalid bitvector encoding: trailing bits beyond length {length} must be zero")]
+    InvalidBitvectorEncoding {
+        /// Bit length declared by the [`Bitvector`](crate::Bitvector) type.
+        length: usize,
+    },
+
+    /// [`Bitvector::set`](crate::Bitvector::set) received an index `>= N`.
+    #[error("bitvector index {got} out of bounds (length {length})")]
+    BitvectorIndexOutOfBounds {
+        /// Bit length of the [`Bitvector`](crate::Bitvector) (its `N`).
+        length: usize,
+        /// Index that violated the bound.
+        got: usize,
+    },
 }
