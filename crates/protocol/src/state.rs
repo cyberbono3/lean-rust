@@ -748,45 +748,38 @@ impl State {
     /// When `validate_state_root` is `true`, also asserts that the post-state
     /// `hash_tree_root` equals `signed_block.message.state_root`.
     ///
-    /// Transactional: if any composed step (or the state-root check) fails,
-    /// `self` is restored to its pre-call value byte-for-byte before the
-    /// error returns. The implementation snapshots the state at entry and
-    /// rewrites it on `Err`; callers that invoke this method in tight loops
-    /// should pre-validate inputs to avoid the snapshot cost.
+    /// Transactional: the transition is computed in a local working copy
+    /// and swapped into `self` only when every step succeeds, so an `Err`
+    /// return leaves `self` byte-equal to its pre-call value. Cost: one
+    /// `State` clone per call.
     ///
     /// # Errors
     /// - Forwarded from [`State::process_slots`] /
     ///   [`State::process_block_header`] / [`State::process_attestations`].
     /// - [`StateTransitionError::StateRootMismatch`] when
-    ///   `validate_state_root` is `true` and `state.hash_tree_root() !=
+    ///   `validate_state_root` is `true` and `next.hash_tree_root() !=
     ///   signed_block.message.state_root`.
     pub fn state_transition(
         &mut self,
         signed_block: &SignedBlock,
         validate_state_root: bool,
     ) -> Result<(), StateTransitionError> {
-        let snapshot = self.clone();
-        let result = (|| {
-            let block = &signed_block.message;
-            self.process_slots(block.slot)?;
-            self.process_block_header(block)?;
-            self.process_attestations(&block.body.attestations)?;
-            if validate_state_root {
-                let got: Bytes32 = self.hash_tree_root().into();
-                if got != block.state_root {
-                    return Err(StateTransitionError::StateRootMismatch {
-                        slot: block.slot,
-                        got,
-                        want: block.state_root,
-                    });
-                }
+        let block = &signed_block.message;
+        let mut next = self.clone();
+        next.process_slots(block.slot)?;
+        next.process_block_header(block)?;
+        next.process_attestations(&block.body.attestations)?;
+        if validate_state_root {
+            let got: Bytes32 = next.hash_tree_root().into();
+            if got != block.state_root {
+                return Err(StateTransitionError::StateRootMismatch {
+                    slot: block.slot,
+                    got,
+                    want: block.state_root,
+                });
             }
-            Ok(())
-        })();
-        if let Err(e) = result {
-            *self = snapshot;
-            return Err(e);
         }
+        *self = next;
         Ok(())
     }
 }
