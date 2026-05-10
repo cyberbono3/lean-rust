@@ -1,0 +1,13 @@
+# Canonical devnet0 chain-config preset.
+#
+# Field set + values mirror the frozen constants in `config::devnet0`.
+# All `*_bps` fields are basis points: 0..=10_000 (100%).
+slot_duration_ms: 4000
+seconds_per_slot: 4
+justification_lookback_slots: 3
+proposer_reorg_cutoff_bps: 2500
+vote_due_bps: 5000
+fast_confirm_due_bps: 7500
+view_freeze_cutoff_bps: 7500
+historical_roots_limit: 262144
+validator_registry_limit: 4096
