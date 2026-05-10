@@ -11,3 +11,13 @@ description   = "LMD-GHOST + 4-phase interval ticking (Tier 3)."
 workspace = true
 
 [dependencies]
+types           = { path = "../types" }
+ssz             = { path = "../ssz" }
+config          = { path = "../config" }
+protocol        = { path = "../protocol" }
+statetransition = { path = "../statetransition" }
+thiserror       = { workspace = true }
+
+[dev-dependencies]
+proptest          = { workspace = true }
+static_assertions = { workspace = true }
