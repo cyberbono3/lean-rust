@@ -56,18 +56,16 @@ pub mod checkpoint;
 pub mod error;
 pub mod slot;
 pub mod state;
-pub mod state_transition;
 pub mod validator;
 pub mod vote;
 
 pub use block::{Block, BlockBody, BlockHeader, SignedBlock, MAX_ATTESTATIONS};
 pub use checkpoint::Checkpoint;
-pub use error::ProtocolError;
+pub use error::{AttSlotKind, ProtocolError, StateTransitionError};
 pub use slot::Slot;
 pub use state::{
     ProtocolConfig, State, HISTORICAL_ROOTS_LIMIT, JUSTIFICATIONS_VALIDATORS_LIMIT,
     STATE_FIXED_PART_LEN, VALIDATOR_REGISTRY_LIMIT,
 };
-pub use state_transition::StateTransitionError;
 pub use validator::{is_proposer, ValidatorIndex};
 pub use vote::{SignedVote, Vote};

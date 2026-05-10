@@ -25,7 +25,7 @@ use core::fmt::{self, Write};
 /// assert_eq!(zero.as_slice(), &[0_u8; 32]);
 /// assert_eq!(zero.to_hex(), format!("0x{}", "00".repeat(32)));
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ByteVector<const N: usize>(pub [u8; N]);
 
 /// 32-byte vector — block roots, state roots, validator pubkey hashes.

@@ -1,7 +1,7 @@
 //! End-to-end coverage that the [`protocol::State`] slot-processing methods
 //! work on a state produced by [`statetransition::genesis_state`]. Unit
 //! coverage of `process_slot` / `process_slots` lives in
-//! `protocol::state_transition`; this file pins the genesis → advance path
+//! `protocol::transition`; this file pins the genesis → advance path
 //! across the crate boundary.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
