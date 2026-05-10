@@ -48,6 +48,8 @@
 #![forbid(unsafe_code)]
 
 mod internal;
+#[cfg(test)]
+mod test_fixtures;
 
 pub mod block;
 pub mod checkpoint;

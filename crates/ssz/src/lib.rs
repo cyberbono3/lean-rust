@@ -54,6 +54,15 @@ pub trait HashTreeRoot {
     fn hash_tree_root(&self) -> [u8; 32];
 }
 
+/// `Vector[byte, N]` hash-tree-root: pack the bytes into 32-byte chunks
+/// (right-padding the final chunk with zeros if `N` is not a multiple of 32)
+/// and merkleize. The merkleizer zero-extends to the next power-of-two width.
+impl<const N: usize> HashTreeRoot for types::ByteVector<N> {
+    fn hash_tree_root(&self) -> [u8; 32] {
+        crate::merkleize::merkleize(&crate::merkleize::pack(self.as_slice()))
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {

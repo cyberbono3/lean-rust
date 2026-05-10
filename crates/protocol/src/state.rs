@@ -23,12 +23,12 @@ use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::{Bitlist, Bytes32};
 
-use crate::block::{BlockHeader, BLOCK_HEADER_SSZ_LEN};
+use crate::block::BlockHeader;
 use crate::checkpoint::Checkpoint;
 use crate::internal::{
-    bitlist_hash_tree_root, bytes32_list_hash_tree_root, decode_bytes32_list, encode_bytes32_list,
-    ensure_len, read_fixed, read_offset, u64_chunk, write_offset, BYTES32_LEN,
-    BYTES_PER_LENGTH_OFFSET,
+    bitlist_hash_tree_root, decode_bytes32_list, encode_bytes32_list, ensure_len,
+    list_hash_tree_root, read_fixed, read_offset, u64_chunk, write_offset, BLOCK_HEADER_LEN,
+    BYTES32_LEN, BYTES_PER_LENGTH_OFFSET, CHECKPOINT_LEN, SLOT_LEN, U64_LEN,
 };
 use crate::slot::Slot;
 
@@ -53,18 +53,16 @@ pub const VALIDATOR_REGISTRY_LIMIT: usize = config::DEVNET_CONFIG.validator_regi
 pub const JUSTIFICATIONS_VALIDATORS_LIMIT: usize =
     HISTORICAL_ROOTS_LIMIT * VALIDATOR_REGISTRY_LIMIT;
 
-const PROTOCOL_CONFIG_SSZ_LEN: usize = 16;
-const SLOT_SSZ_LEN: usize = 8;
-const CHECKPOINT_SSZ_LEN: usize = 40;
+const PROTOCOL_CONFIG_SSZ_LEN: usize = 2 * U64_LEN; // 16
 const STATE_VARIABLE_FIELD_COUNT: usize = 4;
 
 /// Length of the fixed portion of a [`State`] (5 fixed fields plus 4 offsets
 /// for the variable-length tails).
 pub const STATE_FIXED_PART_LEN: usize = PROTOCOL_CONFIG_SSZ_LEN
-    + SLOT_SSZ_LEN
-    + BLOCK_HEADER_SSZ_LEN
-    + CHECKPOINT_SSZ_LEN
-    + CHECKPOINT_SSZ_LEN
+    + SLOT_LEN
+    + BLOCK_HEADER_LEN
+    + CHECKPOINT_LEN
+    + CHECKPOINT_LEN
     + STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 232
 
 // =====================================================================
@@ -232,10 +230,10 @@ impl Decode for State {
         let config = read_fixed::<ProtocolConfig>(bytes, &mut c)?;
         let slot = read_fixed::<Slot>(bytes, &mut c)?;
         let latest_block_header = read_fixed::<BlockHeader>(bytes, &mut c)?;
-        let latest_justified = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_SSZ_LEN])?;
-        c += CHECKPOINT_SSZ_LEN;
-        let latest_finalized = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_SSZ_LEN])?;
-        c += CHECKPOINT_SSZ_LEN;
+        let latest_justified = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_LEN])?;
+        c += CHECKPOINT_LEN;
+        let latest_finalized = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_LEN])?;
+        c += CHECKPOINT_LEN;
 
         let mut offsets = [0_usize; STATE_VARIABLE_FIELD_COUNT];
         for offset in &mut offsets {
@@ -299,9 +297,9 @@ impl HashTreeRoot for State {
             self.latest_block_header.hash_tree_root(),
             self.latest_justified.hash_tree_root(),
             self.latest_finalized.hash_tree_root(),
-            bytes32_list_hash_tree_root(&self.historical_block_hashes, HISTORICAL_ROOTS_LIMIT),
+            list_hash_tree_root(&self.historical_block_hashes, HISTORICAL_ROOTS_LIMIT),
             bitlist_hash_tree_root(&self.justified_slots),
-            bytes32_list_hash_tree_root(&self.justifications_roots, HISTORICAL_ROOTS_LIMIT),
+            list_hash_tree_root(&self.justifications_roots, HISTORICAL_ROOTS_LIMIT),
             bitlist_hash_tree_root(&self.justifications_validators),
         ])
     }
@@ -315,17 +313,7 @@ mod tests {
     use ssz::{decode, encode, SszError};
     use types::Bytes32;
 
-    use crate::validator::ValidatorIndex;
-
-    fn sample_block_header() -> BlockHeader {
-        BlockHeader {
-            slot: Slot::new(7),
-            proposer_index: ValidatorIndex::new(2),
-            parent_root: Bytes32::new([0x11; 32]),
-            state_root: Bytes32::new([0x22; 32]),
-            body_root: Bytes32::new([0x33; 32]),
-        }
-    }
+    use crate::test_fixtures::sample_block_header;
 
     fn sample_state() -> State {
         let mut justified_slots: Bitlist<HISTORICAL_ROOTS_LIMIT> = Bitlist::new();

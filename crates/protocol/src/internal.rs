@@ -3,19 +3,42 @@
 //!
 //! - [`u64_chunk`] encodes a `u64` as the canonical 32-byte SSZ basic-type
 //!   Merkle chunk (low 8 bytes LE, upper 24 zero).
-//! - [`bytes_vector_hash_tree_root`] computes the SSZ hash-tree-root of a
-//!   fixed-length byte vector (`Vector[byte, N]`) — pack into 32-byte
-//!   chunks then merkleize.
+//! - [`list_hash_tree_root`] computes the SSZ hash-tree-root of `List[T, max]`.
+//! - [`bitlist_hash_tree_root`] computes the SSZ hash-tree-root of
+//!   `Bitlist[LIMIT]`.
 //! - [`impl_u64_ssz_newtype`] generates the boilerplate `Encode` / `Decode` /
 //!   [`ssz::HashTreeRoot`] / `From` / `Display` impls for a `u64` newtype.
 
-use ssz::merkleize::{merkleize, merkleize_with_limit, mix_in_length, pack, ZERO_HASH};
-use ssz::{Decode, DecodeError};
+use ssz::merkleize::{merkleize_with_limit, mix_in_length, pack, ZERO_HASH};
+use ssz::{Decode, DecodeError, HashTreeRoot};
 use types::{Bitlist, Bytes32};
 
 /// Number of bytes used by an SSZ length-offset (variable-length container
 /// fixed-portion entry).
 pub(crate) const BYTES_PER_LENGTH_OFFSET: usize = 4;
+
+/// Wire size (bytes) of a `u64` SSZ field.
+pub(crate) const U64_LEN: usize = 8;
+
+/// Wire size (bytes) of a [`types::Bytes32`] SSZ field.
+pub(crate) const BYTES32_LEN: usize = 32;
+
+/// Wire size (bytes) of a [`types::Bytes4000`] SSZ field — XMSS post-quantum
+/// signature placeholder used by `SignedVote` / `SignedBlock`.
+pub(crate) const BYTES4000_LEN: usize = 4000;
+
+/// Wire size (bytes) of a `Slot` SSZ field (alias for [`U64_LEN`]).
+pub(crate) const SLOT_LEN: usize = U64_LEN;
+
+/// Wire size (bytes) of a `ValidatorIndex` SSZ field (alias for [`U64_LEN`]).
+pub(crate) const VALIDATOR_INDEX_LEN: usize = U64_LEN;
+
+/// Wire size (bytes) of a `Checkpoint` SSZ field (`Bytes32 + Slot`).
+pub(crate) const CHECKPOINT_LEN: usize = BYTES32_LEN + SLOT_LEN;
+
+/// Wire size (bytes) of a `BlockHeader` SSZ field
+/// (`Slot + ValidatorIndex + 3 × Bytes32`).
+pub(crate) const BLOCK_HEADER_LEN: usize = SLOT_LEN + VALIDATOR_INDEX_LEN + 3 * BYTES32_LEN;
 
 /// Encodes `value` as the canonical 32-byte SSZ basic-type Merkle chunk
 /// (low 8 bytes LE, upper 24 zero).
@@ -28,14 +51,6 @@ pub(crate) const fn u64_chunk(value: u64) -> [u8; 32] {
         i += 1;
     }
     out
-}
-
-/// Computes the SSZ hash-tree-root of a fixed-length byte vector
-/// (`Vector[byte, N]`): pack the bytes into 32-byte chunks (right-padding
-/// the final chunk with zeros if `N` is not a multiple of 32) and
-/// merkleize. The merkleizer zero-extends to the next power of two width.
-pub(crate) fn bytes_vector_hash_tree_root(bytes: &[u8]) -> [u8; 32] {
-    merkleize(&pack(bytes))
 }
 
 /// Returns `Ok(())` when `bytes.len() == expected`, otherwise
@@ -132,9 +147,6 @@ pub(crate) fn decode_fixed_element_list<T: Decode>(
     Ok(items)
 }
 
-/// SSZ wire size of one [`Bytes32`] element.
-pub(crate) const BYTES32_LEN: usize = 32;
-
 /// Encodes a `List[Bytes32, _]` as a flat concatenation of 32-byte elements.
 pub(crate) fn encode_bytes32_list(items: &[Bytes32], buf: &mut Vec<u8>) {
     for item in items {
@@ -167,15 +179,15 @@ pub(crate) fn decode_bytes32_list(bytes: &[u8], max: usize) -> Result<Vec<Bytes3
     Ok(items)
 }
 
-/// SSZ hash-tree-root of `List[Bytes32, max]`:
+/// SSZ hash-tree-root of `List[T, max]` where `T: HashTreeRoot`:
 /// `mix_in_length(merkleize_with_limit(roots, max), len)`.
 ///
 /// Over-length input collapses the merkle root to [`ZERO_HASH`] rather than
 /// panicking — the resulting root will not match any well-formed wire
 /// payload, surfacing the bug at the first equality check.
-pub(crate) fn bytes32_list_hash_tree_root(items: &[Bytes32], max: usize) -> [u8; 32] {
-    let chunks: Vec<[u8; 32]> = items.iter().map(|b| b.0).collect();
-    let merkle = merkleize_with_limit(&chunks, max).unwrap_or(ZERO_HASH);
+pub(crate) fn list_hash_tree_root<T: HashTreeRoot>(items: &[T], max: usize) -> [u8; 32] {
+    let roots: Vec<[u8; 32]> = items.iter().map(T::hash_tree_root).collect();
+    let merkle = merkleize_with_limit(&roots, max).unwrap_or(ZERO_HASH);
     mix_in_length(&merkle, items.len() as u64)
 }
 
@@ -269,8 +281,7 @@ pub(crate) use impl_u64_ssz_newtype;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use super::{bytes_vector_hash_tree_root, u64_chunk};
-    use ssz::merkleize::{merkleize, pack};
+    use super::u64_chunk;
 
     #[test]
     fn u64_chunk_zero_is_zero_chunk() {
@@ -282,25 +293,5 @@ mod tests {
         let chunk = u64_chunk(0xdead_beef);
         assert_eq!(&chunk[..8], &0xdead_beef_u64.to_le_bytes());
         assert!(chunk[8..].iter().all(|&b| b == 0));
-    }
-
-    #[test]
-    fn bytes_vector_htr_matches_pack_then_merkleize() {
-        let payload = [0x77_u8; 4000];
-        assert_eq!(
-            bytes_vector_hash_tree_root(&payload),
-            merkleize(&pack(&payload))
-        );
-    }
-
-    #[test]
-    fn bytes_vector_htr_changes_with_input() {
-        let a = [0x11_u8; 4000];
-        let mut b = a;
-        b[0] = 0x12;
-        assert_ne!(
-            bytes_vector_hash_tree_root(&a),
-            bytes_vector_hash_tree_root(&b)
-        );
     }
 }
