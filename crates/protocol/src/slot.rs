@@ -20,6 +20,12 @@ pub struct Slot(u64);
 impl_u64_ssz_newtype!(Slot);
 
 impl Slot {
+    /// Slot zero — the genesis slot.
+    pub const ZERO: Slot = Slot(0);
+
+    /// One slot — minimal increment used by slot-advance loops.
+    pub const ONE: Slot = Slot(1);
+
     /// Constructs a [`Slot`] from a raw `u64`.
     #[must_use]
     pub const fn new(value: u64) -> Self {
@@ -36,6 +42,15 @@ impl Slot {
     #[must_use]
     pub const fn is_zero(self) -> bool {
         self.0 == 0
+    }
+
+    /// Returns `self + 1`, or `None` on overflow. Mirrors `u64::checked_add`.
+    #[must_use]
+    pub const fn advance(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(v) => Some(Self(v)),
+            None => None,
+        }
     }
 
     /// Returns `true` when `self` is a valid justification candidate after
@@ -166,6 +181,19 @@ mod tests {
     #[test]
     fn hash_tree_root_zero_is_zero_chunk() {
         assert_eq!(Slot::new(0).hash_tree_root(), [0_u8; 32]);
+    }
+
+    // -- advance -----------------------------------------------------------
+
+    #[test]
+    fn advance_increments_by_one() {
+        assert_eq!(Slot::ZERO.advance(), Some(Slot::ONE));
+        assert_eq!(Slot::new(41).advance(), Some(Slot::new(42)));
+    }
+
+    #[test]
+    fn advance_at_max_is_none() {
+        assert_eq!(Slot::new(u64::MAX).advance(), None);
     }
 
     // -- isqrt_u64 -----------------------------------------------------------

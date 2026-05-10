@@ -89,6 +89,12 @@ impl<const N: usize> Default for ByteVector<N> {
     }
 }
 
+impl<const N: usize> From<[u8; N]> for ByteVector<N> {
+    fn from(bytes: [u8; N]) -> Self {
+        Self(bytes)
+    }
+}
+
 impl<const N: usize> fmt::Debug for ByteVector<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ByteVector<{N}>({})", self.to_hex())
