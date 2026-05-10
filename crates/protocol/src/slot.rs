@@ -20,6 +20,12 @@ pub struct Slot(u64);
 impl_u64_ssz_newtype!(Slot);
 
 impl Slot {
+    /// Slot zero — the genesis slot.
+    pub const ZERO: Slot = Slot(0);
+
+    /// One slot — minimal increment used by slot-advance loops.
+    pub const ONE: Slot = Slot(1);
+
     /// Constructs a [`Slot`] from a raw `u64`.
     #[must_use]
     pub const fn new(value: u64) -> Self {

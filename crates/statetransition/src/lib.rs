@@ -7,30 +7,26 @@
 //! # Scope (this revision)
 //! - [`genesis_state`] — slot-0 [`protocol::State`] for a given validator
 //!   set + genesis time.
-//! - [`process_slot`] — per-slot housekeeping (caches the pre-block state
-//!   root into the latest header on the slot following an accepted block).
-//! - [`process_slots`] — advances the state slot-by-slot up to a future
-//!   target slot.
-//! - [`StateTransitionError`] — crate-level error enum.
+//! - The slot-processing methods (`process_slot`, `process_slots`) live as
+//!   inherent methods on [`protocol::State`]; this crate re-exports
+//!   [`StateTransitionError`] for convenience.
 //!
 //! # Example
 //! ```
 //! use protocol::Slot;
-//! use statetransition::{genesis_state, process_slots};
+//! use statetransition::genesis_state;
 //!
-//! let state = genesis_state(4, 1_700_000_000);
-//! let advanced = process_slots(&state, Slot::new(3)).unwrap();
-//! assert_eq!(advanced.slot, Slot::new(3));
+//! let mut state = genesis_state(4, 1_700_000_000);
+//! state.process_slots(Slot::new(3)).unwrap();
+//! assert_eq!(state.slot, Slot::new(3));
 //! ```
 
 #![forbid(unsafe_code)]
 
-pub mod error;
 pub mod genesis;
-pub mod slots;
 
-mod helpers;
+#[cfg(test)]
+mod test_fixtures;
 
-pub use error::StateTransitionError;
 pub use genesis::genesis_state;
-pub use slots::{process_slot, process_slots};
+pub use protocol::StateTransitionError;
