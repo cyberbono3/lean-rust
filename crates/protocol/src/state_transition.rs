@@ -33,11 +33,9 @@ pub enum StateTransitionError {
     },
 }
 
-/// Returns `slot + 1` or [`StateTransitionError::SlotOverflow`].
+/// Maps [`Slot::advance`] (`Option<Slot>`) onto [`StateTransitionError::SlotOverflow`].
 fn advance_slot(slot: Slot) -> Result<Slot, StateTransitionError> {
-    slot.get()
-        .checked_add(Slot::ONE.get())
-        .map(Slot::new)
+    slot.advance()
         .ok_or(StateTransitionError::SlotOverflow { slot })
 }
 
@@ -46,11 +44,18 @@ impl State {
     /// processing left the header's `state_root` as the all-zero sentinel.
     /// On any other input — including when no block has been applied since
     /// the previous slot — the state is left unchanged.
-    pub fn process_slot(&mut self) {
-        if self.latest_block_header.state_root != Bytes32::zero() {
-            return;
+    ///
+    /// # Errors
+    /// Currently infallible. The `Result` return matches the consensus-spec
+    /// `process_slot` signature and stays forward-compatible for future
+    /// validation steps that may surface a [`StateTransitionError`] variant.
+    /// TODO improve it
+    pub fn process_slot(&mut self) -> Result<(), StateTransitionError> {
+        if self.latest_block_header.state_root == Bytes32::zero() {
+            self.latest_block_header.state_root = self.hash_tree_root().into();
         }
-        self.latest_block_header.state_root = self.hash_tree_root().into();
+
+        Ok(())
     }
 
     /// Advances `self` slot-by-slot up to (but not past) `target_slot`.
@@ -73,7 +78,7 @@ impl State {
         }
         let steps = target_slot.get() - self.slot.get();
         for _ in 0..steps {
-            self.process_slot();
+            self.process_slot()?;
             self.slot = advance_slot(self.slot)?;
         }
         Ok(())
@@ -126,7 +131,7 @@ mod tests {
     fn process_slot_caches_previous_state_root_when_zero() {
         let mut state = fresh_state();
         let pre_root: Bytes32 = state.hash_tree_root().into();
-        state.process_slot();
+        state.process_slot().unwrap();
         assert_eq!(state.latest_block_header.state_root, pre_root);
     }
 
@@ -135,7 +140,7 @@ mod tests {
         let mut state = fresh_state();
         state.latest_block_header.state_root = Bytes32::new([0xab; 32]);
         let snapshot = state.clone();
-        state.process_slot();
+        state.process_slot().unwrap();
         assert_eq!(state, snapshot);
     }
 

@@ -44,6 +44,15 @@ impl Slot {
         self.0 == 0
     }
 
+    /// Returns `self + 1`, or `None` on overflow. Mirrors `u64::checked_add`.
+    #[must_use]
+    pub const fn advance(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(v) => Some(Self(v)),
+            None => None,
+        }
+    }
+
     /// Returns `true` when `self` is a valid justification candidate after
     /// `finalized` per the 3SF-mini consensus rule.
     ///
@@ -172,6 +181,19 @@ mod tests {
     #[test]
     fn hash_tree_root_zero_is_zero_chunk() {
         assert_eq!(Slot::new(0).hash_tree_root(), [0_u8; 32]);
+    }
+
+    // -- advance -----------------------------------------------------------
+
+    #[test]
+    fn advance_increments_by_one() {
+        assert_eq!(Slot::ZERO.advance(), Some(Slot::ONE));
+        assert_eq!(Slot::new(41).advance(), Some(Slot::new(42)));
+    }
+
+    #[test]
+    fn advance_at_max_is_none() {
+        assert_eq!(Slot::new(u64::MAX).advance(), None);
     }
 
     // -- isqrt_u64 -----------------------------------------------------------
