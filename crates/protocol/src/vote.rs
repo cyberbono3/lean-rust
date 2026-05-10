@@ -17,17 +17,15 @@ use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::Bytes4000;
 
 use crate::checkpoint::Checkpoint;
-use crate::internal::{bytes_vector_hash_tree_root, u64_chunk};
+use crate::internal::{
+    ensure_len, read_byte_array, read_fixed, u64_chunk, BYTES4000_LEN, CHECKPOINT_LEN, SLOT_LEN,
+    VALIDATOR_INDEX_LEN,
+};
 use crate::slot::Slot;
 use crate::validator::ValidatorIndex;
 
-const SLOT_LEN: usize = 8;
-const CHECKPOINT_LEN: usize = 40;
-const VALIDATOR_LEN: usize = 8;
-const SIGNATURE_LEN: usize = 4000;
-
 const VOTE_SSZ_LEN: usize = SLOT_LEN + 3 * CHECKPOINT_LEN; // 128
-const SIGNED_VOTE_SSZ_LEN: usize = VALIDATOR_LEN + VOTE_SSZ_LEN + SIGNATURE_LEN; // 4136
+const SIGNED_VOTE_SSZ_LEN: usize = VALIDATOR_INDEX_LEN + VOTE_SSZ_LEN + BYTES4000_LEN; // 4136
 
 /// Unsigned validator vote.
 ///
@@ -86,26 +84,13 @@ impl Decode for Vote {
     }
 
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() != VOTE_SSZ_LEN {
-            return Err(DecodeError::InvalidByteLength {
-                len: bytes.len(),
-                expected: VOTE_SSZ_LEN,
-            });
-        }
-        // Length verified above; every offset is in-bounds.
-        let mut cursor = 0;
-        let slot = Slot::from_ssz_bytes(&bytes[cursor..cursor + SLOT_LEN])?;
-        cursor += SLOT_LEN;
-        let head = Checkpoint::from_ssz_bytes(&bytes[cursor..cursor + CHECKPOINT_LEN])?;
-        cursor += CHECKPOINT_LEN;
-        let target = Checkpoint::from_ssz_bytes(&bytes[cursor..cursor + CHECKPOINT_LEN])?;
-        cursor += CHECKPOINT_LEN;
-        let source = Checkpoint::from_ssz_bytes(&bytes[cursor..cursor + CHECKPOINT_LEN])?;
+        ensure_len(bytes, VOTE_SSZ_LEN)?;
+        let mut c = 0;
         Ok(Self {
-            slot,
-            head,
-            target,
-            source,
+            slot: read_fixed::<Slot>(bytes, &mut c)?,
+            head: read_fixed::<Checkpoint>(bytes, &mut c)?,
+            target: read_fixed::<Checkpoint>(bytes, &mut c)?,
+            source: read_fixed::<Checkpoint>(bytes, &mut c)?,
         })
     }
 }
@@ -169,24 +154,12 @@ impl Decode for SignedVote {
     }
 
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() != SIGNED_VOTE_SSZ_LEN {
-            return Err(DecodeError::InvalidByteLength {
-                len: bytes.len(),
-                expected: SIGNED_VOTE_SSZ_LEN,
-            });
-        }
-        // Length verified above; every slice range is in-bounds.
-        let mut cursor = 0;
-        let validator_id = ValidatorIndex::from_ssz_bytes(&bytes[cursor..cursor + VALIDATOR_LEN])?;
-        cursor += VALIDATOR_LEN;
-        let message = Vote::from_ssz_bytes(&bytes[cursor..cursor + VOTE_SSZ_LEN])?;
-        cursor += VOTE_SSZ_LEN;
-        let mut signature = [0_u8; SIGNATURE_LEN];
-        signature.copy_from_slice(&bytes[cursor..cursor + SIGNATURE_LEN]);
+        ensure_len(bytes, SIGNED_VOTE_SSZ_LEN)?;
+        let mut c = 0;
         Ok(Self {
-            validator_id,
-            message,
-            signature: Bytes4000::new(signature),
+            validator_id: read_fixed::<ValidatorIndex>(bytes, &mut c)?,
+            message: read_fixed::<Vote>(bytes, &mut c)?,
+            signature: Bytes4000::new(read_byte_array::<BYTES4000_LEN>(bytes, &mut c)),
         })
     }
 }
@@ -199,7 +172,7 @@ impl HashTreeRoot for SignedVote {
         // visible.
         let validator = u64_chunk(self.validator_id.get());
         let message = self.message.hash_tree_root();
-        let signature = bytes_vector_hash_tree_root(self.signature.as_slice());
+        let signature = self.signature.hash_tree_root();
         hash_pair(
             &hash_pair(&validator, &message),
             &hash_pair(&signature, &ZERO_HASH),
@@ -382,7 +355,7 @@ mod tests {
         let chunks = [
             u64_chunk(sv.validator_id.get()),
             sv.message.hash_tree_root(),
-            bytes_vector_hash_tree_root(sv.signature.as_slice()),
+            sv.signature.hash_tree_root(),
         ];
         // 3 fields → width 4 → expect zero-padded merkleization.
         assert_eq!(sv.hash_tree_root(), merkleize(&chunks));

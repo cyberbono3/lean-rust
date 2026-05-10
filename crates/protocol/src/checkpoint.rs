@@ -8,12 +8,10 @@ use ssz::merkleize::hash_pair;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::Bytes32;
 
-use crate::internal::u64_chunk;
+use crate::internal::{u64_chunk, BYTES32_LEN, CHECKPOINT_LEN};
 use crate::slot::Slot;
 
-const ROOT_LEN: usize = 32;
-const SLOT_LEN: usize = 8;
-const SSZ_LEN: usize = ROOT_LEN + SLOT_LEN;
+const SSZ_LEN: usize = CHECKPOINT_LEN;
 
 /// Identifies one chain root at one slot.
 ///
@@ -76,9 +74,9 @@ impl Decode for Checkpoint {
             });
         }
         // Length verified above; both slice ranges are in-bounds.
-        let mut root_arr = [0_u8; ROOT_LEN];
-        root_arr.copy_from_slice(&bytes[..ROOT_LEN]);
-        let slot = Slot::from_ssz_bytes(&bytes[ROOT_LEN..])?;
+        let mut root_arr = [0_u8; BYTES32_LEN];
+        root_arr.copy_from_slice(&bytes[..BYTES32_LEN]);
+        let slot = Slot::from_ssz_bytes(&bytes[BYTES32_LEN..])?;
         Ok(Self {
             root: Bytes32::new(root_arr),
             slot,
@@ -131,8 +129,11 @@ mod tests {
         let cp = Checkpoint::new(Bytes32::new(root_arr), Slot::new(0x1122_3344_5566_7788));
         let bytes = encode(&cp);
         assert_eq!(bytes.len(), SSZ_LEN);
-        assert_eq!(&bytes[..ROOT_LEN], &root_arr);
-        assert_eq!(&bytes[ROOT_LEN..], &0x1122_3344_5566_7788_u64.to_le_bytes());
+        assert_eq!(&bytes[..BYTES32_LEN], &root_arr);
+        assert_eq!(
+            &bytes[BYTES32_LEN..],
+            &0x1122_3344_5566_7788_u64.to_le_bytes()
+        );
     }
 
     #[test]

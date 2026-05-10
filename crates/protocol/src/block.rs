@@ -15,13 +15,14 @@
 //! - [`SignedBlock`] — variable-length `message: Block` plus the fixed
 //!   4000-byte signature. Variable-length SSZ container with one offset.
 
-use ssz::merkleize::{merkleize, merkleize_with_limit, mix_in_length, ZERO_HASH};
+use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::{Bytes32, Bytes4000};
 
 use crate::internal::{
-    bytes_vector_hash_tree_root, decode_fixed_element_list, encode_fixed_element_list, ensure_len,
-    read_byte_array, read_fixed, read_offset, write_offset, BYTES_PER_LENGTH_OFFSET,
+    decode_fixed_element_list, encode_fixed_element_list, ensure_len, list_hash_tree_root,
+    read_byte_array, read_fixed, read_offset, write_offset, BLOCK_HEADER_LEN, BYTES32_LEN,
+    BYTES4000_LEN, BYTES_PER_LENGTH_OFFSET, SLOT_LEN, VALIDATOR_INDEX_LEN,
 };
 use crate::slot::Slot;
 use crate::validator::ValidatorIndex;
@@ -34,19 +35,17 @@ use crate::vote::SignedVote;
 #[allow(clippy::cast_possible_truncation)]
 pub const MAX_ATTESTATIONS: usize = config::DEVNET_CONFIG.validator_registry_limit as usize;
 
-const BYTES32_LEN: usize = 32;
-const SIGNATURE_LEN: usize = 4000;
-
 /// Fixed SSZ wire size of [`BlockHeader`] in bytes.
-pub const BLOCK_HEADER_SSZ_LEN: usize = 8 + 8 + BYTES32_LEN + BYTES32_LEN + BYTES32_LEN; // 112
+pub const BLOCK_HEADER_SSZ_LEN: usize = BLOCK_HEADER_LEN; // 112
 
 /// Length of the fixed portion of a [`Block`] (4 fixed fields plus the
 /// 4-byte offset for the variable-length `body`).
-const BLOCK_FIXED_PART_LEN: usize = 8 + 8 + BYTES32_LEN + BYTES32_LEN + BYTES_PER_LENGTH_OFFSET; // 84
+const BLOCK_FIXED_PART_LEN: usize =
+    SLOT_LEN + VALIDATOR_INDEX_LEN + 2 * BYTES32_LEN + BYTES_PER_LENGTH_OFFSET; // 84
 
 /// Length of the fixed portion of a [`SignedBlock`] (4-byte offset for the
 /// variable-length `message` plus the fixed 4000-byte signature).
-const SIGNED_BLOCK_FIXED_PART_LEN: usize = BYTES_PER_LENGTH_OFFSET + SIGNATURE_LEN; // 4004
+const SIGNED_BLOCK_FIXED_PART_LEN: usize = BYTES_PER_LENGTH_OFFSET + BYTES4000_LEN; // 4004
 
 // =====================================================================
 // BlockHeader
@@ -184,22 +183,8 @@ impl HashTreeRoot for BlockBody {
     fn hash_tree_root(&self) -> [u8; 32] {
         // Container with 1 field → merkleize at width 1 returns the field
         // root directly.
-        attestations_hash_tree_root(&self.attestations)
+        list_hash_tree_root(&self.attestations, MAX_ATTESTATIONS)
     }
-}
-
-/// `List[SignedVote, MAX_ATTESTATIONS]` hash-tree-root:
-/// `mix_in_length(merkleize_with_limit(roots, MAX), len)`.
-///
-/// Over-length input (a programming error: caller bypassed the
-/// [`Decode`] / [`BlockBody::new`] gate) collapses the merkle root to
-/// [`ZERO_HASH`] rather than panicking — the resulting root will not match
-/// any well-formed wire payload, surfacing the bug at the first equality
-/// check.
-fn attestations_hash_tree_root(votes: &[SignedVote]) -> [u8; 32] {
-    let roots: Vec<[u8; 32]> = votes.iter().map(SignedVote::hash_tree_root).collect();
-    let merkle = merkleize_with_limit(&roots, MAX_ATTESTATIONS).unwrap_or(ZERO_HASH);
-    mix_in_length(&merkle, votes.len() as u64)
 }
 
 // =====================================================================
@@ -338,7 +323,7 @@ impl Decode for SignedBlock {
         if offset != SIGNED_BLOCK_FIXED_PART_LEN {
             return Err(DecodeError::OffsetIntoFixedPortion(offset));
         }
-        let signature = Bytes4000::new(read_byte_array::<SIGNATURE_LEN>(bytes, &mut c));
+        let signature = Bytes4000::new(read_byte_array::<BYTES4000_LEN>(bytes, &mut c));
         let message = Block::from_ssz_bytes(&bytes[offset..])?;
         Ok(Self { message, signature })
     }
@@ -349,7 +334,7 @@ impl HashTreeRoot for SignedBlock {
         // 2 fields → width 2 → single hash_pair via merkleize.
         merkleize(&[
             self.message.hash_tree_root(),
-            bytes_vector_hash_tree_root(self.signature.as_slice()),
+            self.signature.hash_tree_root(),
         ])
     }
 }
@@ -361,51 +346,9 @@ mod tests {
     use proptest::prelude::*;
     use ssz::{decode, encode, SszError};
 
-    use crate::checkpoint::Checkpoint;
-    use crate::vote::Vote;
-
-    fn sample_signed_vote(seed: u64) -> SignedVote {
-        let byte = u8::try_from(seed & 0xff).unwrap_or(0);
-        SignedVote {
-            validator_id: ValidatorIndex::new(seed),
-            message: Vote {
-                slot: Slot::new(seed),
-                head: Checkpoint::new(Bytes32::new([byte; 32]), Slot::new(seed)),
-                target: Checkpoint::default(),
-                source: Checkpoint::default(),
-            },
-            signature: Bytes4000::new([byte; 4000]),
-        }
-    }
-
-    fn sample_block_header() -> BlockHeader {
-        BlockHeader {
-            slot: Slot::new(7),
-            proposer_index: ValidatorIndex::new(2),
-            parent_root: Bytes32::new([0x11; 32]),
-            state_root: Bytes32::new([0x22; 32]),
-            body_root: Bytes32::new([0x33; 32]),
-        }
-    }
-
-    fn sample_block() -> Block {
-        Block {
-            slot: Slot::new(7),
-            proposer_index: ValidatorIndex::new(2),
-            parent_root: Bytes32::new([0x11; 32]),
-            state_root: Bytes32::new([0x22; 32]),
-            body: BlockBody {
-                attestations: vec![sample_signed_vote(1), sample_signed_vote(2)],
-            },
-        }
-    }
-
-    fn sample_signed_block() -> SignedBlock {
-        SignedBlock {
-            message: sample_block(),
-            signature: Bytes4000::new([0xcd; 4000]),
-        }
-    }
+    use crate::test_fixtures::{
+        sample_block, sample_block_header, sample_signed_block, sample_signed_vote,
+    };
 
     // -- BlockHeader --------------------------------------------------------
 
