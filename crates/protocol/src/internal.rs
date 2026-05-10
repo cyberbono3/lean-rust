@@ -10,6 +10,11 @@
 //!   [`ssz::HashTreeRoot`] / `From` / `Display` impls for a `u64` newtype.
 
 use ssz::merkleize::{merkleize, pack};
+use ssz::{Decode, DecodeError};
+
+/// Number of bytes used by an SSZ length-offset (variable-length container
+/// fixed-portion entry).
+pub(crate) const BYTES_PER_LENGTH_OFFSET: usize = 4;
 
 /// Encodes `value` as the canonical 32-byte SSZ basic-type Merkle chunk
 /// (low 8 bytes LE, upper 24 zero).
@@ -30,6 +35,100 @@ pub(crate) const fn u64_chunk(value: u64) -> [u8; 32] {
 /// merkleize. The merkleizer zero-extends to the next power of two width.
 pub(crate) fn bytes_vector_hash_tree_root(bytes: &[u8]) -> [u8; 32] {
     merkleize(&pack(bytes))
+}
+
+/// Returns `Ok(())` when `bytes.len() == expected`, otherwise
+/// [`DecodeError::InvalidByteLength`].
+pub(crate) fn ensure_len(bytes: &[u8], expected: usize) -> Result<(), DecodeError> {
+    if bytes.len() == expected {
+        Ok(())
+    } else {
+        Err(DecodeError::InvalidByteLength {
+            len: bytes.len(),
+            expected,
+        })
+    }
+}
+
+/// Reads a fixed-length value `T` from `bytes[*cursor..]` and advances
+/// `*cursor` by `T::ssz_fixed_len()`.
+///
+/// Caller is responsible for verifying that the slice covers the read.
+pub(crate) fn read_fixed<T: Decode>(bytes: &[u8], cursor: &mut usize) -> Result<T, DecodeError> {
+    let len = <T as Decode>::ssz_fixed_len();
+    let value = T::from_ssz_bytes(&bytes[*cursor..*cursor + len])?;
+    *cursor += len;
+    Ok(value)
+}
+
+/// Reads `N` raw bytes from `bytes[*cursor..]` into a stack array and
+/// advances `*cursor` by `N`. Panic-free for in-bounds slices because
+/// `<[u8]>::copy_from_slice` is total when both sides have equal length.
+pub(crate) fn read_byte_array<const N: usize>(bytes: &[u8], cursor: &mut usize) -> [u8; N] {
+    let mut arr = [0_u8; N];
+    arr.copy_from_slice(&bytes[*cursor..*cursor + N]);
+    *cursor += N;
+    arr
+}
+
+/// Writes a 4-byte little-endian SSZ length-offset to `buf`.
+///
+/// Truncates the offset to `u32::MAX` when `value` exceeds `u32` range.
+/// Variable-length SSZ containers in this crate keep their fixed-portion
+/// well below `u32::MAX`, so the saturation never fires in practice but is
+/// preferred over `as u32` for static-analysis cleanliness.
+pub(crate) fn write_offset(buf: &mut Vec<u8>, value: usize) {
+    let offset = u32::try_from(value).unwrap_or(u32::MAX);
+    buf.extend_from_slice(&offset.to_le_bytes());
+}
+
+/// Reads a 4-byte little-endian SSZ length-offset from `bytes[*cursor..]`
+/// and advances `*cursor` by 4.
+pub(crate) fn read_offset(bytes: &[u8], cursor: &mut usize) -> Result<usize, DecodeError> {
+    let value = u32::from_ssz_bytes(&bytes[*cursor..*cursor + BYTES_PER_LENGTH_OFFSET])?;
+    *cursor += BYTES_PER_LENGTH_OFFSET;
+    Ok(value as usize)
+}
+
+/// Encodes a list of fixed-size SSZ elements as a flat concatenation.
+///
+/// Suitable for `List[T, MAX]` and `Vector[T, N]` where `T::is_ssz_fixed_len()`.
+pub(crate) fn encode_fixed_element_list<T: ssz::Encode>(items: &[T], buf: &mut Vec<u8>) {
+    for item in items {
+        item.ssz_append(buf);
+    }
+}
+
+/// Decodes a list of fixed-size SSZ elements from a flat concatenation,
+/// rejecting inputs whose length is not divisible by the element size or
+/// whose element count exceeds `max`.
+pub(crate) fn decode_fixed_element_list<T: Decode>(
+    bytes: &[u8],
+    max: usize,
+) -> Result<Vec<T>, DecodeError> {
+    let elem_len = <T as Decode>::ssz_fixed_len();
+    if elem_len == 0 {
+        return Err(DecodeError::ZeroLengthItem);
+    }
+    if bytes.len() % elem_len != 0 {
+        return Err(DecodeError::BytesInvalid(format!(
+            "list bytes ({}) not divisible by element size ({})",
+            bytes.len(),
+            elem_len,
+        )));
+    }
+    let count = bytes.len() / elem_len;
+    if count > max {
+        return Err(DecodeError::BytesInvalid(format!(
+            "list length ({count}) exceeds max ({max})",
+        )));
+    }
+    let mut items = Vec::with_capacity(count);
+    for i in 0..count {
+        let start = i * elem_len;
+        items.push(T::from_ssz_bytes(&bytes[start..start + elem_len])?);
+    }
+    Ok(items)
 }
 
 /// Generates the standard SSZ codec, [`ssz::HashTreeRoot`], `From`, and
