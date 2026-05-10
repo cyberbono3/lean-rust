@@ -16,6 +16,9 @@
 //! - [`Block`] / [`BlockBody`] / [`BlockHeader`] / [`SignedBlock`] —
 //!   variable-length block containers with manual SSZ codecs and Merkle
 //!   hash-tree-roots.
+//! - [`State`] / [`ProtocolConfig`] — variable-length consensus state
+//!   container plus its inner runtime-parameters block, with manual SSZ
+//!   codec and Merkle hash-tree-root.
 //! - [`ProtocolError`] — crate-level error enum that forwards SSZ failures
 //!   from the [`ssz`] facade via `#[from]`.
 //!
@@ -50,6 +53,7 @@ pub mod block;
 pub mod checkpoint;
 pub mod error;
 pub mod slot;
+pub mod state;
 pub mod validator;
 pub mod vote;
 
@@ -57,5 +61,9 @@ pub use block::{Block, BlockBody, BlockHeader, SignedBlock, MAX_ATTESTATIONS};
 pub use checkpoint::Checkpoint;
 pub use error::ProtocolError;
 pub use slot::Slot;
+pub use state::{
+    ProtocolConfig, State, HISTORICAL_ROOTS_LIMIT, JUSTIFICATIONS_VALIDATORS_LIMIT,
+    STATE_FIXED_PART_LEN, VALIDATOR_REGISTRY_LIMIT,
+};
 pub use validator::{is_proposer, ValidatorIndex};
 pub use vote::{SignedVote, Vote};

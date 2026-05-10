@@ -9,8 +9,9 @@
 //! - [`impl_u64_ssz_newtype`] generates the boilerplate `Encode` / `Decode` /
 //!   [`ssz::HashTreeRoot`] / `From` / `Display` impls for a `u64` newtype.
 
-use ssz::merkleize::{merkleize, pack};
+use ssz::merkleize::{merkleize, merkleize_with_limit, mix_in_length, pack, ZERO_HASH};
 use ssz::{Decode, DecodeError};
+use types::{Bitlist, Bytes32};
 
 /// Number of bytes used by an SSZ length-offset (variable-length container
 /// fixed-portion entry).
@@ -129,6 +130,72 @@ pub(crate) fn decode_fixed_element_list<T: Decode>(
         items.push(T::from_ssz_bytes(&bytes[start..start + elem_len])?);
     }
     Ok(items)
+}
+
+/// SSZ wire size of one [`Bytes32`] element.
+pub(crate) const BYTES32_LEN: usize = 32;
+
+/// Encodes a `List[Bytes32, _]` as a flat concatenation of 32-byte elements.
+pub(crate) fn encode_bytes32_list(items: &[Bytes32], buf: &mut Vec<u8>) {
+    for item in items {
+        buf.extend_from_slice(item.as_slice());
+    }
+}
+
+/// Decodes a `List[Bytes32, max]` from a flat concatenation. Rejects inputs
+/// whose length is not a multiple of 32 or whose element count exceeds `max`.
+pub(crate) fn decode_bytes32_list(bytes: &[u8], max: usize) -> Result<Vec<Bytes32>, DecodeError> {
+    if bytes.len() % BYTES32_LEN != 0 {
+        return Err(DecodeError::BytesInvalid(format!(
+            "Bytes32 list bytes ({}) not divisible by 32",
+            bytes.len(),
+        )));
+    }
+    let count = bytes.len() / BYTES32_LEN;
+    if count > max {
+        return Err(DecodeError::BytesInvalid(format!(
+            "Bytes32 list length ({count}) exceeds max ({max})",
+        )));
+    }
+    let mut items = Vec::with_capacity(count);
+    for i in 0..count {
+        let start = i * BYTES32_LEN;
+        let mut arr = [0_u8; BYTES32_LEN];
+        arr.copy_from_slice(&bytes[start..start + BYTES32_LEN]);
+        items.push(Bytes32::new(arr));
+    }
+    Ok(items)
+}
+
+/// SSZ hash-tree-root of `List[Bytes32, max]`:
+/// `mix_in_length(merkleize_with_limit(roots, max), len)`.
+///
+/// Over-length input collapses the merkle root to [`ZERO_HASH`] rather than
+/// panicking — the resulting root will not match any well-formed wire
+/// payload, surfacing the bug at the first equality check.
+pub(crate) fn bytes32_list_hash_tree_root(items: &[Bytes32], max: usize) -> [u8; 32] {
+    let chunks: Vec<[u8; 32]> = items.iter().map(|b| b.0).collect();
+    let merkle = merkleize_with_limit(&chunks, max).unwrap_or(ZERO_HASH);
+    mix_in_length(&merkle, items.len() as u64)
+}
+
+/// SSZ hash-tree-root of `Bitlist[LIMIT]`: pack the live data bytes into
+/// 32-byte chunks, [`merkleize_with_limit`] using `ceil(LIMIT / 256)` as the
+/// chunk limit, then mix in the live bit length.
+///
+/// Over-limit input collapses the merkle root to [`ZERO_HASH`] rather than
+/// panicking — the resulting root will not match any well-formed wire
+/// payload, surfacing the bug at the first equality check.
+pub(crate) fn bitlist_hash_tree_root<const LIMIT: usize>(bl: &Bitlist<LIMIT>) -> [u8; 32] {
+    let length = bl.len();
+    let mut data = vec![0_u8; length.div_ceil(8)];
+    for i in bl.iter_set_indices() {
+        data[i / 8] |= 1_u8 << (i % 8);
+    }
+    let chunks = pack(&data);
+    let chunk_limit = LIMIT.div_ceil(256).max(1);
+    let merkle = merkleize_with_limit(&chunks, chunk_limit).unwrap_or(ZERO_HASH);
+    mix_in_length(&merkle, length as u64)
 }
 
 /// Generates the standard SSZ codec, [`ssz::HashTreeRoot`], `From`, and
