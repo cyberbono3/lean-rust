@@ -8,7 +8,7 @@ use ssz::SszError;
 use thiserror::Error;
 
 /// Errors raised by [`crate`] domain operations.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ProtocolError {
     /// SSZ encode/decode of a domain type failed.

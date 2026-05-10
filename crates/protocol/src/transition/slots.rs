@@ -6,32 +6,11 @@
 //! so call sites read as `state.process_slot()`.
 
 use ssz::HashTreeRoot;
-use thiserror::Error;
 use types::Bytes32;
 
+use super::StateTransitionError;
 use crate::slot::Slot;
 use crate::state::State;
-
-/// Errors raised by [`State::process_slots`] / [`State::process_slot`].
-#[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum StateTransitionError {
-    /// `process_slots` was called with `target_slot <= state.slot`.
-    #[error("target slot {target} must be greater than current slot {current}")]
-    TargetSlotNotInFuture {
-        /// `state.slot` at call time.
-        current: Slot,
-        /// Requested `target_slot`.
-        target: Slot,
-    },
-
-    /// Slot arithmetic overflowed `u64`.
-    #[error("slot arithmetic overflow at slot {slot}")]
-    SlotOverflow {
-        /// Slot value that caused the overflow.
-        slot: Slot,
-    },
-}
 
 /// Maps [`Slot::advance`] (`Option<Slot>`) onto [`StateTransitionError::SlotOverflow`].
 fn advance_slot(slot: Slot) -> Result<Slot, StateTransitionError> {

@@ -56,7 +56,7 @@ pub mod checkpoint;
 pub mod error;
 pub mod slot;
 pub mod state;
-pub mod state_transition;
+pub mod transition;
 pub mod validator;
 pub mod vote;
 
@@ -68,6 +68,6 @@ pub use state::{
     ProtocolConfig, State, HISTORICAL_ROOTS_LIMIT, JUSTIFICATIONS_VALIDATORS_LIMIT,
     STATE_FIXED_PART_LEN, VALIDATOR_REGISTRY_LIMIT,
 };
-pub use state_transition::StateTransitionError;
+pub use transition::StateTransitionError;
 pub use validator::{is_proposer, ValidatorIndex};
 pub use vote::{SignedVote, Vote};
