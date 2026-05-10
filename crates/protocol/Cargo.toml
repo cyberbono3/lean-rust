@@ -11,3 +11,10 @@ description   = "Domain consensus types: Block, State, Checkpoint, Vote (Tier 2)
 workspace = true
 
 [dependencies]
+types     = { path = "../types" }
+ssz       = { path = "../ssz" }
+config    = { path = "../config" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
