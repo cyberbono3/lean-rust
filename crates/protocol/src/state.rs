@@ -25,7 +25,7 @@ use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::{Bitlist, Bytes32};
 
-use crate::block::{Block, BlockHeader};
+use crate::block::{Block, BlockHeader, SignedBlock};
 use crate::checkpoint::Checkpoint;
 use crate::error::{AttSlotKind, StateTransitionError};
 use crate::internal::{
@@ -733,6 +733,61 @@ impl State {
         self.latest_justified = latest_justified;
         self.latest_finalized = latest_finalized;
         justifications.write_back(self)
+    }
+}
+
+// =====================================================================
+// state_transition (driver)
+// =====================================================================
+
+impl State {
+    /// Applies the full state transition for `signed_block`.
+    ///
+    /// Composes [`State::process_slots`] (to the block's slot),
+    /// [`State::process_block_header`], and [`State::process_attestations`].
+    /// When `validate_state_root` is `true`, also asserts that the post-state
+    /// `hash_tree_root` equals `signed_block.message.state_root`.
+    ///
+    /// Transactional: if any composed step (or the state-root check) fails,
+    /// `self` is restored to its pre-call value byte-for-byte before the
+    /// error returns. The implementation snapshots the state at entry and
+    /// rewrites it on `Err`; callers that invoke this method in tight loops
+    /// should pre-validate inputs to avoid the snapshot cost.
+    ///
+    /// # Errors
+    /// - Forwarded from [`State::process_slots`] /
+    ///   [`State::process_block_header`] / [`State::process_attestations`].
+    /// - [`StateTransitionError::StateRootMismatch`] when
+    ///   `validate_state_root` is `true` and `state.hash_tree_root() !=
+    ///   signed_block.message.state_root`.
+    pub fn state_transition(
+        &mut self,
+        signed_block: &SignedBlock,
+        validate_state_root: bool,
+    ) -> Result<(), StateTransitionError> {
+        let snapshot = self.clone();
+        let result = (|| {
+            let block = &signed_block.message;
+            self.process_slots(block.slot)?;
+            self.process_block_header(block)?;
+            self.process_attestations(&block.body.attestations)?;
+            if validate_state_root {
+                let got: Bytes32 = self.hash_tree_root().into();
+                if got != block.state_root {
+                    return Err(StateTransitionError::StateRootMismatch {
+                        slot: block.slot,
+                        got,
+                        want: block.state_root,
+                    });
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            *self = snapshot;
+            return Err(e);
+        }
+        Ok(())
     }
 }
 
@@ -1729,6 +1784,247 @@ mod slot_processing_tests {
             let mut state = fresh_state();
             state.process_slots(Slot::new(target)).unwrap();
             prop_assert_eq!(state.slot, Slot::new(target));
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod state_transition_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use ssz::{decode, encode};
+
+    use crate::block::BlockBody;
+    use crate::validator::ValidatorIndex;
+
+    const GENESIS_TIME: u64 = 1_700_000_000;
+
+    /// Genesis-shape `State` for an `n`-validator chain whose
+    /// `latest_block_header` commits to the empty body. Inlined here to
+    /// avoid pulling `statetransition` into `protocol`'s test deps.
+    fn genesis_state(num_validators: u64) -> State {
+        let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
+        State {
+            config: ProtocolConfig {
+                num_validators,
+                genesis_time: GENESIS_TIME,
+            },
+            latest_block_header: BlockHeader {
+                body_root,
+                ..BlockHeader::default()
+            },
+            ..State::default()
+        }
+    }
+
+    /// Two-phase build: produce a `SignedBlock` for `state` whose body is
+    /// empty and whose `state_root` matches the post-state reached by
+    /// applying the transition on a clone of `state`.
+    fn build_signed_block(state: &State, slot: Slot) -> SignedBlock {
+        let proposer_index = ValidatorIndex::new(slot.get() % state.config.num_validators);
+
+        // Phase 1: compute the post-state with `state_root = zero`.
+        let mut probe = state.clone();
+        probe.process_slots(slot).unwrap();
+        let parent_root: Bytes32 = probe.latest_block_header.hash_tree_root().into();
+        let mut block = Block {
+            slot,
+            proposer_index,
+            parent_root,
+            state_root: Bytes32::zero(),
+            body: BlockBody::default(),
+        };
+        probe.process_block_header(&block).unwrap();
+        probe
+            .process_attestations(&block.body.attestations)
+            .unwrap();
+        let state_root: Bytes32 = probe.hash_tree_root().into();
+
+        // Phase 2: rewrite the block with the computed state_root.
+        block.state_root = state_root;
+        SignedBlock {
+            message: block,
+            signature: types::Bytes4000::default(),
+        }
+    }
+
+    /// Empty-body chain of `n` consecutive valid signed blocks starting from
+    /// `start`. Each block's `state_root` is the post-state root after
+    /// applying the prior blocks.
+    fn build_chain(start: &State, n: usize) -> Vec<SignedBlock> {
+        let mut chain = Vec::with_capacity(n);
+        let mut walker = start.clone();
+        for i in 1..=n {
+            let slot = Slot::new(i as u64);
+            let sb = build_signed_block(&walker, slot);
+            walker.state_transition(&sb, true).unwrap();
+            chain.push(sb);
+        }
+        chain
+    }
+
+    // -- Composition --------------------------------------------------------
+
+    #[test]
+    fn composes_slots_block_attestations_in_order() {
+        let mut driven = genesis_state(4);
+        let mut hand = driven.clone();
+        let sb = build_signed_block(&driven, Slot::new(1));
+        let block = sb.message.clone();
+
+        driven.state_transition(&sb, true).unwrap();
+        hand.process_slots(block.slot).unwrap();
+        hand.process_block_header(&block).unwrap();
+        hand.process_attestations(&block.body.attestations).unwrap();
+
+        assert_eq!(driven, hand);
+    }
+
+    // -- Validation flag ----------------------------------------------------
+
+    #[test]
+    fn state_root_mismatch_when_validation_on_and_root_tampered() {
+        let mut state = genesis_state(4);
+        let mut sb = build_signed_block(&state, Slot::new(1));
+        let want = sb.message.state_root;
+        // Flip a byte in the declared post-state root.
+        let mut tampered = want;
+        tampered.0[0] ^= 0xff;
+        sb.message.state_root = tampered;
+
+        let err = state.state_transition(&sb, true).unwrap_err();
+        assert!(matches!(
+            err,
+            StateTransitionError::StateRootMismatch { slot, got, want: w }
+                if slot == Slot::new(1) && got == want && w == tampered
+        ));
+    }
+
+    #[test]
+    fn state_root_validation_off_skips_root_check() {
+        let mut state = genesis_state(4);
+        let mut sb = build_signed_block(&state, Slot::new(1));
+        sb.message.state_root.0[0] ^= 0xff;
+        // With validation off the tampered root is ignored.
+        state.state_transition(&sb, false).unwrap();
+        assert_eq!(state.slot, Slot::new(1));
+    }
+
+    // -- Error propagation --------------------------------------------------
+
+    #[test]
+    fn propagates_block_header_error() {
+        let mut state = genesis_state(4);
+        let mut sb = build_signed_block(&state, Slot::new(1));
+        sb.message.parent_root = Bytes32::new([0xab; 32]);
+        let err = state.state_transition(&sb, true).unwrap_err();
+        assert!(matches!(
+            err,
+            StateTransitionError::BlockParentRootMismatch { .. }
+        ));
+    }
+
+    // -- Transactional behaviour -------------------------------------------
+
+    #[test]
+    fn error_path_leaves_state_unchanged_on_header_error() {
+        // Pre-state is non-trivial: advance by one valid block first.
+        let mut state = genesis_state(4);
+        let sb0 = build_signed_block(&state, Slot::new(1));
+        state.state_transition(&sb0, true).unwrap();
+        let snapshot = state.clone();
+
+        // Now attempt a block with a corrupted parent_root.
+        let mut sb = build_signed_block(&state, Slot::new(2));
+        sb.message.parent_root = Bytes32::new([0xab; 32]);
+        let _ = state.state_transition(&sb, true).unwrap_err();
+        assert_eq!(state, snapshot);
+    }
+
+    #[test]
+    fn error_path_leaves_state_unchanged_on_state_root_mismatch() {
+        // The most subtle path: process_attestations has already committed
+        // its working copies before the post-state-root check fires.
+        let mut state = genesis_state(4);
+        let sb0 = build_signed_block(&state, Slot::new(1));
+        state.state_transition(&sb0, true).unwrap();
+        let snapshot = state.clone();
+
+        let mut sb = build_signed_block(&state, Slot::new(2));
+        sb.message.state_root.0[0] ^= 0xff;
+        let err = state.state_transition(&sb, true).unwrap_err();
+        assert!(matches!(
+            err,
+            StateTransitionError::StateRootMismatch { .. }
+        ));
+        assert_eq!(state, snapshot);
+    }
+
+    // -- Property tests ----------------------------------------------------
+
+    proptest! {
+        /// Same chain on two equal starting states yields equal post-states.
+        #[test]
+        fn determinism(
+            chain_len in 1_usize..=8,
+            num_validators in 1_u64..=8,
+        ) {
+            let genesis = genesis_state(num_validators);
+            let chain = build_chain(&genesis, chain_len);
+
+            let mut a = genesis.clone();
+            let mut b = genesis;
+            for sb in &chain {
+                a.state_transition(sb, true).unwrap();
+                b.state_transition(sb, true).unwrap();
+            }
+            prop_assert_eq!(a.hash_tree_root(), b.hash_tree_root());
+        }
+
+        /// Splitting a chain at any point and re-applying the second half
+        /// yields the same post-state as applying the whole chain end-to-end.
+        #[test]
+        fn path_independence(
+            chain_len in 2_usize..=8,
+            split_seed in 1_usize..=7,
+            num_validators in 1_u64..=8,
+        ) {
+            let split = split_seed.min(chain_len - 1);
+            let genesis = genesis_state(num_validators);
+            let chain = build_chain(&genesis, chain_len);
+
+            let mut whole = genesis.clone();
+            for sb in &chain {
+                whole.state_transition(sb, true).unwrap();
+            }
+
+            let mut split_path = genesis;
+            for sb in &chain[..split] {
+                split_path.state_transition(sb, true).unwrap();
+            }
+            for sb in &chain[split..] {
+                split_path.state_transition(sb, true).unwrap();
+            }
+
+            prop_assert_eq!(whole.hash_tree_root(), split_path.hash_tree_root());
+        }
+
+        /// SSZ round-trip on the post-state preserves byte-equality.
+        #[test]
+        fn ssz_roundtrip_on_post_state(
+            chain_len in 1_usize..=4,
+            num_validators in 1_u64..=4,
+        ) {
+            let genesis = genesis_state(num_validators);
+            let chain = build_chain(&genesis, chain_len);
+            let mut state = genesis;
+            for sb in &chain {
+                state.state_transition(sb, true).unwrap();
+            }
+            let bytes = encode(&state);
+            let back: State = decode(&bytes).unwrap();
+            prop_assert_eq!(state, back);
         }
     }
 }

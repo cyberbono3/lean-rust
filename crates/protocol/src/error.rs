@@ -130,6 +130,19 @@ pub enum StateTransitionError {
         context: &'static str,
     },
 
+    /// `State::state_transition` was called with `validate_state_root = true`
+    /// and the post-state hash-tree-root did not match
+    /// `signed_block.message.state_root`.
+    #[error("post-state root mismatch at slot {slot}: got {got:?}, want {want:?}")]
+    StateRootMismatch {
+        /// `signed_block.message.slot` at call time.
+        slot: Slot,
+        /// `state.hash_tree_root()` after the transition committed.
+        got: Bytes32,
+        /// `signed_block.message.state_root` declared by the proposer.
+        want: Bytes32,
+    },
+
     /// Forwarded from [`crate`] domain helpers (e.g. zero-validator
     /// `is_proposer` lookups).
     #[error(transparent)]
