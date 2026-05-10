@@ -1,18 +1,23 @@
-//! SSZ encode/decode facade over [`eth_ssz`] (`ethereum_ssz` upstream).
+//! SSZ encode/decode + SHA-256 merkleization facade over [`eth_ssz`]
+//! (`ethereum_ssz` upstream).
 //!
 //! This crate is the single project-internal SSZ entry point: downstream
 //! crates depend on `ssz`, never on `ethereum_ssz` directly. The upstream
 //! choice is therefore swappable in one place.
 //!
-//! # Scope (Issue #5)
+//! # Scope
 //! - [`Encode`] / [`Decode`] re-exported from [`eth_ssz`].
 //! - [`encode`] — convenience free function returning `Vec<u8>`.
 //! - [`decode`] — convenience free function returning `Result<T, SszError>`.
 //! - [`SszError`] — facade error type wrapping [`DecodeError`] via
-//!   [`DecodeErrorAdapter`] for the [`std::error::Error::source`] chain.
-//!
-//! Merkleization (Issue #6) and SSZ-vector parity tests (Issue #7) land in
-//! follow-up issues.
+//!   [`DecodeErrorAdapter`] for the [`std::error::Error::source`] chain;
+//!   plus merkleization-specific variants ([`SszError::InvalidNumLeaves`],
+//!   [`SszError::InputExceedsLimit`]).
+//! - [`merkleize`] module — SHA-256-based Merkle root helpers
+//!   (`pack`, `merkleize`, `merkleize_with_limit`, `merkleize_progressive`,
+//!   `mix_in_length`, `mix_in_selector`, `zero_tree_root`, `hash_pair`).
+//! - [`HashTreeRoot`] trait — extension point for typed merkleization in
+//!   downstream consensus crates.
 //!
 //! # Example
 //! ```
@@ -31,11 +36,23 @@
 pub mod decode;
 pub mod encode;
 pub mod error;
+pub mod merkleize;
 
 pub use crate::decode::decode;
 pub use crate::encode::encode;
 pub use crate::error::{DecodeErrorAdapter, SszError};
 pub use eth_ssz::{Decode, DecodeError, Encode};
+
+/// Computes a 32-byte SSZ hash-tree-root for a typed value.
+///
+/// Implementations land in the consensus crates (`protocol`, `engine`, …)
+/// where each container declares its merkleization shape. The trait is the
+/// single project-internal entry point so downstream callers depend on
+/// `ssz::HashTreeRoot` and never on a third-party tree-hashing crate.
+pub trait HashTreeRoot {
+    /// Returns the SSZ hash-tree-root of `self`.
+    fn hash_tree_root(&self) -> [u8; 32];
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -45,7 +62,7 @@ mod tests {
     use std::error::Error as _;
 
     // ---------------------------------------------------------------------
-    // AC #1 — primitive round-trip via the facade
+    // Primitive round-trip via the facade
     // ---------------------------------------------------------------------
 
     #[test]
@@ -90,7 +107,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // AC #2 — SszError carries the underlying DecodeError via #[source]
+    // SszError carries the underlying DecodeError via #[source]
     // ---------------------------------------------------------------------
 
     #[test]
@@ -106,6 +123,7 @@ mod tests {
                 }
                 other => panic!("unexpected upstream variant: {other:?}"),
             },
+            other => panic!("unexpected SszError variant: {other:?}"),
         }
     }
 
@@ -131,6 +149,7 @@ mod tests {
         let err: SszError = upstream.clone().into();
         match err {
             SszError::Decode { source } => assert_eq!(source.0, upstream),
+            other => panic!("unexpected SszError variant: {other:?}"),
         }
     }
 

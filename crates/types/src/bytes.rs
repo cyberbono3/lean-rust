@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(b.limit(), 0);
     }
 
-    // AC #3: ByteList::try_new rejects inputs longer than limit.
+    // ByteList::try_new rejects inputs longer than limit.
     #[test]
     fn byte_list_rejects_over_limit() {
         let err = ByteList::try_new(vec![0; 5], 4).unwrap_err();

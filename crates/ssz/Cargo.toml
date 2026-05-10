@@ -5,7 +5,7 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "SSZ encode/decode + BLAKE3 merkleization facade. Encode/decode lands in Issue #5 (Tier 1); merkleization in Issues #6–#7."
+description   = "SSZ encode/decode + SHA-256 merkleization facade (Tier 1)."
 
 [lints]
 workspace = true
@@ -19,7 +19,7 @@ types     = { path = "../types" }
 # inherited via `workspace = true` (cargo 1.87 — see workspace docs).
 eth_ssz        = { version = "0.7", package = "ethereum_ssz" }
 eth_ssz_derive = { version = "0.7", package = "ethereum_ssz_derive" }
-blake3    = { workspace = true }
+sha2      = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

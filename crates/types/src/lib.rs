@@ -2,7 +2,7 @@
 //!
 //! Pure value types — no I/O, no consensus knowledge, SSZ-compatible.
 //!
-//! # Scope (Issues #2 + #3 + #4)
+//! # Scope
 //! - Wide unsigned integers ([`U128`], [`U256`]).
 //! - Little-endian SSZ decode helpers for native `u8`/`u16`/`u32`/`u64`.
 //! - SSZ-compatible [`Boolean`] (alias to [`bool`]) plus [`decode_boolean`].

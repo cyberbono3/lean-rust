@@ -1,7 +1,6 @@
 //! SSZ-compatible [`Bitlist<const LIMIT: usize>`] and
 //! [`Bitvector<const N: usize>`] bitfield primitives.
 //!
-//! Mirrors lean-go's `types/bitlist.go` + `types/bitvector.go` on the wire.
 //! Bits are packed LSB-first within each byte: bit `i` lives in
 //! `bytes[i / 8] & (1 << (i % 8))`.
 //!
@@ -612,7 +611,7 @@ mod tests {
         assert_eq!(bl.count_ones(), 0);
     }
 
-    // AC #1: Bitlist::set(LIMIT, true) returns BitlistLimitExceeded.
+    // Bitlist::set(LIMIT, true) returns BitlistLimitExceeded.
     #[test]
     fn bitlist_set_at_limit_returns_error() {
         let mut bl: Bitlist<8> = Bitlist::new();
@@ -734,7 +733,7 @@ mod tests {
         ));
     }
 
-    // AC #3: round-trip for Bitlist includes the delimiter bit.
+    // Round-trip for Bitlist includes the delimiter bit.
     #[test]
     fn bitlist_round_trip_preserves_length_and_bits() {
         let mut bl: Bitlist<64> = Bitlist::new();
@@ -760,11 +759,11 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // Property tests — AC #4 + AC #2/#3 round-trips
+    // Property tests — invariants + round-trips
     // ---------------------------------------------------------------------
 
     proptest! {
-        // AC #4: count_ones() == iter_set_indices().count() for arbitrary Bitlist.
+        // count_ones() == iter_set_indices().count() for arbitrary Bitlist.
         #[test]
         fn bitlist_count_ones_matches_iter_set_indices(
             indices in proptest::collection::vec(0_usize..256, 0..64),
@@ -776,7 +775,7 @@ mod tests {
             prop_assert_eq!(bl.count_ones(), bl.iter_set_indices().count());
         }
 
-        // AC #4 — same invariant for Bitvector.
+        // Same invariant for Bitvector.
         #[test]
         fn bitvector_count_ones_matches_iter_set_indices(
             mask in any::<u64>(),
@@ -790,7 +789,7 @@ mod tests {
             prop_assert_eq!(bv.count_ones(), bv.iter_set_indices().count());
         }
 
-        // AC #2: Bitvector::<N>::from_bytes(b.as_bytes()) == b.
+        // Bitvector::<N>::from_bytes(b.as_bytes()) == b for arbitrary input.
         #[test]
         fn bitvector_round_trip_for_arbitrary_byte_input(
             byte in any::<u8>(),
@@ -802,7 +801,7 @@ mod tests {
             prop_assert_eq!(round_trip, bv);
         }
 
-        // AC #2 (cont.) — full-byte Bitvector accepts any byte.
+        // Full-byte Bitvector accepts any byte.
         #[test]
         fn bitvector_full_byte_round_trip(byte in any::<u8>()) {
             let bv: Bitvector<8> = Bitvector::from_bytes(&[byte]).unwrap();
@@ -810,7 +809,7 @@ mod tests {
             prop_assert_eq!(round_trip, bv);
         }
 
-        // AC #2 — wider Bitvector built bit-by-bit from a random mask.
+        // Wider Bitvector built bit-by-bit from a random mask.
         #[test]
         fn bitvector_64_round_trip(mask in any::<u64>()) {
             let mut bv: Bitvector<64> = Bitvector::new();
@@ -824,7 +823,7 @@ mod tests {
             prop_assert_eq!(decoded, bv);
         }
 
-        // AC #3: Bitlist round-trip includes the delimiter bit, for arbitrary lengths.
+        // Bitlist round-trip includes the delimiter bit, for arbitrary lengths.
         #[test]
         fn bitlist_round_trip_for_arbitrary_input(
             length in 0_usize..=128,
@@ -844,7 +843,7 @@ mod tests {
             prop_assert_eq!(decoded.len(), length);
         }
 
-        // AC #1 (property form) — set(i, _) for i in [LIMIT, LIMIT+8] always errors.
+        // Property form: set(i, _) for i in [LIMIT, LIMIT+8] always errors.
         #[test]
         fn bitlist_set_above_limit_always_errors(
             offset in 0_usize..=8,
