@@ -1353,6 +1353,14 @@ dependencies = [
 [[package]]
 name = "statetransition"
 version = "0.1.0"
+dependencies = [
+ "config",
+ "proptest",
+ "protocol",
+ "ssz",
+ "thiserror",
+ "types",
+]
 
 [[package]]
 name = "static_assertions"
