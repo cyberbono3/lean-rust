@@ -985,6 +985,13 @@ dependencies = [
 [[package]]
 name = "protocol"
 version = "0.1.0"
+dependencies = [
+ "config",
+ "proptest",
+ "ssz",
+ "thiserror",
+ "types",
+]
 
 [[package]]
 name = "quick-error"

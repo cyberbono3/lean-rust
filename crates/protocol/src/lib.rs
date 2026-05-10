@@ -13,6 +13,9 @@
 //! - [`Vote`] / [`SignedVote`] — unsigned validator vote and the wire-shape
 //!   container that pairs it with the validator id and the post-quantum
 //!   signature placeholder.
+//! - [`Block`] / [`BlockBody`] / [`BlockHeader`] / [`SignedBlock`] —
+//!   variable-length block containers with manual SSZ codecs and Merkle
+//!   hash-tree-roots.
 //! - [`ProtocolError`] — crate-level error enum that forwards SSZ failures
 //!   from the [`ssz`] facade via `#[from]`.
 //!
@@ -43,12 +46,14 @@
 
 mod internal;
 
+pub mod block;
 pub mod checkpoint;
 pub mod error;
 pub mod slot;
 pub mod validator;
 pub mod vote;
 
+pub use block::{Block, BlockBody, BlockHeader, SignedBlock, MAX_ATTESTATIONS};
 pub use checkpoint::Checkpoint;
 pub use error::ProtocolError;
 pub use slot::Slot;
