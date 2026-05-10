@@ -11,3 +11,7 @@ description   = "Frozen chain constants + devnet0 YAML config (Tier 1)."
 workspace = true
 
 [dependencies]
+types      = { path = "../types" }
+serde      = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror  = { workspace = true }
