@@ -5,7 +5,7 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Domain consensus types: Block, State, Checkpoint, Vote. Implementation lands in Issues #9–#12 (Tier 2)."
+description   = "Domain consensus types: Block, State, Checkpoint, Vote (Tier 2)."
 
 [lints]
 workspace = true

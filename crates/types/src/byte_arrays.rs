@@ -3,7 +3,7 @@
 //! [`ByteVector<N>`] is a const-generic newtype over `[u8; N]` providing the
 //! SSZ `Vector[byte, N]` shape. Two aliases used by the consensus protocol:
 //! [`Bytes32`] (e.g. block roots, state roots) and [`Bytes4000`] (BLS
-//! signature placeholder per `leanSpec/docs/client/containers.md`).
+//! signature placeholder).
 //!
 //! # `Copy` semantics
 //! `ByteVector<N>` does NOT derive [`Copy`]. Explicit `impl Copy` is provided
@@ -15,8 +15,8 @@ use core::fmt::{self, Write};
 
 /// Fixed-width byte vector of length `N`.
 ///
-/// Mirrors lean-go's `types.ByteVector[N]`. The inner array is `pub` so
-/// callers may pattern-match or take a `&[u8; N]` directly when needed.
+/// The inner array is `pub` so callers may pattern-match or take a
+/// `&[u8; N]` directly when needed.
 ///
 /// # Example
 /// ```
@@ -121,7 +121,7 @@ mod tests {
     use proptest::prelude::*;
     use static_assertions::{assert_impl_all, assert_not_impl_all};
 
-    // -- Compile-time AC #5: Bytes32 is Copy, Bytes4000 is NOT --------------
+    // -- Compile-time witness: Bytes32 is Copy, Bytes4000 is NOT -----------
 
     assert_impl_all!(Bytes32: Copy, Clone, Default);
     assert_not_impl_all!(Bytes4000: Copy);
@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(d.as_slice().len(), 4000);
     }
 
-    // -- AC #2: to_hex emits exactly 0x + 2*N lowercase hex chars -----------
+    // -- to_hex emits exactly 0x + 2*N lowercase hex chars -----------------
 
     #[test]
     fn to_hex_zero_bytes32() {
@@ -229,7 +229,7 @@ mod tests {
     assert_impl_all!(ByteVector<64>: Copy);
     assert_not_impl_all!(ByteVector<65>: Copy);
 
-    // -- AC #1: round-trip property test for Bytes32 ------------------------
+    // -- round-trip property test for Bytes32 ------------------------------
 
     proptest! {
         #[test]

@@ -37,8 +37,8 @@ impl std::error::Error for DecodeErrorAdapter {}
 
 /// Errors raised by the [`ssz`](crate) facade.
 ///
-/// Currently only the decode path can fail; encoding via the upstream
-/// [`Encode`](eth_ssz::Encode) trait is statically infallible.
+/// Decoding errors carry the upstream [`DecodeError`]; merkleization errors
+/// surface invalid input shapes for the helpers in [`crate::merkleize`].
 #[derive(Debug, Clone, PartialEq, Error)]
 #[non_exhaustive]
 pub enum SszError {
@@ -50,6 +50,24 @@ pub enum SszError {
         /// Upstream decode error wrapped in an [`std::error::Error`] adapter.
         #[source]
         source: DecodeErrorAdapter,
+    },
+
+    /// [`merkleize_progressive`](crate::merkleize::merkleize_progressive)
+    /// was called with `num_leaves == 0`.
+    #[error("invalid progressive merkle leaf width: got {got}")]
+    InvalidNumLeaves {
+        /// The non-positive width that was supplied.
+        got: usize,
+    },
+
+    /// [`merkleize_with_limit`](crate::merkleize::merkleize_with_limit) was
+    /// called with more chunks than the declared `limit`.
+    #[error("merkle input exceeds limit: got {got} chunks, limit {limit}")]
+    InputExceedsLimit {
+        /// Number of chunks supplied.
+        got: usize,
+        /// Maximum number of chunks permitted.
+        limit: usize,
     },
 }
 

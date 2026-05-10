@@ -5,7 +5,7 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Pure consensus state machine. Implementation lands in Issues #13–#15 (Tier 3)."
+description   = "Pure consensus state machine (Tier 3)."
 
 [lints]
 workspace = true

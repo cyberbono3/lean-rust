@@ -3,7 +3,7 @@
 //! Native `u8`/`u16`/`u32`/`u64` are used directly (idiomatic Rust uses
 //! checked arithmetic via `checked_add` / `checked_mul` on primitives —
 //! no wrapper type is needed). [`U128`] and [`U256`] are re-exported from
-//! [`ruint::aliases`] (replaces lean-go's `holiman/uint256`).
+//! [`ruint::aliases`].
 
 use ruint::aliases::{U128 as RU128, U256 as RU256};
 
@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(U256::from_le_bytes::<32>(bytes), U256::MAX);
     }
 
-    // -- property tests (AC #2 — round-trip for arbitrary values) -----------
+    // -- property tests — round-trip for arbitrary values ------------------
 
     proptest! {
         #[test]
