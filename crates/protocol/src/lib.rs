@@ -10,6 +10,9 @@
 //!   the round-robin [`is_proposer`] helper.
 //! - [`Checkpoint`] — `(root, slot)` container with SSZ codec and Merkle
 //!   hash-tree-root.
+//! - [`Vote`] / [`SignedVote`] — unsigned validator vote and the wire-shape
+//!   container that pairs it with the validator id and the post-quantum
+//!   signature placeholder.
 //! - [`ProtocolError`] — crate-level error enum that forwards SSZ failures
 //!   from the [`ssz`] facade via `#[from]`.
 //!
@@ -44,8 +47,10 @@ pub mod checkpoint;
 pub mod error;
 pub mod slot;
 pub mod validator;
+pub mod vote;
 
 pub use checkpoint::Checkpoint;
 pub use error::ProtocolError;
 pub use slot::Slot;
 pub use validator::{is_proposer, ValidatorIndex};
+pub use vote::{SignedVote, Vote};

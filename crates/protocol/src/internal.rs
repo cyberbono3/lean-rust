@@ -1,9 +1,15 @@
-//! Crate-private helpers shared by the consensus newtype modules.
+//! Crate-private helpers shared by the consensus newtype and container
+//! modules.
 //!
 //! - [`u64_chunk`] encodes a `u64` as the canonical 32-byte SSZ basic-type
 //!   Merkle chunk (low 8 bytes LE, upper 24 zero).
+//! - [`bytes_vector_hash_tree_root`] computes the SSZ hash-tree-root of a
+//!   fixed-length byte vector (`Vector[byte, N]`) — pack into 32-byte
+//!   chunks then merkleize.
 //! - [`impl_u64_ssz_newtype`] generates the boilerplate `Encode` / `Decode` /
 //!   [`ssz::HashTreeRoot`] / `From` / `Display` impls for a `u64` newtype.
+
+use ssz::merkleize::{merkleize, pack};
 
 /// Encodes `value` as the canonical 32-byte SSZ basic-type Merkle chunk
 /// (low 8 bytes LE, upper 24 zero).
@@ -16,6 +22,14 @@ pub(crate) const fn u64_chunk(value: u64) -> [u8; 32] {
         i += 1;
     }
     out
+}
+
+/// Computes the SSZ hash-tree-root of a fixed-length byte vector
+/// (`Vector[byte, N]`): pack the bytes into 32-byte chunks (right-padding
+/// the final chunk with zeros if `N` is not a multiple of 32) and
+/// merkleize. The merkleizer zero-extends to the next power of two width.
+pub(crate) fn bytes_vector_hash_tree_root(bytes: &[u8]) -> [u8; 32] {
+    merkleize(&pack(bytes))
 }
 
 /// Generates the standard SSZ codec, [`ssz::HashTreeRoot`], `From`, and
@@ -89,7 +103,8 @@ pub(crate) use impl_u64_ssz_newtype;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use super::u64_chunk;
+    use super::{bytes_vector_hash_tree_root, u64_chunk};
+    use ssz::merkleize::{merkleize, pack};
 
     #[test]
     fn u64_chunk_zero_is_zero_chunk() {
@@ -101,5 +116,25 @@ mod tests {
         let chunk = u64_chunk(0xdead_beef);
         assert_eq!(&chunk[..8], &0xdead_beef_u64.to_le_bytes());
         assert!(chunk[8..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn bytes_vector_htr_matches_pack_then_merkleize() {
+        let payload = [0x77_u8; 4000];
+        assert_eq!(
+            bytes_vector_hash_tree_root(&payload),
+            merkleize(&pack(&payload))
+        );
+    }
+
+    #[test]
+    fn bytes_vector_htr_changes_with_input() {
+        let a = [0x11_u8; 4000];
+        let mut b = a;
+        b[0] = 0x12;
+        assert_ne!(
+            bytes_vector_hash_tree_root(&a),
+            bytes_vector_hash_tree_root(&b)
+        );
     }
 }
