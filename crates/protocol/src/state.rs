@@ -503,14 +503,16 @@ struct Justifications {
     num_validators: usize,
 }
 
-impl Justifications {
+impl TryFrom<&State> for Justifications {
+    type Error = StateTransitionError;
+
     /// Hydrates the working view from `state.justifications_*`.
     ///
     /// Returns [`StateTransitionError::StateBoundExceeded`] when
     /// `state.config.num_validators` does not fit in `usize`, or when the
     /// flat bitlist length is not a multiple of `num_validators` (i.e. an
     /// on-state invariant break).
-    fn from_state(state: &State) -> Result<Self, StateTransitionError> {
+    fn try_from(state: &State) -> Result<Self, Self::Error> {
         let n = usize::try_from(state.config.num_validators).map_err(|_| {
             StateTransitionError::StateBoundExceeded {
                 context: "num_validators",
@@ -549,7 +551,9 @@ impl Justifications {
             num_validators: n,
         })
     }
+}
 
+impl Justifications {
     /// Writes the working view back into `state.justifications_*`.
     ///
     /// `BTreeMap` iteration order is by key, so the resulting `(roots,
@@ -646,7 +650,7 @@ impl State {
         let hist_len = self.historical_block_hashes.len();
 
         // Working copies — committed at end if every iteration succeeds.
-        let mut justifications = Justifications::from_state(self)?;
+        let mut justifications = Justifications::try_from(&*self)?;
         let mut justified_slots = self.justified_slots.clone();
         let mut latest_justified = self.latest_justified;
         let mut latest_finalized = self.latest_finalized;
@@ -1027,7 +1031,7 @@ mod justifications_tests {
     #[test]
     fn empty_state_round_trips() {
         let state = state_with(4);
-        let view = Justifications::from_state(&state).unwrap();
+        let view = Justifications::try_from(&state).unwrap();
         assert_eq!(view.num_validators, 4);
         assert!(view.table.is_empty());
 
@@ -1066,7 +1070,7 @@ mod justifications_tests {
         assert_eq!(state.justifications_validators.get(4), Some(false));
         assert_eq!(state.justifications_validators.get(5), Some(true));
 
-        let view2 = Justifications::from_state(&state).unwrap();
+        let view2 = Justifications::try_from(&state).unwrap();
         let map: Vec<(Bytes32, Vec<bool>)> = view2.table.into_iter().collect();
         assert_eq!(map.len(), 2);
         assert_eq!(map[0].0, Bytes32::new([0x11; 32]));
@@ -1080,9 +1084,9 @@ mod justifications_tests {
         let mut state = state_with(3);
         state.justifications_roots = vec![Bytes32::new([0xaa; 32])];
         // Set a bit at index 5 — that gives the flat bitlist live length 6,
-        // not 3. from_state should reject the inconsistency.
+        // not 3. The conversion should reject the inconsistency.
         state.justifications_validators.set(5, true).unwrap();
-        let err = Justifications::from_state(&state).unwrap_err();
+        let err = Justifications::try_from(&state).unwrap_err();
         assert_eq!(
             err,
             StateTransitionError::StateBoundExceeded {
