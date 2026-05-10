@@ -8,12 +8,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use types::BasisPoint;
 
-use crate::{
-    FAST_CONFIRM_DUE_BPS, HISTORICAL_ROOTS_LIMIT, JUSTIFICATION_LOOKBACK_SLOTS,
-    PROPOSER_REORG_CUTOFF_BPS, SECONDS_PER_SLOT, SLOT_DURATION_MS, VALIDATOR_REGISTRY_LIMIT,
-    VIEW_FREEZE_CUTOFF_BPS, VOTE_DUE_BPS,
-};
-
 /// Devnet0 chain-configuration record.
 ///
 /// All four `*_bps` fields are basis-point values: valid range `0..=10_000`.
@@ -53,16 +47,20 @@ pub struct Config {
 }
 
 /// Canonical devnet0 [`Config`] preset.
+///
+/// Field values are inlined as literals — this is the single source of
+/// truth for the devnet0 chain-config. Other crates read parameters via
+/// `DEVNET_CONFIG.<field>` (e.g. `DEVNET_CONFIG.slot_duration_ms`).
 pub const DEVNET_CONFIG: Config = Config {
-    slot_duration_ms: SLOT_DURATION_MS,
-    seconds_per_slot: SECONDS_PER_SLOT,
-    justification_lookback_slots: JUSTIFICATION_LOOKBACK_SLOTS,
-    proposer_reorg_cutoff_bps: PROPOSER_REORG_CUTOFF_BPS,
-    vote_due_bps: VOTE_DUE_BPS,
-    fast_confirm_due_bps: FAST_CONFIRM_DUE_BPS,
-    view_freeze_cutoff_bps: VIEW_FREEZE_CUTOFF_BPS,
-    historical_roots_limit: HISTORICAL_ROOTS_LIMIT,
-    validator_registry_limit: VALIDATOR_REGISTRY_LIMIT,
+    slot_duration_ms: 4_000,
+    seconds_per_slot: 4,
+    justification_lookback_slots: 3,
+    proposer_reorg_cutoff_bps: 2_500,
+    vote_due_bps: 5_000,
+    fast_confirm_due_bps: 7_500,
+    view_freeze_cutoff_bps: 7_500,
+    historical_roots_limit: 1 << 18,
+    validator_registry_limit: 1 << 12,
 };
 
 impl Default for Config {
@@ -72,6 +70,29 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Returns the four basis-point fields as `(name, value)` pairs.
+    ///
+    /// Single source of truth for which fields are basis points; both
+    /// [`Config::validate`] and any future tooling should iterate this
+    /// instead of repeating the field list.
+    fn basis_point_fields(&self) -> [(&'static str, u64); 4] {
+        [
+            ("proposer_reorg_cutoff_bps", self.proposer_reorg_cutoff_bps),
+            ("vote_due_bps", self.vote_due_bps),
+            ("fast_confirm_due_bps", self.fast_confirm_due_bps),
+            ("view_freeze_cutoff_bps", self.view_freeze_cutoff_bps),
+        ]
+    }
+
+    /// Builds the [`ConfigError::SlotDurationMismatch`] for the current
+    /// `(slot_duration_ms, seconds_per_slot)` pair.
+    fn slot_duration_mismatch(&self) -> ConfigError {
+        ConfigError::SlotDurationMismatch {
+            slot_duration_ms: self.slot_duration_ms,
+            seconds_per_slot: self.seconds_per_slot,
+        }
+    }
+
     /// Validates the four basis-point fields and the
     /// `slot_duration_ms == seconds_per_slot * 1_000` cross-field invariant.
     ///
@@ -79,30 +100,20 @@ impl Config {
     /// - [`ConfigError::BasisPointOutOfRange`] when any `*_bps` field
     ///   exceeds `10_000`.
     /// - [`ConfigError::SlotDurationMismatch`] when
-    ///   `slot_duration_ms != seconds_per_slot * 1_000`.
+    ///   `slot_duration_ms != seconds_per_slot * 1_000` (or the multiplication
+    ///   overflows `u64`).
     pub fn validate(&self) -> Result<(), ConfigError> {
-        for (field, value) in [
-            ("proposer_reorg_cutoff_bps", self.proposer_reorg_cutoff_bps),
-            ("vote_due_bps", self.vote_due_bps),
-            ("fast_confirm_due_bps", self.fast_confirm_due_bps),
-            ("view_freeze_cutoff_bps", self.view_freeze_cutoff_bps),
-        ] {
+        for (field, value) in self.basis_point_fields() {
             if BasisPoint::new(value).is_err() {
                 return Err(ConfigError::BasisPointOutOfRange { field, value });
             }
         }
-        let derived_ms =
-            self.seconds_per_slot
-                .checked_mul(1_000)
-                .ok_or(ConfigError::SlotDurationMismatch {
-                    slot_duration_ms: self.slot_duration_ms,
-                    seconds_per_slot: self.seconds_per_slot,
-                })?;
-        if derived_ms != self.slot_duration_ms {
-            return Err(ConfigError::SlotDurationMismatch {
-                slot_duration_ms: self.slot_duration_ms,
-                seconds_per_slot: self.seconds_per_slot,
-            });
+        let consistent = self
+            .seconds_per_slot
+            .checked_mul(1_000)
+            .is_some_and(|derived_ms| derived_ms == self.slot_duration_ms);
+        if !consistent {
+            return Err(self.slot_duration_mismatch());
         }
         Ok(())
     }
@@ -111,7 +122,7 @@ impl Config {
     ///
     /// # Errors
     /// - [`ConfigError::Yaml`] when the input is not valid YAML or has
-    ///   missing/extra fields.
+    ///   missing / unknown fields.
     /// - Any error returned by [`Config::validate`].
     pub fn from_yaml(s: &str) -> Result<Self, ConfigError> {
         let cfg: Self = serde_yaml::from_str(s)?;
@@ -122,8 +133,10 @@ impl Config {
     /// Serializes the [`Config`] to a YAML string.
     ///
     /// # Errors
-    /// Returns [`ConfigError::Yaml`] if the underlying serializer fails
-    /// (in practice, never for this struct shape).
+    /// Returns [`ConfigError::Yaml`] if the underlying serializer fails. In
+    /// practice this cannot happen for [`Config`]'s shape (all fields are
+    /// `u64`), but the `Result` is preserved so the API stays stable if a
+    /// non-trivial field is added later.
     pub fn to_yaml(&self) -> Result<String, ConfigError> {
         Ok(serde_yaml::to_string(self)?)
     }
@@ -166,51 +179,34 @@ pub enum ConfigError {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::{
-        FAST_CONFIRM_DUE_BPS, HISTORICAL_ROOTS_LIMIT, INTERVALS_PER_SLOT,
-        JUSTIFICATION_LOOKBACK_SLOTS, PROPOSER_REORG_CUTOFF_BPS, SECONDS_PER_INTERVAL,
-        SECONDS_PER_SLOT, SLOT_DURATION_MS, VALIDATOR_REGISTRY_LIMIT, VIEW_FREEZE_CUTOFF_BPS,
-        VOTE_DUE_BPS,
-    };
+    use crate::{INTERVALS_PER_SLOT, SECONDS_PER_INTERVAL};
 
     // ---------------------------------------------------------------------
-    // Constant values match the canonical reference exactly.
+    // Canonical values — single source-of-truth assertion
     // ---------------------------------------------------------------------
 
     #[test]
-    fn constants_match_canonical_values() {
-        assert_eq!(INTERVALS_PER_SLOT, 4);
-        assert_eq!(SLOT_DURATION_MS, 4_000);
-        assert_eq!(SECONDS_PER_SLOT, 4);
-        assert_eq!(SECONDS_PER_INTERVAL, 1);
-        assert_eq!(JUSTIFICATION_LOOKBACK_SLOTS, 3);
-        assert_eq!(PROPOSER_REORG_CUTOFF_BPS, 2_500);
-        assert_eq!(VOTE_DUE_BPS, 5_000);
-        assert_eq!(FAST_CONFIRM_DUE_BPS, 7_500);
-        assert_eq!(VIEW_FREEZE_CUTOFF_BPS, 7_500);
-        assert_eq!(HISTORICAL_ROOTS_LIMIT, 262_144);
-        assert_eq!(VALIDATOR_REGISTRY_LIMIT, 4_096);
+    fn devnet_config_matches_canonical_values() {
+        assert_eq!(DEVNET_CONFIG.slot_duration_ms, 4_000);
+        assert_eq!(DEVNET_CONFIG.seconds_per_slot, 4);
+        assert_eq!(DEVNET_CONFIG.justification_lookback_slots, 3);
+        assert_eq!(DEVNET_CONFIG.proposer_reorg_cutoff_bps, 2_500);
+        assert_eq!(DEVNET_CONFIG.vote_due_bps, 5_000);
+        assert_eq!(DEVNET_CONFIG.fast_confirm_due_bps, 7_500);
+        assert_eq!(DEVNET_CONFIG.view_freeze_cutoff_bps, 7_500);
+        assert_eq!(DEVNET_CONFIG.historical_roots_limit, 262_144);
+        assert_eq!(DEVNET_CONFIG.validator_registry_limit, 4_096);
     }
 
     #[test]
-    fn devnet_config_matches_constants() {
-        assert_eq!(DEVNET_CONFIG.slot_duration_ms, SLOT_DURATION_MS);
-        assert_eq!(DEVNET_CONFIG.seconds_per_slot, SECONDS_PER_SLOT);
+    fn module_constants_match_canonical_values() {
+        // Two values that are not on `Config` (forkchoice topology, not knobs).
+        assert_eq!(INTERVALS_PER_SLOT, 4);
+        assert_eq!(SECONDS_PER_INTERVAL, 1);
+        // Derived invariant: SECONDS_PER_INTERVAL = seconds_per_slot / INTERVALS_PER_SLOT.
         assert_eq!(
-            DEVNET_CONFIG.justification_lookback_slots,
-            JUSTIFICATION_LOOKBACK_SLOTS
-        );
-        assert_eq!(
-            DEVNET_CONFIG.proposer_reorg_cutoff_bps,
-            PROPOSER_REORG_CUTOFF_BPS
-        );
-        assert_eq!(DEVNET_CONFIG.vote_due_bps, VOTE_DUE_BPS);
-        assert_eq!(DEVNET_CONFIG.fast_confirm_due_bps, FAST_CONFIRM_DUE_BPS);
-        assert_eq!(DEVNET_CONFIG.view_freeze_cutoff_bps, VIEW_FREEZE_CUTOFF_BPS);
-        assert_eq!(DEVNET_CONFIG.historical_roots_limit, HISTORICAL_ROOTS_LIMIT);
-        assert_eq!(
-            DEVNET_CONFIG.validator_registry_limit,
-            VALIDATOR_REGISTRY_LIMIT
+            SECONDS_PER_INTERVAL,
+            DEVNET_CONFIG.seconds_per_slot / INTERVALS_PER_SLOT
         );
     }
 

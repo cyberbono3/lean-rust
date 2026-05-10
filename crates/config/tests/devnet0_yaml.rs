@@ -8,6 +8,8 @@ const FIXTURE: &str = include_str!("data/devnet0.yaml");
 
 #[test]
 fn fixture_loads_into_devnet_config() {
+    // `from_yaml` already invokes `validate`, so a successful load proves
+    // both round-trip equality with `DEVNET_CONFIG` AND validation success.
     let cfg = Config::from_yaml(FIXTURE).unwrap();
     assert_eq!(cfg, DEVNET_CONFIG);
 }
@@ -21,19 +23,16 @@ fn fixture_round_trips_through_serde_yaml() {
 }
 
 #[test]
-fn fixture_passes_validation() {
-    let cfg = Config::from_yaml(FIXTURE).unwrap();
-    cfg.validate().unwrap();
-}
-
-#[test]
 fn fixture_missing_field_is_rejected() {
     // Strip the last field; missing required field must be a YAML error.
     let truncated: String = FIXTURE
         .lines()
-        .filter(|l| !l.starts_with("validator_registry_limit:"))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .filter(|line| !line.starts_with("validator_registry_limit:"))
+        .fold(String::new(), |mut acc, line| {
+            acc.push_str(line);
+            acc.push('\n');
+            acc
+        });
     let err = Config::from_yaml(&truncated).unwrap_err();
     assert!(matches!(err, ConfigError::Yaml { .. }));
 }
