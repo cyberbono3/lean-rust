@@ -10,18 +10,23 @@
 //!   and the forkchoice clock.
 //! - [`Store::from_anchor`] — constructor that seeds the store from a
 //!   trusted `(state, anchor_block)` pair.
+//! - [`Store::tick_interval`] — advances the clock one interval and
+//!   dispatches the spec phase hook.
+//! - [`Time`] / [`Phase`] — typed clock value + 4-phase classification.
 //! - [`ForkchoiceError`] — crate-level error type.
 //!
-//! Block insertion, attestation processing, the 4-phase clock, and head
-//! resolution land in subsequent issues in this part.
+//! Phase-hook bodies (attestation processing, head resolution) land in
+//! subsequent issues in this part.
 
 #![forbid(unsafe_code)]
 
 pub use error::ForkchoiceError;
-pub use store::{Store, Time};
+pub use store::Store;
+pub use time::{Phase, Time};
 
 pub mod error;
 pub mod store;
+pub mod time;
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;

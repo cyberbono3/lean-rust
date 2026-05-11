@@ -10,6 +10,8 @@ use types::Bytes32;
 
 use protocol::Slot;
 
+use crate::time::Time;
+
 /// Errors raised by [`crate::store::Store`] operations.
 #[derive(Debug, Error, PartialEq)]
 #[non_exhaustive]
@@ -34,5 +36,13 @@ pub enum ForkchoiceError {
         slot: Slot,
         /// The intervals-per-slot constant (4 on devnet0).
         intervals_per_slot: u64,
+    },
+
+    /// `Store::tick_interval` was called when `time + 1` would overflow
+    /// the raw `u64` underlying [`Time`].
+    #[error("forkchoice time overflow at time {time}")]
+    TimeOverflow {
+        /// `self.time()` at call time.
+        time: Time,
     },
 }
