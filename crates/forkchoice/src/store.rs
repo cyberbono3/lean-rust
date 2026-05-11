@@ -388,11 +388,14 @@ impl Store {
     /// Promotes pending votes into the known vote set and refreshes the
     /// forkchoice head.
     ///
+    /// Exposed so the engine layer can refresh the canonical head after a
+    /// successful block import without re-driving the proposal-head flow.
+    ///
     /// # Errors
     /// Forwards [`ForkchoiceError`] variants raised by the internal head
     /// refresh (currently any error from
     /// [`crate::helpers::get_fork_choice_head`]).
-    pub(crate) fn accept_new_votes(&mut self) -> Result<(), ForkchoiceError> {
+    pub fn accept_new_votes(&mut self) -> Result<(), ForkchoiceError> {
         let promoted = std::mem::take(&mut self.latest_new_votes);
         self.latest_known_votes.extend(promoted);
         self.update_head()

@@ -5,9 +5,18 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Consensus boundary: results + Store wrappers. Implementation lands in a later issue (Tier 4)."
+description   = "Consensus execution boundary: wraps the forkchoice store and sequences import / produce flows (Tier 4)."
 
 [lints]
 workspace = true
 
 [dependencies]
+types       = { path = "../types" }
+protocol    = { path = "../protocol" }
+forkchoice  = { path = "../forkchoice" }
+ssz         = { path = "../ssz" }
+parking_lot = { workspace = true }
+thiserror   = { workspace = true }
+
+[dev-dependencies]
+static_assertions = { workspace = true }
