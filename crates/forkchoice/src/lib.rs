@@ -25,10 +25,12 @@ pub use store::Store;
 pub use time::{Phase, Time};
 
 pub mod error;
+pub mod helpers;
+pub mod production;
 pub mod store;
 pub mod time;
 
-pub(crate) mod helpers;
+pub use production::{ProducedBlock, ProducedVote};
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;

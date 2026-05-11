@@ -67,6 +67,33 @@ pub(crate) fn anchor_pair(num_validators: u64) -> (State, Block) {
     anchor_pair_at_slot(Slot::ZERO, num_validators)
 }
 
+/// Builds a spec-compliant genesis `(state, block)` pair: the anchor
+/// block has `parent_root = Bytes32::zero()` (no prior block) and the
+/// state's `latest_block_header.state_root` is the zero sentinel —
+/// `process_slot` fills it later. Block / header `hash_tree_root` agree
+/// once the state-root sentinel is cached, so a chain extension at
+/// slot 1 will pass `process_block_header`'s parent-root check.
+pub(crate) fn genesis_anchor(num_validators: u64) -> (State, Block) {
+    let state = genesis_state(num_validators);
+    let block = Block {
+        slot: Slot::ZERO,
+        proposer_index: ValidatorIndex::new(0),
+        parent_root: Bytes32::zero(),
+        state_root: state.hash_tree_root().into(),
+        body: BlockBody::default(),
+    };
+    (state, block)
+}
+
+/// Convenience: builds a forkchoice store anchored at the spec-compliant
+/// genesis pair and returns it alongside the anchor root.
+pub(crate) fn genesis_store(num_validators: u64) -> (Store, Bytes32) {
+    let (state, block) = genesis_anchor(num_validators);
+    let root: Bytes32 = block.hash_tree_root().into();
+    let store = Store::from_anchor(state, block).expect("genesis anchor invariants");
+    (store, root)
+}
+
 /// Builds a linear chain `genesis → b_1 → … → b_{n_blocks-1}` and inserts
 /// every `(root, block, state)` triple into a freshly-anchored [`Store`].
 /// Returns the store, the per-block roots in order (root[0] = genesis),

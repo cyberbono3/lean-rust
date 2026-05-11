@@ -442,6 +442,120 @@ impl Store {
         Ok(())
     }
 
+    // ==================================================================
+    // Block tracking + proposal/vote-target accessors (used by production)
+    // ==================================================================
+
+    /// Stores a `(block, post_state)` pair after validating
+    /// `block.state_root` against `hash_tree_root(post_state)` and
+    /// confirming the parent root is tracked.
+    ///
+    /// Returns `true` when the pair was newly tracked, `false` when the
+    /// block root is already present (idempotent). The store performs no
+    /// vote processing or head refresh — this is the non-import sibling
+    /// of the full block-import flow.
+    ///
+    /// # Errors
+    /// - [`ForkchoiceError::BlockStateRootMismatch`] when `block.state_root`
+    ///   disagrees with `hash_tree_root(post_state)`.
+    /// - [`ForkchoiceError::ParentBlockNotFound`] when `block.parent_root`
+    ///   is non-zero and not tracked by the store.
+    pub fn track_block(
+        &mut self,
+        block: Block,
+        post_state: State,
+    ) -> Result<bool, ForkchoiceError> {
+        let want_state_root: Bytes32 = post_state.hash_tree_root().into();
+        if block.state_root != want_state_root {
+            return Err(ForkchoiceError::BlockStateRootMismatch {
+                got: block.state_root,
+                want: want_state_root,
+            });
+        }
+        let root: Bytes32 = block.hash_tree_root().into();
+        if self.blocks.contains_key(&root) {
+            return Ok(false);
+        }
+        if block.parent_root != Bytes32::zero() && !self.blocks.contains_key(&block.parent_root) {
+            return Err(ForkchoiceError::ParentBlockNotFound {
+                root: block.parent_root,
+            });
+        }
+        self.insert_block(root, block, post_state);
+        Ok(true)
+    }
+
+    /// Returns the current proposal head, after promoting any pending
+    /// votes into the known vote set.
+    ///
+    /// `_slot` is informational per the leanSpec proposal-hook contract —
+    /// tick state is driven exclusively by the regular tick loop, not by
+    /// the proposal call. Kept for API symmetry with future spec edits.
+    ///
+    /// # Errors
+    /// Forwards [`ForkchoiceError`] variants raised by
+    /// [`Self::accept_new_votes`].
+    pub fn get_proposal_head(&mut self, _slot: Slot) -> Result<Bytes32, ForkchoiceError> {
+        self.accept_new_votes()?;
+        Ok(self.head)
+    }
+
+    /// Walks from the current head toward the safe-target depth, at most
+    /// three hops, returning the resulting [`Checkpoint`]. Mirrors
+    /// leanSpec `forkchoice/store.py::Store.get_vote_target`.
+    ///
+    /// # Errors
+    /// - [`ForkchoiceError::UnknownHeadBlock`] when `self.head` is not in
+    ///   the block map.
+    /// - [`ForkchoiceError::UnknownSafeTarget`] when `self.safe_target` is
+    ///   not in the block map.
+    /// - [`ForkchoiceError::ParentBlockNotFound`] when the walk steps past
+    ///   a block whose parent is absent from the block map.
+    pub fn get_vote_target(&self) -> Result<Checkpoint, ForkchoiceError> {
+        let head_block =
+            self.lookup_block(self.head, |root| ForkchoiceError::UnknownHeadBlock { root })?;
+        let safe_slot = self
+            .lookup_block(self.safe_target, |root| {
+                ForkchoiceError::UnknownSafeTarget { root }
+            })?
+            .slot;
+
+        let (mut cursor, mut cursor_block) = (self.head, head_block);
+        for _ in 0..3 {
+            if cursor_block.slot <= safe_slot {
+                break;
+            }
+            cursor = cursor_block.parent_root;
+            cursor_block =
+                self.lookup_block(cursor, |root| ForkchoiceError::ParentBlockNotFound { root })?;
+        }
+        Ok(Checkpoint::new(cursor, cursor_block.slot))
+    }
+
+    /// Returns the store's `latest_known_votes` map. Used by
+    /// `produce_block` to scan votes the producer can include.
+    #[must_use]
+    pub(crate) fn latest_known_votes_map(&self) -> &HashMap<ValidatorIndex, SignedVote> {
+        &self.latest_known_votes
+    }
+
+    /// Returns the store's `blocks` map. Used by `produce_block` to
+    /// check `target.root` membership without re-locking through the
+    /// public `block()` accessor (which returns `Option<&Block>` per
+    /// query).
+    #[must_use]
+    pub(crate) fn blocks_map(&self) -> &HashMap<Bytes32, Block> {
+        &self.blocks
+    }
+
+    /// Returns the store's `states` map. Used by `produce_block` to look
+    /// up the head's post-state for use as the `pre_state` of the
+    /// candidate block.
+    #[must_use]
+    pub(crate) fn states_map(&self) -> &HashMap<Bytes32, State> {
+        &self.states
+    }
+
     /// Test-only builder that overrides the constructor-seeded time.
     /// Lets table-driven and property tests position the clock without
     /// running `tick_interval` from genesis.
@@ -1202,5 +1316,182 @@ mod update_safe_target_tests {
         let (mut store, roots) = chain_pinned_to_genesis(3, 4);
         store.accept_new_votes().unwrap();
         assert_eq!(store.head(), roots[0]);
+    }
+}
+
+// ============================================================================
+// track_block + get_proposal_head + get_vote_target
+// ============================================================================
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod store_extensions_tests {
+    use super::*;
+    use protocol::{BlockBody, Slot, ValidatorIndex};
+
+    use crate::test_fixtures::{genesis_store, linear_chain};
+
+    // -- track_block ----------------------------------------------------
+
+    /// Builds a synthetic post-state by cloning the genesis state — fine
+    /// for tracking-invariant tests, which never run a state transition
+    /// against this state.
+    fn fresh_block_and_state(parent_root: Bytes32, slot: u64) -> (Block, State) {
+        let (_, anchor_block) = crate::test_fixtures::genesis_anchor(4);
+        let state = crate::test_fixtures::genesis_anchor(4).0;
+        let state_root: Bytes32 = state.hash_tree_root().into();
+        let block = Block {
+            slot: Slot::new(slot),
+            proposer_index: ValidatorIndex::new(slot % 4),
+            parent_root,
+            state_root,
+            body: BlockBody::default(),
+        };
+        let _ = anchor_block; // suppress unused warning
+        (block, state)
+    }
+
+    #[test]
+    fn track_block_rejects_state_root_mismatch() {
+        let (mut store, anchor_root) = genesis_store(4);
+        let (mut block, state) = fresh_block_and_state(anchor_root, 1);
+        block.state_root = Bytes32::new([0xff; 32]);
+        let err = store.track_block(block, state).unwrap_err();
+        assert!(matches!(
+            err,
+            ForkchoiceError::BlockStateRootMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn track_block_dedupes_known_root() {
+        let (mut store, anchor_root) = genesis_store(4);
+        let (block, state) = fresh_block_and_state(anchor_root, 1);
+        assert!(store.track_block(block.clone(), state.clone()).unwrap());
+        // Second call with same block → Ok(false), no mutation.
+        assert!(!store.track_block(block, state).unwrap());
+    }
+
+    #[test]
+    fn track_block_rejects_missing_parent() {
+        let (mut store, _) = genesis_store(4);
+        let bogus_parent = Bytes32::new([0xaa; 32]);
+        let (block, state) = fresh_block_and_state(bogus_parent, 1);
+        let err = store.track_block(block, state).unwrap_err();
+        assert_eq!(
+            err,
+            ForkchoiceError::ParentBlockNotFound { root: bogus_parent }
+        );
+    }
+
+    #[test]
+    fn track_block_inserts_and_extends_block_order() {
+        let (mut store, anchor_root) = genesis_store(4);
+        let (block, state) = fresh_block_and_state(anchor_root, 1);
+        let new_root: Bytes32 = block.hash_tree_root().into();
+        assert!(store.track_block(block, state).unwrap());
+        assert!(store.has_block(&new_root));
+        assert_eq!(store.block_order().last(), Some(&new_root));
+    }
+
+    // -- get_proposal_head ----------------------------------------------
+
+    #[test]
+    fn get_proposal_head_returns_current_head_and_promotes_pending() {
+        let (mut store, roots, _) = linear_chain(3, 4);
+        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+        // Seed pending votes that would shift head to roots[2] once promoted.
+        for v in 0..4 {
+            let cp = Checkpoint::new(roots[2], Slot::new(2));
+            store.insert_new_vote_for_test(SignedVote {
+                validator_id: ValidatorIndex::new(v),
+                message: protocol::Vote {
+                    slot: Slot::new(2),
+                    head: cp,
+                    target: cp,
+                    source: Checkpoint::new(roots[0], Slot::ZERO),
+                },
+                signature: types::Bytes4000::new([0; 4000]),
+            });
+        }
+        let head = store.get_proposal_head(Slot::new(3)).unwrap();
+        assert_eq!(head, roots[2]);
+        // accept_new_votes promoted the pending set.
+        assert!(store.latest_new_votes().is_empty());
+    }
+
+    // -- get_vote_target ------------------------------------------------
+
+    #[test]
+    fn get_vote_target_returns_head_when_aligned_with_safe_target() {
+        let (store, anchor_root) = genesis_store(4);
+        // Initial state: head == safe_target == anchor; walk is a no-op.
+        let target = store.get_vote_target().unwrap();
+        assert_eq!(target.root, anchor_root);
+        assert_eq!(target.slot, Slot::ZERO);
+    }
+
+    #[test]
+    fn get_vote_target_walks_three_hops_when_head_far_above_safe_target() {
+        // Build a 5-block chain. Move head to roots[4] (slot 4) while
+        // safe_target stays at roots[0] (slot 0). Target must walk 3 hops
+        // → settle at roots[1] (slot 1).
+        let (mut store, roots, _) = linear_chain(5, 4);
+        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+        // Seed votes so update_head moves the head to roots[4].
+        for v in 0..4 {
+            let cp = Checkpoint::new(roots[4], Slot::new(4));
+            store.insert_new_vote_for_test(SignedVote {
+                validator_id: ValidatorIndex::new(v),
+                message: protocol::Vote {
+                    slot: Slot::new(4),
+                    head: cp,
+                    target: cp,
+                    source: Checkpoint::new(roots[0], Slot::ZERO),
+                },
+                signature: types::Bytes4000::new([0; 4000]),
+            });
+        }
+        store.accept_new_votes().unwrap();
+        assert_eq!(store.head(), roots[4]);
+
+        let target = store.get_vote_target().unwrap();
+        assert_eq!(target.root, roots[1]);
+        assert_eq!(target.slot, Slot::new(1));
+    }
+
+    #[test]
+    fn get_vote_target_caps_at_safe_target_when_within_three_hops() {
+        // 3-block chain. Head moves to roots[2] (slot 2); safe_target stays
+        // at roots[0] (slot 0). After one hop the cursor is at roots[1]
+        // (slot 1); after two hops at roots[0] (slot 0) == safe_target.
+        // The walk stops there (loop breaks on `<=`), not at hop count 3.
+        let (mut store, roots, _) = linear_chain(3, 4);
+        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+        for v in 0..4 {
+            let cp = Checkpoint::new(roots[2], Slot::new(2));
+            store.insert_new_vote_for_test(SignedVote {
+                validator_id: ValidatorIndex::new(v),
+                message: protocol::Vote {
+                    slot: Slot::new(2),
+                    head: cp,
+                    target: cp,
+                    source: Checkpoint::new(roots[0], Slot::ZERO),
+                },
+                signature: types::Bytes4000::new([0; 4000]),
+            });
+        }
+        store.accept_new_votes().unwrap();
+        let target = store.get_vote_target().unwrap();
+        assert_eq!(target.root, roots[0]);
+        assert_eq!(target.slot, Slot::ZERO);
+    }
+
+    #[test]
+    fn get_vote_target_unknown_head_errors() {
+        let (mut store, _) = genesis_store(4);
+        store.head = Bytes32::new([0xff; 32]);
+        let err = store.get_vote_target().unwrap_err();
+        assert!(matches!(err, ForkchoiceError::UnknownHeadBlock { .. }));
     }
 }
