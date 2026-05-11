@@ -1,9 +1,9 @@
 //! Generic contract suite for the `storage::Store` trait.
 //!
-//! [`run_store_contract`] takes any `&S: Store` and runs the full
-//! round-trip + absence + overwrite + concurrency suite against it. Future
-//! adapters inherit the entire test set by calling
-//! `run_store_contract(&adapter)`.
+//! [`run_store_contract`] takes a `factory: impl Fn() -> S` and runs every
+//! scenario against a freshly-built store, so cross-scenario state leakage
+//! is impossible. Future adapters inherit the entire suite by calling
+//! `run_store_contract(MyAdapter::new)`.
 
 #![allow(
     missing_docs,
@@ -27,89 +27,87 @@ use fixtures::{sample_head, sample_root, sample_signed_block, sample_state};
 // Generic contract — call from any adapter's integration test
 // =============================================================================
 
-/// Runs the full `Store`-contract suite against `store`.
-pub fn run_store_contract<S: Store>(store: &S) {
-    block_round_trip(store);
-    state_round_trip(store);
-    head_round_trip(store);
-    has_block_false_for_unknown(store);
-    has_block_true_after_save(store);
-    load_block_none_for_unknown(store);
-    load_state_none_for_unknown(store);
-    load_head_none_before_first_save(store);
-    save_block_overwrites_existing_root(store);
-    save_state_overwrites_existing_root(store);
-    save_head_overwrites_previous_head(store);
+/// Runs the full `Store`-contract suite. Each scenario receives a fresh
+/// store from `factory`, so cross-scenario state leakage is impossible.
+pub fn run_store_contract<S: Store>(factory: impl Fn() -> S) {
+    block_round_trip(&factory());
+    state_round_trip(&factory());
+    head_round_trip(&factory());
+    has_block_false_for_unknown(&factory());
+    has_block_true_after_save(&factory());
+    load_block_none_for_unknown(&factory());
+    load_state_none_for_unknown(&factory());
+    load_head_none_before_first_save(&factory());
+    save_block_overwrites_existing_root(&factory());
+    save_state_overwrites_existing_root(&factory());
+    save_head_overwrites_previous_head(&factory());
 }
 
-fn block_round_trip<S: Store>(store: &S) {
-    let root = sample_root(11);
-    let block = sample_signed_block(11);
+fn block_round_trip(store: &impl Store) {
+    let root = sample_root(1);
+    let block = sample_signed_block(1);
     store.save_block(root, block.clone()).unwrap();
     assert_eq!(store.load_block(&root).unwrap(), Some(block));
 }
 
-fn state_round_trip<S: Store>(store: &S) {
-    let root = sample_root(12);
-    let state = sample_state(12);
+fn state_round_trip(store: &impl Store) {
+    let root = sample_root(1);
+    let state = sample_state(1);
     store.save_state(root, state.clone()).unwrap();
     assert_eq!(store.load_state(&root).unwrap(), Some(state));
 }
 
-fn head_round_trip<S: Store>(store: &S) {
-    let info = sample_head(13);
+fn head_round_trip(store: &impl Store) {
+    let info = sample_head(1);
     store.save_head(info).unwrap();
     assert_eq!(store.load_head().unwrap(), Some(info));
 }
 
-fn has_block_false_for_unknown<S: Store>(store: &S) {
-    let unknown = sample_root(200);
-    assert!(!store.has_block(&unknown).unwrap());
+fn has_block_false_for_unknown(store: &impl Store) {
+    assert!(!store.has_block(&sample_root(7)).unwrap());
 }
 
-fn has_block_true_after_save<S: Store>(store: &S) {
-    let root = sample_root(14);
-    let block = sample_signed_block(14);
-    store.save_block(root, block).unwrap();
+fn has_block_true_after_save(store: &impl Store) {
+    let root = sample_root(1);
+    store.save_block(root, sample_signed_block(1)).unwrap();
     assert!(store.has_block(&root).unwrap());
 }
 
-fn load_block_none_for_unknown<S: Store>(store: &S) {
-    let unknown = sample_root(201);
-    assert_eq!(store.load_block(&unknown).unwrap(), None);
+fn load_block_none_for_unknown(store: &impl Store) {
+    assert_eq!(store.load_block(&sample_root(7)).unwrap(), None);
 }
 
-fn load_state_none_for_unknown<S: Store>(store: &S) {
-    let unknown = sample_root(202);
-    assert_eq!(store.load_state(&unknown).unwrap(), None);
+fn load_state_none_for_unknown(store: &impl Store) {
+    assert_eq!(store.load_state(&sample_root(7)).unwrap(), None);
 }
 
-fn load_head_none_before_first_save<S: Store>(store: &S) {
-    // This case requires a fresh store — handled separately in
-    // `memory_store_load_head_none_before_first_save` below.
-    let _ = store;
+fn load_head_none_before_first_save(store: &impl Store) {
+    // Now a real test: each scenario gets a fresh store, so `head` is
+    // genuinely unset on entry.
+    assert_eq!(store.load_head().unwrap(), None);
 }
 
-fn save_block_overwrites_existing_root<S: Store>(store: &S) {
-    let root = sample_root(15);
-    store.save_block(root, sample_signed_block(15)).unwrap();
-    store.save_block(root, sample_signed_block(16)).unwrap();
-    let got = store.load_block(&root).unwrap().expect("present");
-    assert_eq!(got, sample_signed_block(16));
+fn save_block_overwrites_existing_root(store: &impl Store) {
+    let root = sample_root(1);
+    store.save_block(root, sample_signed_block(1)).unwrap();
+    store.save_block(root, sample_signed_block(2)).unwrap();
+    assert_eq!(
+        store.load_block(&root).unwrap(),
+        Some(sample_signed_block(2))
+    );
 }
 
-fn save_state_overwrites_existing_root<S: Store>(store: &S) {
-    let root = sample_root(17);
-    store.save_state(root, sample_state(17)).unwrap();
-    store.save_state(root, sample_state(18)).unwrap();
-    let got = store.load_state(&root).unwrap().expect("present");
-    assert_eq!(got, sample_state(18));
+fn save_state_overwrites_existing_root(store: &impl Store) {
+    let root = sample_root(1);
+    store.save_state(root, sample_state(1)).unwrap();
+    store.save_state(root, sample_state(2)).unwrap();
+    assert_eq!(store.load_state(&root).unwrap(), Some(sample_state(2)));
 }
 
-fn save_head_overwrites_previous_head<S: Store>(store: &S) {
-    store.save_head(sample_head(19)).unwrap();
-    store.save_head(sample_head(20)).unwrap();
-    assert_eq!(store.load_head().unwrap(), Some(sample_head(20)));
+fn save_head_overwrites_previous_head(store: &impl Store) {
+    store.save_head(sample_head(1)).unwrap();
+    store.save_head(sample_head(2)).unwrap();
+    assert_eq!(store.load_head().unwrap(), Some(sample_head(2)));
 }
 
 // =============================================================================
@@ -118,15 +116,7 @@ fn save_head_overwrites_previous_head<S: Store>(store: &S) {
 
 #[test]
 fn memory_store_passes_contract() {
-    run_store_contract(&MemoryStore::new());
-}
-
-#[test]
-fn memory_store_load_head_none_before_first_save() {
-    // Separate test that requires a fresh store — can't be in the generic
-    // suite, which receives a single instance and runs everything against it.
-    let store = MemoryStore::new();
-    assert_eq!(store.load_head().unwrap(), None);
+    run_store_contract(MemoryStore::new);
 }
 
 #[test]
@@ -141,8 +131,10 @@ fn arc_dyn_store_dispatches_through_vtable() {
     let root = sample_root(42);
     store.save_block(root, sample_signed_block(42)).unwrap();
     assert!(store.has_block(&root).unwrap());
-    let loaded = store.load_block(&root).unwrap();
-    assert_eq!(loaded, Some(sample_signed_block(42)));
+    assert_eq!(
+        store.load_block(&root).unwrap(),
+        Some(sample_signed_block(42))
+    );
 }
 
 #[test]
@@ -154,13 +146,14 @@ fn arc_memory_store_concurrent_save_and_load() {
             scope.spawn(move || {
                 let root = sample_root(i);
                 store.save_block(root, sample_signed_block(i)).unwrap();
-                let loaded = store.load_block(&root).unwrap();
-                assert_eq!(loaded, Some(sample_signed_block(i)));
+                assert_eq!(
+                    store.load_block(&root).unwrap(),
+                    Some(sample_signed_block(i))
+                );
             });
         }
     });
 
-    // Every per-thread root is present after the scope completes.
     for i in 0..8_u8 {
         assert!(store.has_block(&sample_root(i)).unwrap());
     }

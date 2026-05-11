@@ -20,7 +20,7 @@ use protocol::{
 use storage::HeadInfo;
 use types::{Bytes32, Bytes4000};
 
-pub fn sample_root(seed: u8) -> Bytes32 {
+pub const fn sample_root(seed: u8) -> Bytes32 {
     Bytes32::new([seed; 32])
 }
 
