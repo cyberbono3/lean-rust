@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use protocol::{Block, Slot, State, ValidatorIndex};
 use types::Bytes32;
 
@@ -40,8 +40,7 @@ impl Engine {
     /// # Errors
     /// Forwards every variant raised by [`Store::from_anchor`].
     pub fn from_anchor(state: State, anchor_block: Block) -> Result<Self, ForkchoiceError> {
-        let store = Store::from_anchor(state, anchor_block)?;
-        Ok(Self::from_store(store))
+        Store::from_anchor(state, anchor_block).map(Self::from_store)
     }
 
     /// Builds an engine around an already-constructed [`Store`].
@@ -55,31 +54,29 @@ impl Engine {
     /// Snapshots the canonical head root.
     #[must_use]
     pub fn head(&self) -> Bytes32 {
-        self.store.lock().head()
+        self.lock().head()
     }
 
     /// Snapshots the safe attestation target root.
     #[must_use]
     pub fn safe_target(&self) -> Bytes32 {
-        self.store.lock().safe_target()
+        self.lock().safe_target()
     }
 
     /// Reports whether `root` is tracked by the store.
     #[must_use]
     pub fn has_block(&self, root: &Bytes32) -> bool {
-        self.store.lock().has_block(root)
+        self.lock().has_block(root)
     }
 
-    /// Runs `f` with a shared reference to the locked store.
-    ///
-    /// Use this for read-only operations not covered by a dedicated accessor.
-    /// The closure runs under the mutex, so keep it short and avoid blocking
-    /// I/O inside `f`.
+    /// Runs `f` with a shared reference to the locked store and returns its
+    /// result. Use for read-only operations not covered by a dedicated
+    /// accessor; the closure runs under the mutex, so keep it short.
     pub fn with_store<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&Store) -> R,
     {
-        f(&self.store.lock())
+        f(&self.lock())
     }
 
     /// Delegates to [`Store::produce_block`].
@@ -93,7 +90,9 @@ impl Engine {
         slot: Slot,
         validator: ValidatorIndex,
     ) -> Result<ProducedBlock, EngineError> {
-        Ok(self.store.lock().produce_block(slot, validator)?)
+        self.lock()
+            .produce_block(slot, validator)
+            .map_err(EngineError::from)
     }
 
     /// Delegates to [`Store::produce_attestation_vote`].
@@ -102,14 +101,18 @@ impl Engine {
     /// Forwards every variant raised by [`Store::produce_attestation_vote`]
     /// via [`EngineError::Forkchoice`].
     pub fn produce_attestation_vote(&self, slot: Slot) -> Result<ProducedVote, EngineError> {
-        Ok(self.store.lock().produce_attestation_vote(slot)?)
+        self.lock()
+            .produce_attestation_vote(slot)
+            .map_err(EngineError::from)
     }
 
-    /// Internal: returns a clone of the `Arc<Mutex<Store>>` so the importer
-    /// module can acquire the same lock as the public API without exposing
-    /// the inner type.
-    pub(crate) fn store_handle(&self) -> &Mutex<Store> {
-        &self.store
+    /// Acquires the store lock for the duration of the returned guard.
+    ///
+    /// Crate-private: external callers go through the public accessors or
+    /// [`Self::with_store`]. The importer module uses this to take the lock
+    /// once and hold it across the full import flow.
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Store> {
+        self.store.lock()
     }
 }
 
@@ -117,6 +120,7 @@ impl Engine {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use ssz::HashTreeRoot;
     use static_assertions::assert_impl_all;
 
     use crate::test_fixtures::{anchor_pair, engine_at_genesis};
@@ -126,10 +130,7 @@ mod tests {
     #[test]
     fn from_anchor_succeeds_at_genesis() {
         let (state, block) = anchor_pair(4);
-        let anchor_root: Bytes32 = {
-            use ssz::HashTreeRoot;
-            block.hash_tree_root().into()
-        };
+        let anchor_root: Bytes32 = block.hash_tree_root().into();
         let engine = Engine::from_anchor(state, block).unwrap();
         assert_eq!(engine.head(), anchor_root);
         assert_eq!(engine.safe_target(), anchor_root);
@@ -140,7 +141,6 @@ mod tests {
     fn clone_shares_underlying_store() {
         let engine_a = engine_at_genesis(4);
         let engine_b = engine_a.clone();
-        // Produce a block via handle A; handle B observes it.
         let produced = engine_a
             .produce_block(Slot::new(1), ValidatorIndex::new(1))
             .unwrap();
@@ -171,7 +171,6 @@ mod tests {
     #[test]
     fn with_store_runs_closure_under_lock() {
         let engine = engine_at_genesis(4);
-        let head = engine.with_store(forkchoice::Store::head);
-        assert_eq!(head, engine.head());
+        assert_eq!(engine.with_store(Store::head), engine.head());
     }
 }

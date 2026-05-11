@@ -10,9 +10,9 @@
 //! - `DuplicateBlock` / `MissingParent` return before any mutation; the store
 //!   is byte-equal to its pre-call state.
 //! - `Rejected` returns after [`protocol::State::state_transition`] but before
-//!   `track_block`. `state_transition` is transactional ([`protocol::State::state_transition`]:
-//!   `crates/protocol/src/state.rs:762`) — it computes the transition on a
-//!   local clone and swaps only on success — and `track_block` is the only
+//!   `track_block`. `state_transition` is transactional (it computes the
+//!   transition on a local clone and swaps only on success — see
+//!   `crates/protocol/src/state.rs:762`), and `track_block` is the only
 //!   subsequent mutator. So a `Rejected` arm also leaves the store byte-equal.
 
 use forkchoice::Store;
@@ -34,7 +34,7 @@ impl Engine {
     pub fn import_block(&self, signed_block: SignedBlock) -> BlockImportResult {
         let block_root: Bytes32 = signed_block.message.hash_tree_root().into();
         let parent_root = signed_block.message.parent_root;
-        let mut store = self.store_handle().lock();
+        let mut store = self.lock();
 
         if store.has_block(&block_root) {
             return BlockImportResult::DuplicateBlock { block_root };
@@ -68,22 +68,31 @@ impl Engine {
     /// Returns a structured outcome — see [`AttestationImportResult`].
     pub fn import_attestation(&self, signed_vote: SignedVote) -> AttestationImportResult {
         let validator_id = signed_vote.validator_id;
-        let mut store = self.store_handle().lock();
-        match store.process_attestation(signed_vote, false) {
-            Ok(true) => AttestationImportResult::Accepted {
+        let mut store = self.lock();
+
+        let changed = match store.process_attestation(signed_vote, false) {
+            Ok(changed) => changed,
+            Err(e) => {
+                return AttestationImportResult::Rejected {
+                    validator_id,
+                    error: e.into(),
+                };
+            }
+        };
+        let head_root = store.head();
+        let safe_target_root = store.safe_target();
+        if changed {
+            AttestationImportResult::Accepted {
                 validator_id,
-                head_root: store.head(),
-                safe_target_root: store.safe_target(),
-            },
-            Ok(false) => AttestationImportResult::Ignored {
+                head_root,
+                safe_target_root,
+            }
+        } else {
+            AttestationImportResult::Ignored {
                 validator_id,
-                head_root: store.head(),
-                safe_target_root: store.safe_target(),
-            },
-            Err(error) => AttestationImportResult::Rejected {
-                validator_id,
-                error: error.into(),
-            },
+                head_root,
+                safe_target_root,
+            }
         }
     }
 }
@@ -94,9 +103,8 @@ impl Engine {
 fn transition_and_track(
     store: &mut Store,
     signed_block: SignedBlock,
-    parent_state: State,
+    mut post_state: State,
 ) -> Result<Bytes32, EngineError> {
-    let mut post_state = parent_state;
     post_state.state_transition(&signed_block, true)?;
     let post_state_root: Bytes32 = post_state.hash_tree_root().into();
     store.track_block(signed_block.message, post_state)?;
@@ -109,13 +117,13 @@ fn transition_and_track(
 mod tests {
     use super::*;
     use forkchoice::ForkchoiceError;
-    use protocol::{Slot, ValidatorIndex};
+    use protocol::{Block, BlockBody, Checkpoint, Slot, ValidatorIndex, Vote};
     use types::Bytes4000;
 
     use crate::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
 
     /// Snapshot of store fields that must remain byte-equal across a
-    /// no-mutation branch (`DuplicateBlock` / `MissingParent`).
+    /// no-mutation branch (`DuplicateBlock` / `MissingParent` / `Rejected`).
     #[derive(Debug, PartialEq, Eq)]
     struct StoreSnapshot {
         head: Bytes32,
@@ -137,6 +145,22 @@ mod tests {
         }
     }
 
+    /// Builds a [`SignedBlock`] whose `parent_root` is `parent` and whose
+    /// remaining fields are zero-filled. The signature payload is zero —
+    /// engine never inspects it on the missing-parent / duplicate paths.
+    fn orphan_signed_block(parent: Bytes32) -> SignedBlock {
+        SignedBlock {
+            message: Block {
+                slot: Slot::new(1),
+                proposer_index: ValidatorIndex::new(1),
+                parent_root: parent,
+                state_root: Bytes32::zero(),
+                body: BlockBody::default(),
+            },
+            signature: Bytes4000::new([0; 4000]),
+        }
+    }
+
     // -- import_block: happy path + duplicate -------------------------------
 
     #[test]
@@ -149,23 +173,20 @@ mod tests {
         // Importer (engine_b) is a fresh handle anchored at the same genesis.
         let engine_b = engine_at_genesis(ENGINE_VALIDATORS);
 
-        let first = engine_b.import_block(signed.clone());
-        match first {
-            BlockImportResult::Accepted {
-                block_root: r,
-                head_root,
-                ..
-            } => {
-                assert_eq!(r, block_root);
-                assert_eq!(head_root, engine_b.head());
-            }
-            other => panic!("expected Accepted, got {other:?}"),
-        }
+        let BlockImportResult::Accepted {
+            block_root: accepted_root,
+            head_root,
+            ..
+        } = engine_b.import_block(signed.clone())
+        else {
+            panic!("expected Accepted on first import");
+        };
+        assert_eq!(accepted_root, block_root);
+        assert_eq!(head_root, engine_b.head());
 
         // AC #1: importing the same block twice → DuplicateBlock.
-        let second = engine_b.import_block(signed);
         assert!(matches!(
-            second,
+            engine_b.import_block(signed),
             BlockImportResult::DuplicateBlock { block_root: r } if r == block_root
         ));
     }
@@ -177,24 +198,15 @@ mod tests {
         let engine = engine_at_genesis(ENGINE_VALIDATORS);
         let pre = StoreSnapshot::capture(&engine);
 
-        // Build a SignedBlock whose parent_root is bogus. `state_root` /
-        // `slot` values are irrelevant — the missing-parent check fires first.
         let bogus_parent = Bytes32::new([0xaa; 32]);
-        let mut signed = produce_signed_block_orphan(bogus_parent);
-        // Defensive: force a non-zero parent_root in case the helper defaults.
-        signed.message.parent_root = bogus_parent;
-
-        let outcome = engine.import_block(signed);
-        match outcome {
-            BlockImportResult::MissingParent { parent_root, .. } => {
-                assert_eq!(parent_root, bogus_parent);
-            }
-            other => panic!("expected MissingParent, got {other:?}"),
-        }
+        let outcome = engine.import_block(orphan_signed_block(bogus_parent));
+        let BlockImportResult::MissingParent { parent_root, .. } = outcome else {
+            panic!("expected MissingParent, got {outcome:?}");
+        };
+        assert_eq!(parent_root, bogus_parent);
 
         // AC #2: state snapshot identical.
-        let post = StoreSnapshot::capture(&engine);
-        assert_eq!(pre, post);
+        assert_eq!(pre, StoreSnapshot::capture(&engine));
     }
 
     // -- import_block: state-root mismatch returns Rejected ----------------
@@ -203,7 +215,6 @@ mod tests {
     fn import_block_state_root_mismatch_returns_rejected() {
         let producer = engine_at_genesis(ENGINE_VALIDATORS);
         let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
-        // Corrupt the state_root — state_transition's parity check will reject.
         signed.message.state_root = Bytes32::new([0xff; 32]);
 
         let importer = engine_at_genesis(ENGINE_VALIDATORS);
@@ -217,15 +228,13 @@ mod tests {
             }
         ));
         // Rejection must also leave the store byte-equal.
-        let post = StoreSnapshot::capture(&importer);
-        assert_eq!(pre, post);
+        assert_eq!(pre, StoreSnapshot::capture(&importer));
     }
 
     // -- import_attestation: rejection path --------------------------------
 
     #[test]
     fn import_attestation_unknown_target_returns_rejected() {
-        use protocol::{Checkpoint, Vote};
         let engine = engine_at_genesis(ENGINE_VALIDATORS);
         let anchor_root = engine.head();
 
@@ -243,9 +252,8 @@ mod tests {
             },
             signature: Bytes4000::new([0; 4000]),
         };
-        let outcome = engine.import_attestation(sv);
         assert!(matches!(
-            outcome,
+            engine.import_attestation(sv),
             AttestationImportResult::Rejected {
                 error: EngineError::Forkchoice(ForkchoiceError::UnknownTargetBlock { .. }),
                 ..
@@ -258,44 +266,15 @@ mod tests {
     #[test]
     fn produce_block_via_engine_returns_valid_block() {
         let engine = engine_at_genesis(ENGINE_VALIDATORS);
+        let anchor_root = engine.head();
         let produced = engine
             .produce_block(Slot::new(1), ValidatorIndex::new(1))
             .unwrap();
-        assert_eq!(produced.parent_root, engine.head_pre_production());
+        assert_eq!(produced.parent_root, anchor_root);
         assert_eq!(produced.block.slot, Slot::new(1));
         assert_eq!(produced.block.proposer_index, ValidatorIndex::new(1));
         assert!(produced.block.body.attestations.len() <= protocol::MAX_ATTESTATIONS);
         let recomputed: Bytes32 = produced.post_state.hash_tree_root().into();
         assert_eq!(produced.block.state_root, recomputed);
-    }
-
-    // Helper: snapshot the engine head BEFORE produce_block tracks the result
-    // (produce_block mutates store.head via accept_new_votes). We need this
-    // for the parent_root assertion above, so we expose it as an inherent
-    // method on Engine via a temporary extension within the test module.
-    impl Engine {
-        fn head_pre_production(&self) -> Bytes32 {
-            // After produce_block at slot 1 with no pending votes, the head
-            // is unchanged from the anchor — this helper simply documents the
-            // invariant used by the test assertion above.
-            self.head()
-        }
-    }
-
-    /// Builds a [`SignedBlock`] with all-zero contents whose `parent_root` is
-    /// `parent`. The signature payload is zero-filled (forkchoice never
-    /// inspects it on the missing-parent path).
-    fn produce_signed_block_orphan(parent: Bytes32) -> SignedBlock {
-        use protocol::{Block, BlockBody};
-        SignedBlock {
-            message: Block {
-                slot: Slot::new(1),
-                proposer_index: ValidatorIndex::new(1),
-                parent_root: parent,
-                state_root: Bytes32::zero(),
-                body: BlockBody::default(),
-            },
-            signature: Bytes4000::new([0; 4000]),
-        }
     }
 }
