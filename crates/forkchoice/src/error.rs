@@ -8,7 +8,7 @@
 use thiserror::Error;
 use types::Bytes32;
 
-use protocol::Slot;
+use protocol::{ProtocolError, Slot, StateTransitionError, ValidatorIndex};
 
 use crate::time::Time;
 
@@ -115,4 +115,65 @@ pub enum ForkchoiceError {
     /// map — no candidate origin can be chosen.
     #[error("forkchoice GHOST traversal over empty block set")]
     NoBlocksAvailable,
+
+    /// `Store::produce_block` was called with a `validator` that is not the
+    /// round-robin proposer for `slot`.
+    #[error("forkchoice unauthorized proposer: validator {validator} for slot {slot}")]
+    UnauthorizedProposer {
+        /// `validator` argument passed to `produce_block`.
+        validator: ValidatorIndex,
+        /// `slot` argument passed to `produce_block`.
+        slot: Slot,
+    },
+
+    /// `Store::produce_block` resolved a head root whose post-state is not
+    /// tracked by the store.
+    #[error("forkchoice head state not found at {root:?}")]
+    HeadStateNotFound {
+        /// Head block root whose post-state was missing.
+        root: Bytes32,
+    },
+
+    /// `Store::produce_attestation_vote` or `Store::get_vote_target`
+    /// resolved a head root whose block is not tracked.
+    #[error("forkchoice unknown head block at {root:?}")]
+    UnknownHeadBlock {
+        /// Missing head root.
+        root: Bytes32,
+    },
+
+    /// `Store::get_vote_target` resolved a `safe_target` root whose block
+    /// is not tracked.
+    #[error("forkchoice unknown safe target at {root:?}")]
+    UnknownSafeTarget {
+        /// Missing safe-target root.
+        root: Bytes32,
+    },
+
+    /// `Store::track_block` rejected a block whose declared `state_root`
+    /// disagrees with `hash_tree_root(post_state)`.
+    #[error("forkchoice block state root mismatch: got {got:?}, want {want:?}")]
+    BlockStateRootMismatch {
+        /// `block.state_root` declared by the producer.
+        got: Bytes32,
+        /// `post_state.hash_tree_root()` computed at call time.
+        want: Bytes32,
+    },
+
+    /// `advance_state_to_slot` was called with `state.slot > target`.
+    #[error("forkchoice state slot {state_slot} is ahead of target {target_slot}")]
+    StateSlotAheadOfTarget {
+        /// `state.slot` at call time.
+        state_slot: Slot,
+        /// Requested target slot.
+        target_slot: Slot,
+    },
+
+    /// State-transition machinery returned an error (forwarded verbatim).
+    #[error(transparent)]
+    StateTransition(#[from] StateTransitionError),
+
+    /// Protocol-domain helper (e.g. `is_proposer`) returned an error.
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
 }

@@ -7,8 +7,10 @@
 //! Reordering the filter against the walk or relaxing the tie-break breaks
 //! parity with the canonical implementation.
 //!
-//! Visibility is `pub(crate)`: a later forkchoice issue (block production /
-//! head accessors) widens this to `pub` in step with the public crate API.
+//! Public surface: [`get_fork_choice_head`] is consumed by
+//! [`crate::Store`]'s `update_safe_target` / `update_head` hooks and by
+//! downstream crates that need to resolve a head root from a custom
+//! `(blocks, votes, min_score)` triple.
 
 use std::collections::HashMap;
 
@@ -33,7 +35,19 @@ use crate::error::ForkchoiceError;
 ///   `blocks`.
 /// - [`ForkchoiceError::ParentBlockNotFound`] when the weight-walk runs
 ///   past a block whose `parent_root` is absent from `blocks`.
-pub(crate) fn get_fork_choice_head(
+///
+/// # Example
+/// ```
+/// use std::collections::HashMap;
+/// use forkchoice::{helpers::get_fork_choice_head, ForkchoiceError};
+/// use types::Bytes32;
+///
+/// let err = get_fork_choice_head(&HashMap::new(), Bytes32::zero(), &HashMap::new(), 0)
+///     .unwrap_err();
+/// assert!(matches!(err, ForkchoiceError::NoBlocksAvailable));
+/// ```
+#[allow(clippy::implicit_hasher)]
+pub fn get_fork_choice_head(
     blocks: &HashMap<Bytes32, Block>,
     root: Bytes32,
     latest_votes: &HashMap<ValidatorIndex, Checkpoint>,
