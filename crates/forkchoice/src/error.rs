@@ -1,9 +1,8 @@
 //! Crate-level error type for the forkchoice store.
 //!
-//! [`ForkchoiceError`] is intentionally non-exhaustive: this revision only
-//! carries the two variants emitted by [`crate::store::Store::from_anchor`].
-//! Subsequent forkchoice issues add variants for block insertion, attestation
-//! validation, and head-resolution failure modes.
+//! [`ForkchoiceError`] is marked `#[non_exhaustive]` so adding variants is
+//! a minor-version change. Variants carry typed `Slot` / `Bytes32` payloads
+//! so callers can pattern-match without parsing the `Display` string.
 
 use thiserror::Error;
 use types::Bytes32;
@@ -11,9 +10,6 @@ use types::Bytes32;
 use protocol::{ProtocolError, Slot, StateTransitionError, ValidatorIndex};
 
 use crate::time::Time;
-
-// New variants for #18 carry typed `Slot` / `Bytes32` payloads so callers can
-// pattern-match without parsing the `Display` string.
 
 /// Errors raised by [`crate::store::Store`] operations.
 #[derive(Debug, Error, PartialEq)]

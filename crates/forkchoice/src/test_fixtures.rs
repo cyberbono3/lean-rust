@@ -17,6 +17,7 @@ use ssz::HashTreeRoot;
 use types::{Bytes32, Bytes4000};
 
 use crate::store::Store;
+use crate::time::Time;
 
 const GENESIS_TIME: u64 = 1_700_000_000;
 
@@ -92,6 +93,20 @@ pub(crate) fn genesis_store(num_validators: u64) -> (Store, Bytes32) {
     let root: Bytes32 = block.hash_tree_root().into();
     let store = Store::from_anchor(state, block).expect("genesis anchor invariants");
     (store, root)
+}
+
+/// Builds a linear chain pinned to genesis-justified, with the clock set
+/// to `time`. Consolidates the per-test-module fixture pattern (chain
+/// + justified pin + optional clock position) into one helper.
+pub(crate) fn pinned_chain(
+    n_blocks: u64,
+    num_validators: u64,
+    time: Time,
+) -> (Store, Vec<Bytes32>) {
+    let (mut store, roots, _) = linear_chain(n_blocks, num_validators);
+    store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+    let store = store.with_time_for_test(time);
+    (store, roots)
 }
 
 /// Builds a linear chain `genesis → b_1 → … → b_{n_blocks-1}` and inserts
