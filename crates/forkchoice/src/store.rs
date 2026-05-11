@@ -24,11 +24,12 @@
 use std::collections::HashMap;
 
 use config::INTERVALS_PER_SLOT;
-use protocol::{Block, Checkpoint, ProtocolConfig, SignedVote, State, ValidatorIndex};
+use protocol::{Block, Checkpoint, ProtocolConfig, SignedVote, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
 use types::Bytes32;
 
 use crate::error::ForkchoiceError;
+use crate::helpers::get_fork_choice_head;
 use crate::time::{Phase, Time};
 
 /// LMD-GHOST forkchoice store.
@@ -254,31 +255,190 @@ impl Store {
         }
     }
 
-    // -- Phase hook stubs (bodies land in #18). -------------------------
+    // ==================================================================
+    // Attestation processing
+    // ==================================================================
 
-    /// Promotes pending votes into the known vote set and refreshes the
-    /// forkchoice head. **Stub:** body lands in #18; this revision returns
-    /// `Ok(())` so [`Self::tick_interval`]'s dispatch shape is testable.
+    /// Validates the structural and timing rules a [`SignedVote`] must
+    /// satisfy before [`Self::process_attestation`] will route it into
+    /// either vote pool.
+    ///
+    /// Mirrors leanSpec `forkchoice/store.py::Store.validate_attestation`.
     ///
     /// # Errors
-    /// Currently infallible. The `Result` return matches the upstream
-    /// signature and stays forward-compatible for the #18 body.
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    pub(crate) fn accept_new_votes(&mut self) -> Result<(), ForkchoiceError> {
-        // TODO(#18): promote latest_new_votes into latest_known_votes,
-        //            then refresh head via LMD-GHOST.
+    /// - [`ForkchoiceError::UnknownSourceBlock`] /
+    ///   [`ForkchoiceError::UnknownTargetBlock`] when either checkpoint
+    ///   root is not tracked by the store.
+    /// - [`ForkchoiceError::SourceSlotExceedsTarget`] when either the
+    ///   resolved source block's slot exceeds the resolved target block's
+    ///   slot or `vote.source.slot > vote.target.slot`.
+    /// - [`ForkchoiceError::SourceCheckpointSlotMismatch`] /
+    ///   [`ForkchoiceError::TargetCheckpointSlotMismatch`] when the
+    ///   declared checkpoint slot disagrees with the resolved block's slot.
+    /// - [`ForkchoiceError::AttestationFutureLimitOverflow`] when
+    ///   `current_vote_slot() + 1` would overflow `u64`.
+    /// - [`ForkchoiceError::AttestationTooFarInFuture`] when
+    ///   `vote.slot > current_vote_slot() + 1`.
+    pub fn validate_attestation(&self, sv: &SignedVote) -> Result<(), ForkchoiceError> {
+        let vote = &sv.message;
+
+        let source_block = self.lookup_block(vote.source.root, |root| {
+            ForkchoiceError::UnknownSourceBlock { root }
+        })?;
+        let target_block = self.lookup_block(vote.target.root, |root| {
+            ForkchoiceError::UnknownTargetBlock { root }
+        })?;
+
+        if source_block.slot > target_block.slot || vote.source.slot > vote.target.slot {
+            return Err(ForkchoiceError::SourceSlotExceedsTarget);
+        }
+        if source_block.slot != vote.source.slot {
+            return Err(ForkchoiceError::SourceCheckpointSlotMismatch);
+        }
+        if target_block.slot != vote.target.slot {
+            return Err(ForkchoiceError::TargetCheckpointSlotMismatch);
+        }
+
+        let current = self.current_vote_slot();
+        let limit = current
+            .advance()
+            .ok_or(ForkchoiceError::AttestationFutureLimitOverflow {
+                current_slot: current,
+            })?;
+        if vote.slot > limit {
+            return Err(ForkchoiceError::AttestationTooFarInFuture {
+                vote_slot: vote.slot,
+                limit,
+            });
+        }
         Ok(())
     }
 
-    /// Recomputes the safe attestation target using the supermajority
-    /// filter. **Stub:** body lands in #18; this revision returns `Ok(())`.
+    /// Applies a [`SignedVote`] either as an on-chain vote
+    /// (`is_from_block == true`) or a gossip vote (`is_from_block ==
+    /// false`).
+    ///
+    /// Returns `true` when the call mutated either vote pool, `false`
+    /// otherwise. Re-applying the same vote at the same `vote.slot` is a
+    /// no-op (idempotency).
+    ///
+    /// On-chain branch:
+    /// 1. Insert into `latest_known_votes` only when strictly newer.
+    /// 2. Evict from `latest_new_votes` only when the pending entry is
+    ///    strictly older. Eviction compares `vote.message.slot` (the
+    ///    attestation slot), not `vote.message.target.slot`.
+    ///
+    /// Gossip branch: insert into `latest_new_votes` when strictly newer.
+    /// Future-slot votes within the `current_vote_slot + 1` window are
+    /// admitted; they can only matter once promoted by
+    /// [`Self::accept_new_votes`].
     ///
     /// # Errors
-    /// Currently infallible. The `Result` return matches the upstream
-    /// signature and stays forward-compatible for the #18 body.
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    /// Forwards any error from [`Self::validate_attestation`].
+    pub fn process_attestation(
+        &mut self,
+        signed_vote: SignedVote,
+        is_from_block: bool,
+    ) -> Result<bool, ForkchoiceError> {
+        self.validate_attestation(&signed_vote)?;
+
+        let validator = signed_vote.validator_id;
+        let vote_slot = signed_vote.message.slot;
+
+        if is_from_block {
+            let promoted = insert_if_newer(&mut self.latest_known_votes, validator, signed_vote);
+            let evicted = evict_if_older(&mut self.latest_new_votes, validator, vote_slot);
+            return Ok(promoted || evicted);
+        }
+        // Gossip branch carries no freshness gate against the current vote
+        // slot — `validate_attestation` already capped `vote.slot` at
+        // `current_vote_slot + 1`.
+        Ok(insert_if_newer(
+            &mut self.latest_new_votes,
+            validator,
+            signed_vote,
+        ))
+    }
+
+    /// Slot derived from the store's current clock value. Equivalent to
+    /// `Slot::new(self.time.slot())` but kept as a single named helper so
+    /// future spec edits to the slot derivation land in one place.
+    #[must_use]
+    pub(crate) const fn current_vote_slot(&self) -> Slot {
+        Slot::new(self.time.slot())
+    }
+
+    /// Resolves a tracked block by root, raising the caller-supplied error
+    /// variant when the root is unknown. Keeps the two checkpoint lookups
+    /// in [`Self::validate_attestation`] DRY without committing to a
+    /// single error variant.
+    fn lookup_block(
+        &self,
+        root: Bytes32,
+        err: impl FnOnce(Bytes32) -> ForkchoiceError,
+    ) -> Result<&Block, ForkchoiceError> {
+        self.blocks.get(&root).ok_or_else(|| err(root))
+    }
+
+    // ==================================================================
+    // Phase hook bodies
+    // ==================================================================
+
+    /// Promotes pending votes into the known vote set and refreshes the
+    /// forkchoice head.
+    ///
+    /// # Errors
+    /// Forwards [`ForkchoiceError`] variants raised by the internal head
+    /// refresh (currently any error from
+    /// [`crate::helpers::get_fork_choice_head`]).
+    pub(crate) fn accept_new_votes(&mut self) -> Result<(), ForkchoiceError> {
+        let promoted = std::mem::take(&mut self.latest_new_votes);
+        self.latest_known_votes.extend(promoted);
+        self.update_head()
+    }
+
+    /// Recomputes the safe attestation target. Scoring is gated by the
+    /// `ceil(2N/3)` supermajority threshold and walks the vote's *head*
+    /// checkpoint (not the FFG target), matching the canonical LMD-GHOST
+    /// head selection.
+    ///
+    /// # Errors
+    /// Forwards [`ForkchoiceError`] variants raised by
+    /// [`crate::helpers::get_fork_choice_head`].
     pub(crate) fn update_safe_target(&mut self) -> Result<(), ForkchoiceError> {
-        // TODO(#18): recompute safe_target using the supermajority filter.
+        // `(2N+2)/3` in lean-go == `ceil(2N/3)`. Rust spelling: `div_ceil`
+        // over `u64::saturating_mul(2)` — overflow-safe and matches
+        // leanSpec's `-(-N*2 // 3)`.
+        let min_target_score = self.config.num_validators.saturating_mul(2).div_ceil(3);
+        let checkpoints: HashMap<ValidatorIndex, Checkpoint> = self
+            .latest_new_votes
+            .iter()
+            .map(|(v, sv)| (*v, sv.message.head))
+            .collect();
+        self.safe_target = get_fork_choice_head(
+            &self.blocks,
+            self.latest_justified.root,
+            &checkpoints,
+            min_target_score,
+        )?;
+        Ok(())
+    }
+
+    /// Refreshes the canonical head from `latest_known_votes` using the
+    /// `min_score = 0` LMD-GHOST walk.
+    ///
+    /// The `latest_finalized` carry-snapshot (the OLD-head's
+    /// `state.latest_finalized` written AFTER the head switch) is part of
+    /// the block-import flow, not this hook; it lands in a later
+    /// forkchoice issue.
+    fn update_head(&mut self) -> Result<(), ForkchoiceError> {
+        let checkpoints: HashMap<ValidatorIndex, Checkpoint> = self
+            .latest_known_votes
+            .iter()
+            .map(|(v, sv)| (*v, sv.message.head))
+            .collect();
+        self.head =
+            get_fork_choice_head(&self.blocks, self.latest_justified.root, &checkpoints, 0)?;
         Ok(())
     }
 
@@ -291,6 +451,51 @@ impl Store {
         self.time = time;
         self
     }
+
+    /// Test-only direct pending-vote insertion. Used by `update_head` and
+    /// `update_safe_target` tests that need to seed votes without driving
+    /// the full `process_attestation` validation path.
+    #[cfg(test)]
+    pub(crate) fn insert_new_vote_for_test(&mut self, vote: SignedVote) {
+        self.latest_new_votes.insert(vote.validator_id, vote);
+    }
+
+    /// Test-only setter for the justified-checkpoint descent origin.
+    /// Production code mutates `latest_justified` only through block
+    /// import; that path is out of scope for this issue.
+    #[cfg(test)]
+    pub(crate) fn set_latest_justified_for_test(&mut self, checkpoint: Checkpoint) {
+        self.latest_justified = checkpoint;
+    }
+}
+
+/// Inserts `vote` only when the map's existing entry for `validator` is
+/// strictly older (by `message.slot`). Returns `true` when the map was
+/// mutated.
+fn insert_if_newer(
+    map: &mut HashMap<ValidatorIndex, SignedVote>,
+    validator: ValidatorIndex,
+    vote: SignedVote,
+) -> bool {
+    match map.get(&validator) {
+        Some(existing) if existing.message.slot >= vote.message.slot => false,
+        _ => {
+            map.insert(validator, vote);
+            true
+        }
+    }
+}
+
+/// Removes the map's entry for `validator` when its `message.slot` is
+/// strictly older than `newer_than`. Returns `true` when the map was
+/// mutated.
+fn evict_if_older(
+    map: &mut HashMap<ValidatorIndex, SignedVote>,
+    validator: ValidatorIndex,
+    newer_than: Slot,
+) -> bool {
+    matches!(map.get(&validator), Some(prev) if prev.message.slot < newer_than)
+        && map.remove(&validator).is_some()
 }
 
 #[cfg(test)]
@@ -559,5 +764,443 @@ mod tick_interval_tests {
                 Time::new(t + INTERVALS_PER_SLOT).phase()
             );
         }
+    }
+}
+
+// ============================================================================
+// process_attestation + validate_attestation
+// ============================================================================
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod attestation_tests {
+    use super::*;
+    use protocol::{Checkpoint, Slot, ValidatorIndex};
+
+    use crate::test_fixtures::{linear_chain, signed_vote, signed_vote_at};
+
+    /// Builds a 4-block linear chain (genesis + 3 children) with 4
+    /// validators, pins `latest_justified` at the genesis root, and
+    /// positions the clock so `current_vote_slot() == 3` (i.e. votes up to
+    /// `Slot::new(4)` are admissible).
+    fn store_with_chain_at_slot_3() -> (Store, Vec<Bytes32>) {
+        let (mut store, roots, _) = linear_chain(4, 4);
+        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+        // 3 * INTERVALS_PER_SLOT positions the clock at the start of slot 3.
+        store = store.with_time_for_test(Time::new(3 * INTERVALS_PER_SLOT));
+        (store, roots)
+    }
+
+    /// Constructs a vote whose source / target / head all point at
+    /// `(roots[idx], Slot::new(idx))`, cast in slot `vote_slot`.
+    fn self_referential_vote(
+        validator: u64,
+        roots: &[Bytes32],
+        idx: usize,
+        vote_slot: u64,
+    ) -> SignedVote {
+        let cp = Checkpoint::new(roots[idx], Slot::new(idx as u64));
+        signed_vote(
+            ValidatorIndex::new(validator),
+            cp,
+            cp,
+            cp,
+            Slot::new(vote_slot),
+        )
+    }
+
+    // -- process_attestation: from-block branch ----------------------------
+
+    #[test]
+    fn from_block_inserts_first_vote_returns_true() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let vote = self_referential_vote(0, &roots, 2, 2);
+        assert!(store.process_attestation(vote.clone(), true).unwrap());
+        assert_eq!(
+            store.latest_known_votes().get(&vote.validator_id),
+            Some(&vote)
+        );
+        assert!(store.latest_new_votes().is_empty());
+    }
+
+    #[test]
+    fn from_block_idempotent_same_slot() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let vote = self_referential_vote(0, &roots, 2, 2);
+        assert!(store.process_attestation(vote.clone(), true).unwrap());
+        // Second call must observe `>=` and return false without mutation.
+        assert!(!store.process_attestation(vote.clone(), true).unwrap());
+        assert_eq!(store.latest_known_votes().len(), 1);
+    }
+
+    #[test]
+    fn from_block_rejects_stale_keeps_existing() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let newer = self_referential_vote(0, &roots, 3, 3);
+        let older = self_referential_vote(0, &roots, 2, 2);
+        assert!(store.process_attestation(newer.clone(), true).unwrap());
+        assert!(!store.process_attestation(older, true).unwrap());
+        assert_eq!(
+            store.latest_known_votes().get(&newer.validator_id),
+            Some(&newer)
+        );
+    }
+
+    #[test]
+    fn from_block_accepts_newer_evicts_pending() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let pending = self_referential_vote(0, &roots, 2, 2);
+        let on_chain = self_referential_vote(0, &roots, 3, 3);
+        assert!(store.process_attestation(pending.clone(), false).unwrap());
+        // From-block at strictly newer slot promotes into known AND evicts
+        // the stale pending entry (a single `true` return covers both).
+        assert!(store.process_attestation(on_chain.clone(), true).unwrap());
+        assert_eq!(
+            store.latest_known_votes().get(&on_chain.validator_id),
+            Some(&on_chain)
+        );
+        assert!(store.latest_new_votes().is_empty());
+    }
+
+    #[test]
+    fn from_block_eviction_compares_attestation_slot_not_target_slot() {
+        // PARITY: pending vote has `target.slot = 99`, attestation slot 2.
+        // The on-chain vote has attestation slot 3 with `target.slot = 0`.
+        // Eviction must compare attestation slot (3 > 2), not target.slot.
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let target_late = Checkpoint::new(roots[2], Slot::new(2));
+        let source_genesis = Checkpoint::new(roots[0], Slot::ZERO);
+        let pending = signed_vote(
+            ValidatorIndex::new(0),
+            target_late,
+            target_late,
+            source_genesis,
+            Slot::new(2),
+        );
+        store.insert_new_vote_for_test(pending);
+
+        let target_early = Checkpoint::new(roots[3], Slot::new(3));
+        let on_chain = signed_vote(
+            ValidatorIndex::new(0),
+            target_early,
+            target_early,
+            source_genesis,
+            Slot::new(3),
+        );
+        store.process_attestation(on_chain, true).unwrap();
+        assert!(store.latest_new_votes().is_empty());
+    }
+
+    // -- process_attestation: gossip branch --------------------------------
+
+    #[test]
+    fn gossip_inserts_first_vote_into_pending() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let vote = self_referential_vote(0, &roots, 2, 2);
+        assert!(store.process_attestation(vote.clone(), false).unwrap());
+        assert!(store.latest_known_votes().is_empty());
+        assert_eq!(
+            store.latest_new_votes().get(&vote.validator_id),
+            Some(&vote)
+        );
+    }
+
+    #[test]
+    fn gossip_idempotent_same_slot() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let vote = self_referential_vote(0, &roots, 2, 2);
+        assert!(store.process_attestation(vote.clone(), false).unwrap());
+        assert!(!store.process_attestation(vote, false).unwrap());
+    }
+
+    #[test]
+    fn gossip_no_freshness_gate_vs_current_vote_slot() {
+        // current_vote_slot = 3. A vote at slot 4 (= current+1) is admissible
+        // — gossip has no extra freshness gate beyond `validate_attestation`.
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let vote = self_referential_vote(0, &roots, 3, 4);
+        assert!(store.process_attestation(vote, false).unwrap());
+    }
+
+    // -- lookup_block --------------------------------------------------
+
+    #[test]
+    fn lookup_block_returns_tracked_block() {
+        let (store, roots) = store_with_chain_at_slot_3();
+        let block = store
+            .lookup_block(roots[2], |root| ForkchoiceError::UnknownSourceBlock {
+                root,
+            })
+            .unwrap();
+        assert_eq!(block.slot, Slot::new(2));
+    }
+
+    #[test]
+    fn lookup_block_invokes_caller_error_constructor() {
+        let (store, _roots) = store_with_chain_at_slot_3();
+        let missing = Bytes32::new([0x77; 32]);
+        // The closure is what selects the variant; same missing root, two
+        // different variants depending on which constructor the caller
+        // supplies.
+        let err = store
+            .lookup_block(missing, |root| ForkchoiceError::UnknownSourceBlock { root })
+            .unwrap_err();
+        assert_eq!(err, ForkchoiceError::UnknownSourceBlock { root: missing });
+
+        let err = store
+            .lookup_block(missing, |root| ForkchoiceError::UnknownTargetBlock { root })
+            .unwrap_err();
+        assert_eq!(err, ForkchoiceError::UnknownTargetBlock { root: missing });
+    }
+
+    // -- validate_attestation: rejection paths ----------------------------
+
+    #[test]
+    fn validate_unknown_source() {
+        let (store, roots) = store_with_chain_at_slot_3();
+        let bad_source = Checkpoint::new(Bytes32::new([0xaa; 32]), Slot::ZERO);
+        let target = Checkpoint::new(roots[2], Slot::new(2));
+        let sv = signed_vote(
+            ValidatorIndex::new(0),
+            target,
+            target,
+            bad_source,
+            Slot::new(2),
+        );
+        let err = store.validate_attestation(&sv).unwrap_err();
+        assert_eq!(
+            err,
+            ForkchoiceError::UnknownSourceBlock {
+                root: bad_source.root
+            }
+        );
+    }
+
+    #[test]
+    fn validate_unknown_target() {
+        let (store, roots) = store_with_chain_at_slot_3();
+        let source = Checkpoint::new(roots[0], Slot::ZERO);
+        let bad_target = Checkpoint::new(Bytes32::new([0xbb; 32]), Slot::new(2));
+        let sv = signed_vote(
+            ValidatorIndex::new(0),
+            bad_target,
+            bad_target,
+            source,
+            Slot::new(2),
+        );
+        let err = store.validate_attestation(&sv).unwrap_err();
+        assert_eq!(
+            err,
+            ForkchoiceError::UnknownTargetBlock {
+                root: bad_target.root
+            }
+        );
+    }
+
+    #[test]
+    fn validate_source_slot_after_target() {
+        let (store, roots) = store_with_chain_at_slot_3();
+        let source = Checkpoint::new(roots[2], Slot::new(2));
+        let target = Checkpoint::new(roots[1], Slot::new(1));
+        let sv = signed_vote(ValidatorIndex::new(0), target, target, source, Slot::new(2));
+        assert_eq!(
+            store.validate_attestation(&sv).unwrap_err(),
+            ForkchoiceError::SourceSlotExceedsTarget
+        );
+    }
+
+    #[test]
+    fn validate_source_checkpoint_slot_mismatch() {
+        let (store, roots) = store_with_chain_at_slot_3();
+        // Source root resolves to slot 0, but checkpoint claims slot 1.
+        let lying_source = Checkpoint::new(roots[0], Slot::new(1));
+        let target = Checkpoint::new(roots[2], Slot::new(2));
+        let sv = signed_vote(
+            ValidatorIndex::new(0),
+            target,
+            target,
+            lying_source,
+            Slot::new(2),
+        );
+        assert_eq!(
+            store.validate_attestation(&sv).unwrap_err(),
+            ForkchoiceError::SourceCheckpointSlotMismatch
+        );
+    }
+
+    #[test]
+    fn validate_target_checkpoint_slot_mismatch() {
+        let (store, roots) = store_with_chain_at_slot_3();
+        let source = Checkpoint::new(roots[0], Slot::ZERO);
+        // Target root resolves to slot 2, but checkpoint claims slot 3.
+        let lying_target = Checkpoint::new(roots[2], Slot::new(3));
+        let sv = signed_vote(
+            ValidatorIndex::new(0),
+            lying_target,
+            lying_target,
+            source,
+            Slot::new(3),
+        );
+        assert_eq!(
+            store.validate_attestation(&sv).unwrap_err(),
+            ForkchoiceError::TargetCheckpointSlotMismatch
+        );
+    }
+
+    #[test]
+    fn validate_rejects_attestation_beyond_plus_one() {
+        // current_vote_slot = 3; limit = 4. Vote at slot 5 must be rejected.
+        let (store, roots) = store_with_chain_at_slot_3();
+        let sv = signed_vote_at(
+            ValidatorIndex::new(0),
+            roots[3],
+            Slot::new(3),
+            Slot::new(5),
+            Checkpoint::new(roots[0], Slot::ZERO),
+        );
+        assert_eq!(
+            store.validate_attestation(&sv).unwrap_err(),
+            ForkchoiceError::AttestationTooFarInFuture {
+                vote_slot: Slot::new(5),
+                limit: Slot::new(4),
+            }
+        );
+    }
+
+    // NOTE: `ForkchoiceError::AttestationFutureLimitOverflow` is unreachable
+    // through normal clock advancement — `current_vote_slot = time /
+    // INTERVALS_PER_SLOT` is bounded by `u64::MAX / 4`, so `Slot::advance`
+    // always succeeds. The variant is retained as defense-in-depth for
+    // future `Slot` constructors that bypass the clock.
+}
+
+// ============================================================================
+// update_safe_target + accept_new_votes (update_head)
+// ============================================================================
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod update_safe_target_tests {
+    use super::*;
+    use protocol::{Checkpoint, Slot, ValidatorIndex};
+
+    use crate::test_fixtures::{linear_chain, signed_vote, signed_vote_at};
+
+    /// Builds a linear chain pinned to genesis-justified, returning the
+    /// store and per-slot roots.
+    fn chain_pinned_to_genesis(n_blocks: u64, num_validators: u64) -> (Store, Vec<Bytes32>) {
+        let (mut store, roots, _) = linear_chain(n_blocks, num_validators);
+        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+        (store, roots)
+    }
+
+    fn vote_for(validator: u64, roots: &[Bytes32], head_idx: usize) -> SignedVote {
+        signed_vote_at(
+            ValidatorIndex::new(validator),
+            roots[head_idx],
+            Slot::new(head_idx as u64),
+            Slot::new(head_idx as u64),
+            Checkpoint::new(roots[0], Slot::ZERO),
+        )
+    }
+
+    #[test]
+    fn supermajority_advances_to_voted_head() {
+        // 4 validators → ceil(2*4/3) = 3. Three voters at b2 → safe_target = b2.
+        let (mut store, roots) = chain_pinned_to_genesis(3, 4);
+        for v in 0..3 {
+            store.insert_new_vote_for_test(vote_for(v, &roots, 2));
+        }
+        store.update_safe_target().unwrap();
+        assert_eq!(store.safe_target(), roots[2]);
+    }
+
+    #[test]
+    fn below_supermajority_keeps_safe_target_unchanged() {
+        // 4 validators → threshold 3. Only 2 voters → safe_target falls back
+        // to the descent origin (latest_justified.root == genesis).
+        let (mut store, roots) = chain_pinned_to_genesis(3, 4);
+        for v in 0..2 {
+            store.insert_new_vote_for_test(vote_for(v, &roots, 2));
+        }
+        store.update_safe_target().unwrap();
+        assert_eq!(store.safe_target(), roots[0]);
+    }
+
+    #[test]
+    fn exactly_two_thirds_advances() {
+        // 6 validators → ceil(12/3) = 4. Exactly 4 voters → advances.
+        let (mut store, roots) = chain_pinned_to_genesis(3, 6);
+        for v in 0..4 {
+            store.insert_new_vote_for_test(vote_for(v, &roots, 2));
+        }
+        store.update_safe_target().unwrap();
+        assert_eq!(store.safe_target(), roots[2]);
+    }
+
+    #[test]
+    fn just_below_two_thirds_unchanged() {
+        // 6 validators → threshold 4. Three voters → unchanged.
+        let (mut store, roots) = chain_pinned_to_genesis(3, 6);
+        for v in 0..3 {
+            store.insert_new_vote_for_test(vote_for(v, &roots, 2));
+        }
+        store.update_safe_target().unwrap();
+        assert_eq!(store.safe_target(), roots[0]);
+    }
+
+    #[test]
+    fn no_votes_safe_target_is_latest_justified_root() {
+        let (mut store, roots) = chain_pinned_to_genesis(3, 4);
+        store.update_safe_target().unwrap();
+        assert_eq!(store.safe_target(), roots[0]);
+    }
+
+    #[test]
+    fn scoring_uses_head_not_target_checkpoint() {
+        // PARITY: voters declare `head = roots[3]` but `target = roots[1]`.
+        // Weight must route to roots[3]'s subtree, not roots[1]'s.
+        let (mut store, roots) = chain_pinned_to_genesis(4, 4);
+        let source = Checkpoint::new(roots[0], Slot::ZERO);
+        let head = Checkpoint::new(roots[3], Slot::new(3));
+        let target = Checkpoint::new(roots[1], Slot::new(1));
+        for v in 0..3 {
+            store.insert_new_vote_for_test(signed_vote(
+                ValidatorIndex::new(v),
+                head,
+                target,
+                source,
+                Slot::new(3),
+            ));
+        }
+        store.update_safe_target().unwrap();
+        assert_eq!(store.safe_target(), roots[3]);
+    }
+
+    // -- accept_new_votes drives update_head -------------------------------
+
+    #[test]
+    fn accept_new_votes_promotes_pending_and_refreshes_head() {
+        let (mut store, roots) = chain_pinned_to_genesis(3, 4);
+        // Seed all 4 voters in latest_new_votes pointing at b2.
+        for v in 0..4 {
+            store.insert_new_vote_for_test(vote_for(v, &roots, 2));
+        }
+        // Before promotion, head is still genesis (set by from_anchor).
+        assert_eq!(store.head(), roots[0]);
+        store.accept_new_votes().unwrap();
+        assert!(store.latest_new_votes().is_empty());
+        assert_eq!(store.latest_known_votes().len(), 4);
+        // After promotion + update_head, head switches to b2.
+        assert_eq!(store.head(), roots[2]);
+    }
+
+    #[test]
+    fn accept_new_votes_on_empty_pending_still_refreshes_head() {
+        // No pending votes, no known votes → update_head walks from genesis
+        // with empty vote set and returns the origin unchanged.
+        let (mut store, roots) = chain_pinned_to_genesis(3, 4);
+        store.accept_new_votes().unwrap();
+        assert_eq!(store.head(), roots[0]);
     }
 }
