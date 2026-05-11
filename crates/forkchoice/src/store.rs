@@ -44,7 +44,17 @@ pub type Time = u64;
 /// `defer FuncTrace`). All inputs are owned; [`Self::from_anchor`] takes
 /// `state` and `anchor_block` by value to avoid the implicit clone they
 /// would require to enter the maps.
-#[derive(Debug, Clone)]
+///
+/// # `Default`
+///
+/// [`Store::default()`] returns an all-zero structural placeholder: empty
+/// maps, zero-root `head` and `safe_target`, zero-slot `latest_justified` /
+/// `latest_finalized`, and `time = 0`. It is **not** a usable fork-choice
+/// state — every accessor that resolves a root will return `None` because
+/// the zero root is not tracked. Use [`Self::from_anchor`] for real
+/// construction. The `Default` impl exists for struct-update syntax,
+/// `mem::take`, and test scaffolding.
+#[derive(Debug, Clone, Default)]
 pub struct Store {
     time: Time,
     config: ProtocolConfig,
@@ -95,23 +105,19 @@ impl Store {
                 intervals_per_slot: INTERVALS_PER_SLOT,
             })?;
 
-        let config = state.config;
-        let latest_justified = state.latest_justified;
-        let latest_finalized = state.latest_finalized;
-
-        // 3. Build the store with maps + block_order seeded by the anchor.
+        // 3. Build the store with the seeded fields; remaining fields
+        //    (maps, block_order, vote maps) take their `Default` empty
+        //    values. `state.config` / `latest_justified` / `latest_finalized`
+        //    are `Copy`, so they are read inline before `state` moves into
+        //    `insert_block`.
         let mut store = Self {
             time,
-            config,
+            config: state.config,
             head: anchor_root,
             safe_target: anchor_root,
-            latest_justified,
-            latest_finalized,
-            blocks: HashMap::with_capacity(1),
-            states: HashMap::with_capacity(1),
-            block_order: Vec::with_capacity(1),
-            latest_known_votes: HashMap::new(),
-            latest_new_votes: HashMap::new(),
+            latest_justified: state.latest_justified,
+            latest_finalized: state.latest_finalized,
+            ..Default::default()
         };
         store.insert_block(anchor_root, anchor_block, state);
         Ok(store)
@@ -319,6 +325,23 @@ mod tests {
         let store = Store::from_anchor(state, block).unwrap();
         assert!(store.latest_known_votes().is_empty());
         assert!(store.latest_new_votes().is_empty());
+    }
+
+    // -- Default sentinel --------------------------------------------------
+
+    #[test]
+    fn default_is_structural_placeholder() {
+        let store = Store::default();
+        assert_eq!(store.time(), 0);
+        assert_eq!(store.head(), Bytes32::zero());
+        assert_eq!(store.safe_target(), Bytes32::zero());
+        assert!(store.block_order().is_empty());
+        assert!(store.latest_known_votes().is_empty());
+        assert!(store.latest_new_votes().is_empty());
+        // Zero root is not tracked — accessors must return None.
+        assert!(store.block(&Bytes32::zero()).is_none());
+        assert!(store.state(&Bytes32::zero()).is_none());
+        assert!(!store.has_block(&Bytes32::zero()));
     }
 
     // -- block_order invariant ---------------------------------------------
