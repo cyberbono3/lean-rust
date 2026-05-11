@@ -36,11 +36,17 @@
 pub mod decode;
 pub mod encode;
 pub mod error;
+pub mod lists;
 pub mod merkleize;
 
 pub use crate::decode::decode;
 pub use crate::encode::encode;
 pub use crate::error::{DecodeErrorAdapter, SszError};
+pub use crate::lists::{
+    decode_bytes32_list, decode_fixed_element_list, decode_variable_element_list,
+    encode_bytes32_list, encode_fixed_element_list, encode_variable_element_list,
+    BYTES_PER_LENGTH_OFFSET,
+};
 pub use eth_ssz::{Decode, DecodeError, Encode};
 
 /// Computes a 32-byte SSZ hash-tree-root for a typed value.
