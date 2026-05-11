@@ -18,8 +18,8 @@
 //!
 //! `latest_known_votes` and `latest_new_votes` hold [`SignedVote`] values
 //! by-value. Each [`SignedVote`] carries a 4000-byte signature placeholder,
-//! so the maps grow by ≈4 KB per validator. The maps stay empty in this
-//! revision; population begins when attestation processing lands.
+//! so the maps grow by ≈4 KB per validator. Vote-pool churn happens
+//! through [`Store::process_attestation`] and the phase hooks.
 
 use std::collections::HashMap;
 
@@ -180,15 +180,16 @@ impl Store {
         self.blocks.contains_key(root)
     }
 
-    /// Returns the accepted full [`SignedVote`]s by validator. Empty in this
-    /// revision; population begins when attestation processing lands.
+    /// Returns the accepted full [`SignedVote`]s by validator. Populated
+    /// by [`Self::process_attestation`] (on-chain branch) and promoted
+    /// from [`Self::latest_new_votes`] by [`Self::accept_new_votes`].
     #[must_use]
     pub fn latest_known_votes(&self) -> &HashMap<ValidatorIndex, SignedVote> {
         &self.latest_known_votes
     }
 
-    /// Returns pending full [`SignedVote`]s received via gossip but not yet
-    /// promoted into [`Self::latest_known_votes`]. Empty in this revision.
+    /// Returns pending full [`SignedVote`]s received via gossip but not
+    /// yet promoted into [`Self::latest_known_votes`].
     #[must_use]
     pub fn latest_new_votes(&self) -> &HashMap<ValidatorIndex, SignedVote> {
         &self.latest_new_votes
@@ -198,9 +199,9 @@ impl Store {
     ///
     /// On the first insert of `root`, both maps and `block_order` gain the
     /// triple. On any re-insert the call is a no-op (no duplicate in
-    /// `block_order`). Public block-add lands in the next forkchoice issue;
-    /// this method exists so the anchor seed and the `block_order` invariant
-    /// test can share one code path.
+    /// `block_order`). The wider validating wrapper is
+    /// [`Self::track_block`]; this method exists so anchor seeding,
+    /// `track_block`, and the `block_order` invariant test share one path.
     pub(crate) fn insert_block(&mut self, root: Bytes32, block: Block, state: State) {
         if self.blocks.insert(root, block).is_none() {
             self.states.insert(root, state);
@@ -239,7 +240,7 @@ impl Store {
     /// # Errors
     /// - [`ForkchoiceError::TimeOverflow`] when `self.time().get() == u64::MAX`.
     /// - Forwarded from [`Self::accept_new_votes`] /
-    ///   [`Self::update_safe_target`] when their hook bodies land in #18.
+    ///   [`Self::update_safe_target`].
     pub fn tick_interval(&mut self, has_proposal: bool) -> Result<(), ForkchoiceError> {
         let next = self
             .time
@@ -406,15 +407,10 @@ impl Store {
     /// Forwards [`ForkchoiceError`] variants raised by
     /// [`crate::helpers::get_fork_choice_head`].
     pub(crate) fn update_safe_target(&mut self) -> Result<(), ForkchoiceError> {
-        // `(2N+2)/3` in lean-go == `ceil(2N/3)`. Rust spelling: `div_ceil`
-        // over `u64::saturating_mul(2)` — overflow-safe and matches
-        // leanSpec's `-(-N*2 // 3)`.
+        // Supermajority threshold: `ceil(2N/3)` — matches leanSpec's
+        // `-(-N*2 // 3)`. Spelled with `u64::div_ceil` for overflow safety.
         let min_target_score = self.config.num_validators.saturating_mul(2).div_ceil(3);
-        let checkpoints: HashMap<ValidatorIndex, Checkpoint> = self
-            .latest_new_votes
-            .iter()
-            .map(|(v, sv)| (*v, sv.message.head))
-            .collect();
+        let checkpoints = vote_head_checkpoints(&self.latest_new_votes);
         self.safe_target = get_fork_choice_head(
             &self.blocks,
             self.latest_justified.root,
@@ -429,14 +425,9 @@ impl Store {
     ///
     /// The `latest_finalized` carry-snapshot (the OLD-head's
     /// `state.latest_finalized` written AFTER the head switch) is part of
-    /// the block-import flow, not this hook; it lands in a later
-    /// forkchoice issue.
+    /// the block-import flow, not this hook.
     fn update_head(&mut self) -> Result<(), ForkchoiceError> {
-        let checkpoints: HashMap<ValidatorIndex, Checkpoint> = self
-            .latest_known_votes
-            .iter()
-            .map(|(v, sv)| (*v, sv.message.head))
-            .collect();
+        let checkpoints = vote_head_checkpoints(&self.latest_known_votes);
         self.head =
             get_fork_choice_head(&self.blocks, self.latest_justified.root, &checkpoints, 0)?;
         Ok(())
@@ -488,14 +479,15 @@ impl Store {
     /// Returns the current proposal head, after promoting any pending
     /// votes into the known vote set.
     ///
-    /// `_slot` is informational per the leanSpec proposal-hook contract —
-    /// tick state is driven exclusively by the regular tick loop, not by
-    /// the proposal call. Kept for API symmetry with future spec edits.
+    /// Per the leanSpec proposal-hook contract, tick state is driven
+    /// exclusively by the regular tick loop — the proposal call doesn't
+    /// advance the clock, so it doesn't need a slot argument. Future spec
+    /// edits that re-introduce slot-awareness can reinstate the parameter.
     ///
     /// # Errors
     /// Forwards [`ForkchoiceError`] variants raised by
     /// [`Self::accept_new_votes`].
-    pub fn get_proposal_head(&mut self, _slot: Slot) -> Result<Bytes32, ForkchoiceError> {
+    pub fn get_proposal_head(&mut self) -> Result<Bytes32, ForkchoiceError> {
         self.accept_new_votes()?;
         Ok(self.head)
     }
@@ -530,30 +522,6 @@ impl Store {
                 self.lookup_block(cursor, |root| ForkchoiceError::ParentBlockNotFound { root })?;
         }
         Ok(Checkpoint::new(cursor, cursor_block.slot))
-    }
-
-    /// Returns the store's `latest_known_votes` map. Used by
-    /// `produce_block` to scan votes the producer can include.
-    #[must_use]
-    pub(crate) fn latest_known_votes_map(&self) -> &HashMap<ValidatorIndex, SignedVote> {
-        &self.latest_known_votes
-    }
-
-    /// Returns the store's `blocks` map. Used by `produce_block` to
-    /// check `target.root` membership without re-locking through the
-    /// public `block()` accessor (which returns `Option<&Block>` per
-    /// query).
-    #[must_use]
-    pub(crate) fn blocks_map(&self) -> &HashMap<Bytes32, Block> {
-        &self.blocks
-    }
-
-    /// Returns the store's `states` map. Used by `produce_block` to look
-    /// up the head's post-state for use as the `pre_state` of the
-    /// candidate block.
-    #[must_use]
-    pub(crate) fn states_map(&self) -> &HashMap<Bytes32, State> {
-        &self.states
     }
 
     /// Test-only builder that overrides the constructor-seeded time.
@@ -610,6 +578,15 @@ fn evict_if_older(
 ) -> bool {
     matches!(map.get(&validator), Some(prev) if prev.message.slot < newer_than)
         && map.remove(&validator).is_some()
+}
+
+/// Extracts the per-validator `head` checkpoint from a vote map. Shared by
+/// the head-refresh and safe-target hooks; both score by the LMD-GHOST
+/// *head* checkpoint, not the FFG target.
+fn vote_head_checkpoints(
+    votes: &HashMap<ValidatorIndex, SignedVote>,
+) -> HashMap<ValidatorIndex, Checkpoint> {
+    votes.iter().map(|(v, sv)| (*v, sv.message.head)).collect()
 }
 
 #[cfg(test)]
@@ -891,18 +868,15 @@ mod attestation_tests {
     use super::*;
     use protocol::{Checkpoint, Slot, ValidatorIndex};
 
-    use crate::test_fixtures::{linear_chain, signed_vote, signed_vote_at};
+    use crate::test_fixtures::{pinned_chain, signed_vote, signed_vote_at};
 
     /// Builds a 4-block linear chain (genesis + 3 children) with 4
     /// validators, pins `latest_justified` at the genesis root, and
     /// positions the clock so `current_vote_slot() == 3` (i.e. votes up to
     /// `Slot::new(4)` are admissible).
     fn store_with_chain_at_slot_3() -> (Store, Vec<Bytes32>) {
-        let (mut store, roots, _) = linear_chain(4, 4);
-        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
         // 3 * INTERVALS_PER_SLOT positions the clock at the start of slot 3.
-        store = store.with_time_for_test(Time::new(3 * INTERVALS_PER_SLOT));
-        (store, roots)
+        pinned_chain(4, 4, Time::new(3 * INTERVALS_PER_SLOT))
     }
 
     /// Constructs a vote whose source / target / head all point at
@@ -1198,14 +1172,12 @@ mod update_safe_target_tests {
     use super::*;
     use protocol::{Checkpoint, Slot, ValidatorIndex};
 
-    use crate::test_fixtures::{linear_chain, signed_vote, signed_vote_at};
+    use crate::test_fixtures::{pinned_chain, signed_vote, signed_vote_at};
 
-    /// Builds a linear chain pinned to genesis-justified, returning the
-    /// store and per-slot roots.
+    /// Builds a linear chain pinned to genesis-justified at the genesis
+    /// clock value.
     fn chain_pinned_to_genesis(n_blocks: u64, num_validators: u64) -> (Store, Vec<Bytes32>) {
-        let (mut store, roots, _) = linear_chain(n_blocks, num_validators);
-        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
-        (store, roots)
+        pinned_chain(n_blocks, num_validators, Time::ZERO)
     }
 
     fn vote_for(validator: u64, roots: &[Bytes32], head_idx: usize) -> SignedVote {
@@ -1329,7 +1301,7 @@ mod store_extensions_tests {
     use super::*;
     use protocol::{BlockBody, Slot, ValidatorIndex};
 
-    use crate::test_fixtures::{genesis_store, linear_chain};
+    use crate::test_fixtures::{genesis_store, pinned_chain, signed_vote_at};
 
     // -- track_block ----------------------------------------------------
 
@@ -1398,23 +1370,19 @@ mod store_extensions_tests {
 
     #[test]
     fn get_proposal_head_returns_current_head_and_promotes_pending() {
-        let (mut store, roots, _) = linear_chain(3, 4);
-        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+        let (mut store, roots) = pinned_chain(3, 4, Time::ZERO);
         // Seed pending votes that would shift head to roots[2] once promoted.
+        let source = Checkpoint::new(roots[0], Slot::ZERO);
         for v in 0..4 {
-            let cp = Checkpoint::new(roots[2], Slot::new(2));
-            store.insert_new_vote_for_test(SignedVote {
-                validator_id: ValidatorIndex::new(v),
-                message: protocol::Vote {
-                    slot: Slot::new(2),
-                    head: cp,
-                    target: cp,
-                    source: Checkpoint::new(roots[0], Slot::ZERO),
-                },
-                signature: types::Bytes4000::new([0; 4000]),
-            });
+            store.insert_new_vote_for_test(signed_vote_at(
+                ValidatorIndex::new(v),
+                roots[2],
+                Slot::new(2),
+                Slot::new(2),
+                source,
+            ));
         }
-        let head = store.get_proposal_head(Slot::new(3)).unwrap();
+        let head = store.get_proposal_head().unwrap();
         assert_eq!(head, roots[2]);
         // accept_new_votes promoted the pending set.
         assert!(store.latest_new_votes().is_empty());
@@ -1436,21 +1404,17 @@ mod store_extensions_tests {
         // Build a 5-block chain. Move head to roots[4] (slot 4) while
         // safe_target stays at roots[0] (slot 0). Target must walk 3 hops
         // → settle at roots[1] (slot 1).
-        let (mut store, roots, _) = linear_chain(5, 4);
-        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+        let (mut store, roots) = pinned_chain(5, 4, Time::ZERO);
         // Seed votes so update_head moves the head to roots[4].
+        let source = Checkpoint::new(roots[0], Slot::ZERO);
         for v in 0..4 {
-            let cp = Checkpoint::new(roots[4], Slot::new(4));
-            store.insert_new_vote_for_test(SignedVote {
-                validator_id: ValidatorIndex::new(v),
-                message: protocol::Vote {
-                    slot: Slot::new(4),
-                    head: cp,
-                    target: cp,
-                    source: Checkpoint::new(roots[0], Slot::ZERO),
-                },
-                signature: types::Bytes4000::new([0; 4000]),
-            });
+            store.insert_new_vote_for_test(signed_vote_at(
+                ValidatorIndex::new(v),
+                roots[4],
+                Slot::new(4),
+                Slot::new(4),
+                source,
+            ));
         }
         store.accept_new_votes().unwrap();
         assert_eq!(store.head(), roots[4]);
@@ -1466,20 +1430,16 @@ mod store_extensions_tests {
         // at roots[0] (slot 0). After one hop the cursor is at roots[1]
         // (slot 1); after two hops at roots[0] (slot 0) == safe_target.
         // The walk stops there (loop breaks on `<=`), not at hop count 3.
-        let (mut store, roots, _) = linear_chain(3, 4);
-        store.set_latest_justified_for_test(Checkpoint::new(roots[0], Slot::ZERO));
+        let (mut store, roots) = pinned_chain(3, 4, Time::ZERO);
+        let source = Checkpoint::new(roots[0], Slot::ZERO);
         for v in 0..4 {
-            let cp = Checkpoint::new(roots[2], Slot::new(2));
-            store.insert_new_vote_for_test(SignedVote {
-                validator_id: ValidatorIndex::new(v),
-                message: protocol::Vote {
-                    slot: Slot::new(2),
-                    head: cp,
-                    target: cp,
-                    source: Checkpoint::new(roots[0], Slot::ZERO),
-                },
-                signature: types::Bytes4000::new([0; 4000]),
-            });
+            store.insert_new_vote_for_test(signed_vote_at(
+                ValidatorIndex::new(v),
+                roots[2],
+                Slot::new(2),
+                Slot::new(2),
+                source,
+            ));
         }
         store.accept_new_votes().unwrap();
         let target = store.get_vote_target().unwrap();

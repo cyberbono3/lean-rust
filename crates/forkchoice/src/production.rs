@@ -102,10 +102,9 @@ impl Store {
             return Err(ForkchoiceError::UnauthorizedProposer { validator, slot });
         }
 
-        let head_root = self.get_proposal_head(slot)?;
+        let head_root = self.get_proposal_head()?;
         let head_state = self
-            .states_map()
-            .get(&head_root)
+            .state(&head_root)
             .cloned()
             .ok_or(ForkchoiceError::HeadStateNotFound { root: head_root })?;
 
@@ -185,10 +184,9 @@ impl Store {
         &mut self,
         slot: Slot,
     ) -> Result<ProducedVote, ForkchoiceError> {
-        let head_root = self.get_proposal_head(slot)?;
+        let head_root = self.get_proposal_head()?;
         let head_slot = self
-            .blocks_map()
-            .get(&head_root)
+            .block(&head_root)
             .ok_or(ForkchoiceError::UnknownHeadBlock { root: head_root })?
             .slot;
         let target = self.get_vote_target()?;
@@ -226,9 +224,9 @@ impl Store {
         if cap == 0 {
             return Vec::new();
         }
-        self.latest_known_votes_map()
+        self.latest_known_votes()
             .values()
-            .filter(|sv| self.blocks_map().contains_key(&sv.message.target.root))
+            .filter(|sv| self.has_block(&sv.message.target.root))
             .filter(|sv| sv.message.source == post_state.latest_justified)
             .filter(|sv| !already_included.contains(sv))
             .take(cap)
