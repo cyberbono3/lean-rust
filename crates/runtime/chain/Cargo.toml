@@ -5,9 +5,29 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Chain + sync + duties services (consensus-coupled). Implementation lands in a later issue (Tier 6)."
+description   = "Chain service: single engine writer + tick driver (Tier 6)."
 
 [lints]
 workspace = true
 
 [dependencies]
+runtime-core = { path = "../core" }
+engine       = { path = "../../engine" }
+storage      = { path = "../../storage" }
+protocol     = { path = "../../protocol" }
+config       = { path = "../../config" }
+types        = { path = "../../types" }
+tokio        = { workspace = true }
+tokio-util   = { workspace = true }
+async-trait  = { workspace = true }
+tracing      = { workspace = true }
+parking_lot  = { workspace = true }
+thiserror    = { workspace = true }
+anyhow       = { workspace = true }
+
+[dev-dependencies]
+engine            = { path = "../../engine", features = ["test-fixtures"] }
+forkchoice        = { path = "../../forkchoice" }
+ssz               = { path = "../../ssz" }
+static_assertions = { workspace = true }
+tokio             = { workspace = true, features = ["test-util"] }
