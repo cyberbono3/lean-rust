@@ -1,10 +1,10 @@
 //! libp2p protocol-ID constants.
 //!
-//! Format follows leanSpec networking.md:
+//! Format follows the consensus networking spec:
 //! `/leanconsensus/req/<name>/<version>/<encoding>`. The exact strings
-//! below are part of the cross-client wire contract — ream advertises
-//! them verbatim at libp2p Identify. Modifying any byte breaks
-//! interoperability.
+//! below are part of the cross-client wire contract — every conformant
+//! client advertises them verbatim at libp2p Identify. Modifying any
+//! byte breaks interoperability.
 
 use core::fmt;
 
@@ -32,12 +32,6 @@ impl AsRef<str> for ProtocolId {
 impl fmt::Display for ProtocolId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.0)
-    }
-}
-
-impl PartialEq<str> for ProtocolId {
-    fn eq(&self, other: &str) -> bool {
-        self.0 == other
     }
 }
 

@@ -1,7 +1,6 @@
 //! Deterministic 20-byte gossipsub message-id primitive.
 //!
-//! Mirrors leanSpec
-//! `subspecs/networking/gossipsub.py::GossipsubMessage.id`. The id is the
+//! Implements the consensus gossipsub message-id spec. The id is the
 //! first 20 bytes of SHA-256 over the byte layout:
 //!
 //! ```text
@@ -33,46 +32,35 @@ pub const MESSAGE_DOMAIN_INVALID_SNAPPY: [u8; DOMAIN_LEN] = [0, 0, 0, 0];
 /// supplied decompressor returns `Ok(_)`.
 pub const MESSAGE_DOMAIN_VALID_SNAPPY: [u8; DOMAIN_LEN] = [1, 0, 0, 0];
 
-/// Builds the exact byte sequence hashed for a gossipsub message-id:
-///
-/// `domain (4B) || topic_len (8B LE u64) || topic || payload`.
-///
-/// Both the byte ordering and the 20-byte truncation done by
-/// [`compute_gossipsub_message_id`] are mandated by the spec — changing
-/// either splits the gossipsub network.
-#[must_use]
-pub fn build_message_id_hash_input(
-    domain: [u8; DOMAIN_LEN],
-    topic: &[u8],
-    payload: &[u8],
-) -> Vec<u8> {
-    let topic_len = u64::try_from(topic.len()).unwrap_or(u64::MAX);
-    let topic_len_le = topic_len.to_le_bytes();
-    [domain.as_slice(), &topic_len_le, topic, payload].concat()
-}
-
 /// Computes the deterministic 20-byte gossipsub message-id for the given
 /// `(domain, topic, payload)` triple.
 ///
-/// The result is the first 20 bytes of SHA-256 over the layout produced
-/// by [`build_message_id_hash_input`]. Streams the input segments into
-/// the hasher — no intermediate `Vec`.
+/// The result is the first 20 bytes of SHA-256 over the layout
+/// `domain (4B) || topic_len (8B LE u64) || topic || payload`. Input
+/// segments stream into the hasher — no intermediate `Vec`.
 #[must_use]
 pub fn compute_gossipsub_message_id(
     domain: [u8; DOMAIN_LEN],
     topic: &[u8],
     payload: &[u8],
 ) -> [u8; MESSAGE_ID_LEN] {
-    let topic_len = u64::try_from(topic.len()).unwrap_or(u64::MAX);
     let digest = Sha256::new()
         .chain_update(domain)
-        .chain_update(topic_len.to_le_bytes())
+        .chain_update(topic_len_le_bytes(topic))
         .chain_update(topic)
         .chain_update(payload)
         .finalize();
     let mut out = [0_u8; MESSAGE_ID_LEN];
     out.copy_from_slice(&digest[..MESSAGE_ID_LEN]);
     out
+}
+
+/// Encodes the topic length as the 8-byte little-endian uint64 required by
+/// the message-id layout. Saturates at [`u64::MAX`] on theoretical platforms
+/// where `usize` is wider than `u64` — never reached in practice (gossipsub
+/// topics are short strings).
+fn topic_len_le_bytes(topic: &[u8]) -> [u8; 8] {
+    u64::try_from(topic.len()).unwrap_or(u64::MAX).to_le_bytes()
 }
 
 #[cfg(test)]
@@ -86,6 +74,23 @@ mod tests {
     use super::*;
     use serde::Deserialize;
     use static_assertions::const_assert_eq;
+
+    /// Materializes the same layout `compute_gossipsub_message_id` streams
+    /// into the hasher. Test-only — production callers never need the
+    /// intermediate buffer.
+    fn build_message_id_hash_input(
+        domain: [u8; DOMAIN_LEN],
+        topic: &[u8],
+        payload: &[u8],
+    ) -> Vec<u8> {
+        [
+            domain.as_slice(),
+            &topic_len_le_bytes(topic),
+            topic,
+            payload,
+        ]
+        .concat()
+    }
 
     // -- compile-time witnesses --------------------------------------------
 
@@ -171,9 +176,9 @@ mod tests {
     }
 
     impl Case {
-        /// Resolves the payload bytes the way lean-go's
-        /// `ResolveGossipsubMessageDomainAndData` would — picks
-        /// `decompressed_hex` when snappy succeeded, else `raw_data_hex`.
+        /// Resolves the payload by matching the snappy decompression
+        /// outcome — picks `decompressed_hex` when snappy succeeded,
+        /// else `raw_data_hex`.
         fn resolve_payload(&self) -> Vec<u8> {
             let hex_payload = if self.input.snappy_mode == "success" {
                 self.input
@@ -197,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_lean_go_gossipsub_fixture() {
+    fn replay_gossipsub_fixture() {
         let fixture: Fixture = serde_json::from_str(FIXTURE).expect("parse fixture");
         assert!(!fixture.cases.is_empty());
 

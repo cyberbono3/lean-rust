@@ -28,6 +28,19 @@ use crate::error::NetworkingError;
 const CHECKPOINT_LEN: usize = 40;
 const STATUS_SSZ_LEN: usize = 2 * CHECKPOINT_LEN;
 
+/// Validates that `items.len() <= MAX_REQUEST_BLOCKS`, surfacing
+/// [`NetworkingError::ListTooLarge`] otherwise.
+fn enforce_list_cap<T>(items: Vec<T>, kind: &'static str) -> Result<Vec<T>, NetworkingError> {
+    if items.len() > MAX_REQUEST_BLOCKS {
+        return Err(NetworkingError::ListTooLarge {
+            kind,
+            len: items.len(),
+            max: MAX_REQUEST_BLOCKS,
+        });
+    }
+    Ok(items)
+}
+
 // =============================================================================
 // Status
 // =============================================================================
@@ -112,19 +125,13 @@ impl BlocksByRootRequest {
     /// Constructs a validated request from any iterable of roots.
     ///
     /// # Errors
-    /// [`NetworkingError::RequestTooLarge`] when the iterable yields more
+    /// [`NetworkingError::ListTooLarge`] when the iterable yields more
     /// than [`MAX_REQUEST_BLOCKS`] roots.
     pub fn new<I>(roots: I) -> Result<Self, NetworkingError>
     where
         I: IntoIterator<Item = Bytes32>,
     {
-        let roots: Vec<Bytes32> = roots.into_iter().collect();
-        if roots.len() > MAX_REQUEST_BLOCKS {
-            return Err(NetworkingError::RequestTooLarge {
-                len: roots.len(),
-                max: MAX_REQUEST_BLOCKS,
-            });
-        }
+        let roots = enforce_list_cap(roots.into_iter().collect(), "blocks_by_root request")?;
         Ok(Self { roots })
     }
 
@@ -192,19 +199,13 @@ impl BlocksByRootResponse {
     /// Constructs a validated response from any iterable of signed blocks.
     ///
     /// # Errors
-    /// [`NetworkingError::ResponseTooLarge`] when the iterable yields more
+    /// [`NetworkingError::ListTooLarge`] when the iterable yields more
     /// than [`MAX_REQUEST_BLOCKS`] blocks.
     pub fn new<I>(blocks: I) -> Result<Self, NetworkingError>
     where
         I: IntoIterator<Item = SignedBlock>,
     {
-        let blocks: Vec<SignedBlock> = blocks.into_iter().collect();
-        if blocks.len() > MAX_REQUEST_BLOCKS {
-            return Err(NetworkingError::ResponseTooLarge {
-                len: blocks.len(),
-                max: MAX_REQUEST_BLOCKS,
-            });
-        }
+        let blocks = enforce_list_cap(blocks.into_iter().collect(), "blocks_by_root response")?;
         Ok(Self { blocks })
     }
 
@@ -281,7 +282,7 @@ mod tests {
         assert_eq!(<Status as Encode>::ssz_fixed_len(), STATUS_SSZ_LEN);
     }
 
-    // -- Status -------------------------------------------------------------
+    // -- helpers ------------------------------------------------------------
 
     fn sample_status() -> Status {
         Status {
@@ -290,20 +291,36 @@ mod tests {
         }
     }
 
-    #[test]
-    fn status_round_trips() {
-        let s = sample_status();
-        let bytes = encode(&s);
-        assert_eq!(bytes.len(), 80);
-        let back: Status = decode(&bytes).unwrap();
-        assert_eq!(back, s);
+    fn sample_signed_block(seed: u8) -> SignedBlock {
+        SignedBlock {
+            message: Block {
+                slot: Slot::new(u64::from(seed)),
+                proposer_index: ValidatorIndex::new(u64::from(seed)),
+                parent_root: Bytes32::new([seed; 32]),
+                state_root: Bytes32::new([seed.wrapping_add(1); 32]),
+                body: BlockBody::default(),
+            },
+            signature: Bytes4000::new([seed; 4000]),
+        }
     }
 
+    fn assert_round_trips<T>(value: &T, expected_len: Option<usize>)
+    where
+        T: Encode + Decode + PartialEq + std::fmt::Debug,
+    {
+        let bytes = encode(value);
+        if let Some(len) = expected_len {
+            assert_eq!(bytes.len(), len, "encoded length mismatch");
+        }
+        assert_eq!(&decode::<T>(&bytes).unwrap(), value);
+    }
+
+    // -- Status -------------------------------------------------------------
+
     #[test]
-    fn status_default_round_trips() {
-        let s = Status::default();
-        let back: Status = decode(&encode(&s)).unwrap();
-        assert_eq!(back, s);
+    fn status_round_trips() {
+        assert_round_trips(&sample_status(), Some(80));
+        assert_round_trips(&Status::default(), Some(80));
     }
 
     #[test]
@@ -321,50 +338,37 @@ mod tests {
     // -- BlocksByRootRequest ------------------------------------------------
 
     #[test]
-    fn request_accepts_under_cap() {
-        let req = BlocksByRootRequest::new([Bytes32::new([1; 32]); 5]).unwrap();
-        assert_eq!(req.len(), 5);
-        assert!(!req.is_empty());
-    }
+    fn request_construction_respects_cap() {
+        // under, at, and over the cap.
+        let under = BlocksByRootRequest::new([Bytes32::new([1; 32]); 5]).unwrap();
+        assert_eq!(under.len(), 5);
+        assert!(!under.is_empty());
 
-    #[test]
-    fn request_accepts_at_cap() {
-        let req =
+        let at_cap =
             BlocksByRootRequest::new(std::iter::repeat(Bytes32::zero()).take(MAX_REQUEST_BLOCKS))
                 .unwrap();
-        assert_eq!(req.len(), MAX_REQUEST_BLOCKS);
-    }
+        assert_eq!(at_cap.len(), MAX_REQUEST_BLOCKS);
 
-    #[test]
-    fn request_rejects_over_cap() {
         let err = BlocksByRootRequest::new(
             std::iter::repeat(Bytes32::zero()).take(MAX_REQUEST_BLOCKS + 1),
         )
         .unwrap_err();
         assert!(matches!(
             err,
-            NetworkingError::RequestTooLarge { len, max }
-                if len == MAX_REQUEST_BLOCKS + 1 && max == MAX_REQUEST_BLOCKS
+            NetworkingError::ListTooLarge { kind, len, max }
+                if kind == "blocks_by_root request"
+                    && len == MAX_REQUEST_BLOCKS + 1
+                    && max == MAX_REQUEST_BLOCKS
         ));
     }
 
     #[test]
     fn request_round_trips() {
-        let req = BlocksByRootRequest::new([Bytes32::new([0xab; 32]); 3]).unwrap();
-        let bytes = encode(&req);
-        assert_eq!(bytes.len(), 96);
-        let back: BlocksByRootRequest = decode(&bytes).unwrap();
-        assert_eq!(back, req);
-    }
-
-    #[test]
-    fn request_default_is_empty_and_valid() {
-        let req = BlocksByRootRequest::default();
-        assert!(req.is_empty());
-        let bytes = encode(&req);
-        assert!(bytes.is_empty());
-        let back: BlocksByRootRequest = decode(&bytes).unwrap();
-        assert_eq!(back, req);
+        assert_round_trips(
+            &BlocksByRootRequest::new([Bytes32::new([0xab; 32]); 3]).unwrap(),
+            Some(96),
+        );
+        assert_round_trips(&BlocksByRootRequest::default(), Some(0));
     }
 
     #[test]
@@ -385,44 +389,17 @@ mod tests {
 
     // -- BlocksByRootResponse -----------------------------------------------
 
-    fn sample_signed_block(seed: u8) -> SignedBlock {
-        SignedBlock {
-            message: Block {
-                slot: Slot::new(u64::from(seed)),
-                proposer_index: ValidatorIndex::new(u64::from(seed)),
-                parent_root: Bytes32::new([seed; 32]),
-                state_root: Bytes32::new([seed.wrapping_add(1); 32]),
-                body: BlockBody::default(),
-            },
-            signature: Bytes4000::new([seed; 4000]),
-        }
-    }
-
     #[test]
-    fn response_round_trips_one_block() {
-        let resp = BlocksByRootResponse::new([sample_signed_block(1)]).unwrap();
-        let bytes = encode(&resp);
-        let back: BlocksByRootResponse = decode(&bytes).unwrap();
-        assert_eq!(back, resp);
-    }
-
-    #[test]
-    fn response_round_trips_multi_block() {
-        let resp = BlocksByRootResponse::new((1_u8..=3).map(sample_signed_block)).unwrap();
-        let bytes = encode(&resp);
-        let back: BlocksByRootResponse = decode(&bytes).unwrap();
-        assert_eq!(back, resp);
-        assert_eq!(back.len(), 3);
-    }
-
-    #[test]
-    fn response_default_is_empty_and_valid() {
-        let resp = BlocksByRootResponse::default();
-        assert!(resp.is_empty());
-        let bytes = encode(&resp);
-        assert!(bytes.is_empty());
-        let back: BlocksByRootResponse = decode(&bytes).unwrap();
-        assert_eq!(back, resp);
+    fn response_round_trips() {
+        assert_round_trips(
+            &BlocksByRootResponse::new([sample_signed_block(1)]).unwrap(),
+            None,
+        );
+        assert_round_trips(
+            &BlocksByRootResponse::new((1_u8..=3).map(sample_signed_block)).unwrap(),
+            None,
+        );
+        assert_round_trips(&BlocksByRootResponse::default(), Some(0));
     }
 
     #[test]
@@ -431,10 +408,10 @@ mod tests {
         let err = BlocksByRootResponse::new(blocks).unwrap_err();
         assert!(matches!(
             err,
-            NetworkingError::ResponseTooLarge {
-                len,
-                max,
-            } if len == MAX_REQUEST_BLOCKS + 1 && max == MAX_REQUEST_BLOCKS
+            NetworkingError::ListTooLarge { kind, len, max }
+                if kind == "blocks_by_root response"
+                    && len == MAX_REQUEST_BLOCKS + 1
+                    && max == MAX_REQUEST_BLOCKS
         ));
     }
 
