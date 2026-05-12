@@ -1,47 +1,53 @@
 //! Lifecycle error type emitted by [`Node`](crate::Node).
+//!
+//! Each variant preserves the slot label of the offending service so
+//! callers can route on it without unpacking the service-defined error
+//! (which is type-erased through [`anyhow::Error`]).
 
 use thiserror::Error;
 
-/// Errors raised by [`Node`](crate::Node) lifecycle transitions.
+/// A single service's failure: slot label paired with the service-defined
+/// error.
 ///
-/// Each failure carries the slot label (`"chain"`, `"p2p"`, …) so callers
-/// can match on which service in the composition root misbehaved without
-/// type-erasing the underlying service-defined error.
+/// Used as the inner payload for [`NodeError::StartFailed`],
+/// [`NodeError::StopFailed`], and the per-service items in
+/// [`NodeError::ServicesUnhealthy`]. Implements [`std::error::Error`] via
+/// `#[derive(Error)]` so it participates in `?` chains and
+/// [`std::error::Error::source`] walks.
+#[derive(Debug, Error)]
+#[error("service '{service}': {source}")]
+pub struct ServiceFailure {
+    /// Slot label of the offending service (`"chain"`, `"p2p"`, …).
+    pub service: &'static str,
+    /// The underlying service-defined error.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+/// Errors raised by [`Node`](crate::Node) lifecycle transitions.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum NodeError {
     /// A service's `start` method returned an error during `Node::start`.
     /// Already-started services are unwound before this error is returned.
-    #[error("service '{service}' failed to start: {source}")]
-    Start {
-        /// Slot label of the offending service.
-        service: &'static str,
-        /// The underlying service-defined error.
-        #[source]
-        source: anyhow::Error,
-    },
+    #[error("failed to start: {0}")]
+    StartFailed(#[source] ServiceFailure),
 
     /// A service's `stop` method returned an error during `Node::stop`.
     /// Best-effort: subsequent services in the reverse-stop sequence are
     /// still attempted; only the first failure surfaces here.
-    #[error("service '{service}' failed to stop: {source}")]
-    Stop {
-        /// Slot label of the offending service.
-        service: &'static str,
-        /// The underlying service-defined error.
-        #[source]
-        source: anyhow::Error,
-    },
+    #[error("failed to stop: {0}")]
+    StopFailed(#[source] ServiceFailure),
 
     /// One or more services reported unhealthy in `Node::status`.
-    #[error("node status reports {count} unhealthy service(s): {summary}")]
-    Status {
-        /// Number of unhealthy services.
-        count: usize,
-        /// Comma-joined list of unhealthy slot labels (for `Display`).
-        summary: String,
-        /// Per-service errors with their slot labels, in startup order.
-        errors: Vec<(&'static str, anyhow::Error)>,
+    #[error(
+        "node status reports {} unhealthy service(s): {}",
+        errors.len(),
+        errors.iter().map(|f| f.service).collect::<Vec<_>>().join(", ")
+    )]
+    ServicesUnhealthy {
+        /// Per-service failures, in startup order.
+        errors: Vec<ServiceFailure>,
     },
 
     /// `Node::start` was called on an already-running node.

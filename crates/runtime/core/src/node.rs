@@ -14,12 +14,6 @@ use crate::service::Service;
 /// One started service, paired with its slot label for error reporting.
 pub(crate) type NamedService = (&'static str, Arc<dyn Service>);
 
-/// Lifecycle state: `None` while idle, `Some(vec)` after `start` succeeds.
-/// Replacing this single cell atomically swaps "not started" for "started
-/// with these N services" and back, with no derivable inconsistency
-/// between separate flags.
-pub(crate) type LifecycleState = Mutex<Option<Vec<NamedService>>>;
-
 /// Composition root for the runtime shell.
 ///
 /// Construct via [`Node::new`] and wire services through the `with_*`
@@ -37,7 +31,11 @@ pub struct Node {
     pub(crate) duties: Option<Arc<dyn Service>>,
     pub(crate) http: Option<Arc<dyn Service>>,
     pub(crate) metrics: Option<Arc<dyn Service>>,
-    pub(crate) state: LifecycleState,
+    /// `None` while idle, `Some(vec)` after `start` succeeds. Replacing
+    /// this single cell atomically swaps "not started" for "started with
+    /// these N services" and back, with no derivable inconsistency
+    /// between separate flags.
+    pub(crate) state: Mutex<Option<Vec<NamedService>>>,
 }
 
 impl Node {
@@ -120,11 +118,11 @@ pub(crate) const SLOT_ORDER: [(&str, SlotAccessor); 6] = [
 
 impl Node {
     /// Iterates the wired slots in start order, yielding
-    /// `(slot_label, cloned_arc)` for each populated slot.
-    pub(crate) fn ordered_slots(&self) -> Vec<NamedService> {
+    /// `(slot_label, cloned_arc)` for each populated slot. Callers
+    /// materialize a `Vec` only when they need length-twice access.
+    pub(crate) fn ordered_slots(&self) -> impl Iterator<Item = NamedService> + '_ {
         SLOT_ORDER
             .iter()
             .filter_map(|(name, accessor)| accessor(self).map(|svc| (*name, Arc::clone(svc))))
-            .collect()
     }
 }

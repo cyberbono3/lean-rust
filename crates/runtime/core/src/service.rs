@@ -20,6 +20,36 @@ use tokio_util::sync::CancellationToken;
 /// should observe the token and short-circuit themselves; the node
 /// additionally wraps each call in [`tokio::time::timeout`] so a
 /// misbehaving service cannot block shutdown indefinitely.
+///
+/// # Example
+/// ```
+/// use std::sync::Arc;
+/// use anyhow::Result;
+/// use async_trait::async_trait;
+/// use runtime_core::Service;
+/// use tokio_util::sync::CancellationToken;
+///
+/// struct Noop;
+///
+/// #[async_trait]
+/// impl Service for Noop {
+///     fn name(&self) -> &'static str {
+///         "noop"
+///     }
+///     async fn start(&self) -> Result<()> {
+///         Ok(())
+///     }
+///     async fn stop(&self, _cancel: CancellationToken) -> Result<()> {
+///         Ok(())
+///     }
+///     async fn status(&self) -> Result<()> {
+///         Ok(())
+///     }
+/// }
+///
+/// // Witness: the trait is object-safe.
+/// let _: Arc<dyn Service> = Arc::new(Noop);
+/// ```
 #[async_trait]
 pub trait Service: Send + Sync + 'static {
     /// Service-chosen identifier used for log spans and structured fields.

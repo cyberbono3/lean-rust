@@ -15,7 +15,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use runtime_core::{Node, NodeConfig, NodeError, Service};
+use runtime_core::{Node, NodeConfig, NodeError, Service, ServiceFailure};
 use static_assertions::{assert_impl_all, assert_obj_safe};
 use tokio_util::sync::CancellationToken;
 
@@ -176,7 +176,7 @@ async fn start_failure_unwinds() {
     let err = node.start().await.unwrap_err();
 
     assert!(
-        matches!(&err, NodeError::Start { service, source }
+        matches!(&err, NodeError::StartFailed(ServiceFailure { service, source })
             if *service == "p2p" && source.to_string() == "boom"),
         "got {err:?}"
     );
@@ -238,8 +238,8 @@ async fn stop_continues_past_individual_failures() {
     let err = node.stop().await.unwrap_err();
 
     assert!(
-        matches!(&err, NodeError::Stop { service, source }
-            if *service == "sync" && source.to_string() == "sync broke" || *service == "p2p" && source.to_string() == "p2p broke"),
+        matches!(&err, NodeError::StopFailed(ServiceFailure { service, source })
+            if *service == "p2p" && source.to_string() == "p2p broke"),
         "got {err:?}",
     );
     // All three stops attempted in reverse order even though p2p errored.
@@ -267,19 +267,87 @@ async fn status_aggregates_named_errors() {
 
     let err = node.status().await.unwrap_err();
 
-    let NodeError::Status {
-        count,
-        summary,
-        errors,
-    } = err
-    else {
-        panic!("expected NodeError::Status, got {err:?}");
+    let NodeError::ServicesUnhealthy { errors } = err else {
+        panic!("expected NodeError::ServicesUnhealthy, got {err:?}");
     };
-    assert_eq!(count, 1);
-    assert_eq!(summary, "p2p");
     assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].0, "p2p");
-    assert_eq!(errors[0].1.to_string(), "not ready");
+    assert_eq!(errors[0].service, "p2p");
+    assert_eq!(errors[0].source.to_string(), "not ready");
+    // Display derives count + summary from `errors`.
+    assert_eq!(
+        NodeError::ServicesUnhealthy { errors }.to_string(),
+        "node status reports 1 unhealthy service(s): p2p",
+    );
+}
+
+#[tokio::test]
+async fn status_returns_ok_when_all_healthy() {
+    // Pins the empty-Vec early return: a regression that inverted the
+    // `if errors.is_empty()` check would slip past every other test.
+    let events = events();
+    let node = six_slot_node(&events);
+    node.start().await.unwrap();
+    node.status().await.unwrap();
+}
+
+#[tokio::test]
+async fn status_aggregates_in_slot_order() {
+    // Two unhealthy services on non-adjacent slots: verify count + ordering
+    // match `SLOT_ORDER` regardless of which positions failed.
+    let events = events();
+    let node = Node::new(NodeConfig::default())
+        .with_chain(Arc::new(
+            FakeService::new("chain", &events).with_status_err("a"),
+        ))
+        .with_p2p(Arc::new(FakeService::new("p2p", &events)))
+        .with_sync(Arc::new(
+            FakeService::new("sync", &events).with_status_err("c"),
+        ));
+
+    let NodeError::ServicesUnhealthy { errors } = node.status().await.unwrap_err() else {
+        panic!("expected NodeError::ServicesUnhealthy");
+    };
+    assert_eq!(errors.len(), 2);
+    assert_eq!(errors[0].service, "chain");
+    assert_eq!(errors[0].source.to_string(), "a");
+    assert_eq!(errors[1].service, "sync");
+    assert_eq!(errors[1].source.to_string(), "c");
+}
+
+#[tokio::test]
+async fn run_propagates_start_failure_without_calling_stop() {
+    let events = events();
+    let node = Node::new(NodeConfig::default()).with_chain(Arc::new(
+        FakeService::new("chain", &events).with_start_err("nope"),
+    ));
+    let shutdown = CancellationToken::new();
+
+    let err = node.run(shutdown).await.unwrap_err();
+    assert!(
+        matches!(&err, NodeError::StartFailed(ServiceFailure { service, source })
+            if *service == "chain" && source.to_string() == "nope"),
+        "got {err:?}",
+    );
+    // No stop events: chain never started successfully, so `run` never
+    // reaches its `.cancelled().await` and never invokes `stop`.
+    assert_eq!(snapshot(&events), vec!["start:chain"]);
+}
+
+#[tokio::test]
+async fn node_can_restart_after_stop() {
+    let events = events();
+    let node =
+        Node::new(NodeConfig::default()).with_chain(Arc::new(FakeService::new("chain", &events)));
+
+    node.start().await.unwrap();
+    node.stop().await.unwrap();
+    node.start().await.unwrap();
+    node.stop().await.unwrap();
+
+    assert_eq!(
+        snapshot(&events),
+        vec!["start:chain", "stop:chain", "start:chain", "stop:chain"]
+    );
 }
 
 #[tokio::test]
@@ -348,7 +416,7 @@ async fn run_respects_shutdown_timeout() {
 
     let err = driver.await.unwrap().unwrap_err();
     assert!(
-        matches!(&err, NodeError::Stop { service, source }
+        matches!(&err, NodeError::StopFailed(ServiceFailure { service, source })
             if *service == "chain" && source.to_string().contains("deadline")),
         "got {err:?}",
     );

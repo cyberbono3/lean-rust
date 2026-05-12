@@ -23,6 +23,6 @@ mod node;
 mod service;
 
 pub use config::{NodeConfig, DEFAULT_SHUTDOWN_TIMEOUT};
-pub use error::NodeError;
+pub use error::{NodeError, ServiceFailure};
 pub use node::Node;
 pub use service::Service;
