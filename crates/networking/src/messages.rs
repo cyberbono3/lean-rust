@@ -341,13 +341,11 @@ mod tests {
             std::iter::repeat(Bytes32::zero()).take(MAX_REQUEST_BLOCKS + 1),
         )
         .unwrap_err();
-        assert_eq!(
+        assert!(matches!(
             err,
-            NetworkingError::RequestTooLarge {
-                len: MAX_REQUEST_BLOCKS + 1,
-                max: MAX_REQUEST_BLOCKS,
-            }
-        );
+            NetworkingError::RequestTooLarge { len, max }
+                if len == MAX_REQUEST_BLOCKS + 1 && max == MAX_REQUEST_BLOCKS
+        ));
     }
 
     #[test]
