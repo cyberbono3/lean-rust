@@ -5,16 +5,8 @@
 //! on `start` that advances the forkchoice clock every
 //! `config::SECONDS_PER_INTERVAL`.
 //!
-//! # Storage / engine divergence
-//!
-//! `import_block` persists `(block, state, head)` synchronously inside the
-//! same call that accepted the block. If a `save_*` call fails after the
-//! engine has accepted the block, the engine in-memory state is ahead of
-//! storage: this service surfaces [`ChainError::Storage`] and the
-//! containing runtime cascade-stops. Replay-on-restart — re-feeding any
-//! undrained blocks through the engine from the last persisted head — is
-//! tracked separately (see issue #36); it is intentionally out of scope
-//! here.
+//! See [`Service::import_block`] for the storage / engine divergence
+//! contract on persistence failure.
 
 use std::sync::Arc;
 
@@ -33,6 +25,15 @@ use super::cache::ChainSnapshot;
 use super::error::ChainError;
 use super::tick;
 
+/// Handle to the running tick task: the spawned `JoinHandle` and the
+/// `CancellationToken` that triggers its loop exit. Held as
+/// `Mutex<Option<TickHandle>>` so the two fields are always in lockstep
+/// (both present while running, both gone after `stop`).
+struct TickHandle {
+    task: JoinHandle<()>,
+    cancel: CancellationToken,
+}
+
 /// Single-writer wrapper around [`Engine`] + [`storage::Store`].
 ///
 /// # Concurrency
@@ -44,8 +45,7 @@ pub struct Service {
     engine: Engine,
     store: Arc<dyn storage::Store>,
     snapshot: Arc<RwLock<ChainSnapshot>>,
-    tick_task: Mutex<Option<JoinHandle<()>>>,
-    tick_cancel: Mutex<Option<CancellationToken>>,
+    tick: Mutex<Option<TickHandle>>,
 }
 
 impl Service {
@@ -54,14 +54,12 @@ impl Service {
     /// clone the snapshot before `start` observe consistent state.
     #[must_use]
     pub fn new(engine: Engine, store: Arc<dyn storage::Store>) -> Self {
-        let mut initial = ChainSnapshot::default();
-        initial.refresh(&engine);
+        let snapshot = Arc::new(RwLock::new(ChainSnapshot::from_engine(&engine)));
         Self {
             engine,
             store,
-            snapshot: Arc::new(RwLock::new(initial)),
-            tick_task: Mutex::new(None),
-            tick_cancel: Mutex::new(None),
+            snapshot,
+            tick: Mutex::new(None),
         }
     }
 
@@ -78,6 +76,15 @@ impl Service {
     /// Imports `signed` through the engine. On [`BlockImportResult::Accepted`],
     /// persists the block, post-state, and head to storage and refreshes
     /// the snapshot.
+    ///
+    /// # Storage / engine divergence
+    ///
+    /// Persistence runs synchronously inside this call. If a `save_*`
+    /// call fails after the engine has accepted the block, the engine
+    /// in-memory state is ahead of storage: this method returns
+    /// [`ChainError::Storage`] and the runtime cascade-stops. Recovery
+    /// (replay-on-restart from the last persisted head) is tracked
+    /// separately; it is intentionally out of scope here.
     ///
     /// # Errors
     /// - [`ChainError::Storage`] if any `save_*` call fails.
@@ -96,7 +103,7 @@ impl Service {
         } = &outcome
         {
             self.persist_accepted(*block_root, *head_root, to_persist)?;
-            self.snapshot.write().refresh(&self.engine);
+            self.refresh_snapshot();
         }
         Ok(outcome)
     }
@@ -115,9 +122,16 @@ impl Service {
     ) -> Result<AttestationImportResult, ChainError> {
         let outcome = self.engine.import_attestation(signed);
         if matches!(outcome, AttestationImportResult::Accepted { .. }) {
-            self.snapshot.write().refresh(&self.engine);
+            self.refresh_snapshot();
         }
         Ok(outcome)
+    }
+
+    /// Replaces the cached snapshot with a fresh capture of engine state.
+    /// One central edit point if the refresh policy ever becomes
+    /// conditional (e.g. "only refresh when head moved").
+    fn refresh_snapshot(&self) {
+        *self.snapshot.write() = ChainSnapshot::from_engine(&self.engine);
     }
 
     /// One-shot persistence sweep for an accepted block. All three
@@ -150,41 +164,74 @@ impl Service {
     }
 }
 
+impl Drop for Service {
+    /// Best-effort cleanup if a caller drops the service without going
+    /// through [`runtime_core::Service::stop`]: cancel the tick token so
+    /// the spawned task exits on its next iteration. We cannot await the
+    /// join here, so the task detaches; cancellation guarantees it does
+    /// not loop forever holding `Arc` clones of the snapshot and engine.
+    fn drop(&mut self) {
+        // `get_mut` skips locking: `&mut self` proves no aliasing.
+        if let Some(handle) = self.tick.get_mut().take() {
+            handle.cancel.cancel();
+        }
+    }
+}
+
 #[async_trait]
 impl runtime_core::Service for Service {
     fn name(&self) -> &'static str {
         "chain"
     }
 
+    #[instrument(level = "info", name = "chain.start", skip_all, err)]
     async fn start(&self) -> anyhow::Result<()> {
+        let mut slot = self.tick.lock();
+        if slot.is_some() {
+            return Err(anyhow!("chain service is already running"));
+        }
         let cancel = CancellationToken::new();
-        let handle = tokio::spawn(tick::run_tick_loop(
+        let task = tokio::spawn(tick::run_tick_loop(
             self.engine.clone(),
             Arc::clone(&self.snapshot),
             cancel.clone(),
         ));
-        *self.tick_cancel.lock() = Some(cancel);
-        *self.tick_task.lock() = Some(handle);
+        *slot = Some(TickHandle { task, cancel });
         Ok(())
     }
 
-    async fn stop(&self, _cancel: CancellationToken) -> anyhow::Result<()> {
-        if let Some(c) = self.tick_cancel.lock().take() {
-            c.cancel();
+    #[instrument(level = "info", name = "chain.stop", skip_all, err)]
+    async fn stop(&self, cancel: CancellationToken) -> anyhow::Result<()> {
+        let Some(TickHandle {
+            mut task,
+            cancel: tick_cancel,
+        }) = self.tick.lock().take()
+        else {
+            return Ok(());
+        };
+        tick_cancel.cancel();
+
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                task.abort();
+                // Drain so the task fully transitions; the `JoinError::Cancelled`
+                // it produces here is expected and discarded.
+                let _ = task.await;
+                Err(anyhow!("chain tick task did not stop within shutdown budget"))
+            }
+            join = &mut task => {
+                join.context("chain tick task panicked")?;
+                Ok(())
+            }
         }
-        let handle = self.tick_task.lock().take();
-        if let Some(h) = handle {
-            h.await.context("chain tick task panicked")?;
-        }
-        Ok(())
     }
 
     async fn status(&self) -> anyhow::Result<()> {
-        let task = self.tick_task.lock();
-        match task.as_ref() {
-            Some(h) if h.is_finished() => Err(anyhow!("chain tick task exited prematurely")),
+        match self.tick.lock().as_ref() {
+            None => Err(anyhow!("chain service is not running")),
+            Some(h) if h.task.is_finished() => Err(anyhow!("chain tick task exited prematurely")),
             Some(_) => Ok(()),
-            None => Err(anyhow!("chain service not started")),
         }
     }
 }

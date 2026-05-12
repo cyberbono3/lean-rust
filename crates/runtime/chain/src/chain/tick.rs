@@ -9,41 +9,37 @@ use std::time::Duration;
 
 use engine::Engine;
 use parking_lot::RwLock;
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::time::{interval_at, Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{instrument, warn};
 
 use super::cache::ChainSnapshot;
 
 /// Tick period derived from the workspace-level slot timing constants.
-pub(super) fn tick_period() -> Duration {
-    Duration::from_secs(config::SECONDS_PER_INTERVAL)
-}
+const TICK_PERIOD: Duration = Duration::from_secs(config::SECONDS_PER_INTERVAL);
 
-/// Drives `engine.tick_interval(false)` once per [`tick_period`] until
+/// Drives `engine.tick_interval(false)` once per [`TICK_PERIOD`] until
 /// `cancel` fires. `has_proposal` is hard-coded `false`; the duties
 /// service (#30) flips it once block production lands.
+#[instrument(level = "trace", name = "chain.tick_loop", skip_all)]
 pub(super) async fn run_tick_loop(
     engine: Engine,
     snapshot: Arc<RwLock<ChainSnapshot>>,
     cancel: CancellationToken,
 ) {
-    let mut ticker = interval(tick_period());
+    let mut ticker = interval_at(Instant::now() + TICK_PERIOD, TICK_PERIOD);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    // The first `tick()` resolves immediately — burn it so the first
-    // engine advance lines up with the first elapsed period.
-    ticker.tick().await;
 
     loop {
         tokio::select! {
+            // `biased`: cancellation has priority over the tick — bounded teardown latency.
             biased;
             () = cancel.cancelled() => break,
             _ = ticker.tick() => {
-                if let Err(err) = engine.tick_interval(false) {
-                    warn!(%err, "chain tick failed; continuing");
-                    continue;
+                match engine.tick_interval(false) {
+                    Ok(()) => *snapshot.write() = ChainSnapshot::from_engine(&engine),
+                    Err(err) => warn!(%err, "chain tick failed; continuing"),
                 }
-                snapshot.write().refresh(&engine);
             }
         }
     }

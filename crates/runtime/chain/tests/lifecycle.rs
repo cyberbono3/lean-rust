@@ -16,8 +16,13 @@ use engine::test_fixtures::{engine_at_genesis, ENGINE_VALIDATORS};
 use engine::Engine;
 use runtime_chain::Service;
 use runtime_core::Service as _;
+use static_assertions::assert_impl_all;
 use storage::MemoryStore;
 use tokio_util::sync::CancellationToken;
+
+// Compile-time witness: `Service` must be `Send + Sync` to live inside an
+// `Arc<dyn runtime_core::Service>` slot on `Node`.
+assert_impl_all!(Service: Send, Sync);
 
 fn build(engine: Engine) -> Service {
     Service::new(engine, Arc::new(MemoryStore::new()))
@@ -33,15 +38,10 @@ async fn tick_loop_advances_engine_clock() {
 
     service.start().await.unwrap();
 
-    // Let the spawned task run far enough to burn the immediate first
-    // tick that `tokio::time::interval` yields on construction.
+    // Let the spawned task initialize its `interval_at` relative to the
+    // pre-advance virtual clock; advance one period; let it fire.
     tokio::task::yield_now().await;
-    tokio::task::yield_now().await;
-
-    // Advance the virtual clock by one interval period; the second
-    // `ticker.tick()` resolves, firing one `engine.tick_interval` call.
     tokio::time::advance(Duration::from_secs(config::SECONDS_PER_INTERVAL)).await;
-    tokio::task::yield_now().await;
     tokio::task::yield_now().await;
 
     let post_slot = engine.with_store(forkchoice::Store::current_slot);
@@ -72,7 +72,7 @@ async fn start_stop_cycle_returns_cleanly() {
 async fn status_reports_unhealthy_before_start() {
     let service = build(engine_at_genesis(ENGINE_VALIDATORS));
     let err = service.status().await.unwrap_err();
-    assert!(err.to_string().contains("not started"), "got: {err}");
+    assert!(err.to_string().contains("not running"), "got: {err}");
 }
 
 #[tokio::test]
@@ -82,5 +82,5 @@ async fn status_reports_unhealthy_after_stop() {
     service.stop(CancellationToken::new()).await.unwrap();
 
     let err = service.status().await.unwrap_err();
-    assert!(err.to_string().contains("not started"), "got: {err}");
+    assert!(err.to_string().contains("not running"), "got: {err}");
 }

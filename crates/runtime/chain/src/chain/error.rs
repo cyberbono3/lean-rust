@@ -7,8 +7,13 @@ use types::Bytes32;
 ///
 /// Logical import outcomes (`Accepted` / `DuplicateBlock` / `MissingParent`
 /// / `Rejected`) are *not* errors — they flow through the import-result
-/// sum types. `ChainError` is reserved for storage failures, engine-state
-/// invariant violations, and forkchoice tick errors.
+/// sum types. `ChainError` is reserved for storage failures and
+/// engine-state invariant violations.
+///
+/// Forkchoice tick failures are deliberately *not* part of this enum: the
+/// tick loop logs and continues (see [`super::tick::run_tick_loop`]). If
+/// a future revision needs to escalate consecutive tick failures, add the
+/// variant in the same PR that introduces the escalation policy.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ChainError {
@@ -19,14 +24,9 @@ pub enum ChainError {
     /// The engine reported `Accepted` for `block_root` but the post-state
     /// was missing on the immediate follow-up read. Indicates an engine
     /// invariant violation, not a normal operating condition.
-    #[error("post-state missing in engine after accepted import: block_root={block_root:?}")]
+    #[error("post-state missing in engine after accepted import: block_root={}", block_root.to_hex())]
     PostStateMissing {
         /// Root of the block whose post-state could not be re-fetched.
         block_root: Bytes32,
     },
-
-    /// `Engine::tick_interval` returned an error from the underlying
-    /// forkchoice clock advance.
-    #[error("engine tick: {0}")]
-    Tick(#[from] engine::EngineError),
 }

@@ -79,8 +79,5 @@ async fn rejected_vote_leaves_snapshot_unchanged() {
     );
 
     let post = *service.snapshot().read();
-    assert_eq!(pre.head_root, post.head_root);
-    assert_eq!(pre.safe_target_root, post.safe_target_root);
-    assert_eq!(pre.current_slot, post.current_slot);
-    assert_eq!(pre.latest_finalized, post.latest_finalized);
+    assert_eq!(pre, post);
 }
