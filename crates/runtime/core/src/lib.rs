@@ -20,9 +20,13 @@ mod config;
 mod error;
 mod lifecycle;
 mod node;
+mod observability;
 mod service;
 
 pub use config::{NodeConfig, DEFAULT_SHUTDOWN_TIMEOUT};
 pub use error::{NodeError, ServiceFailure};
 pub use node::Node;
+pub use observability::{
+    init_tracing, FileSink, ParseVerbosityError, TracingGuard, TracingInitError, Verbosity,
+};
 pub use service::Service;
