@@ -102,7 +102,7 @@ where
     );
 
     // (2) Snappy framed wire round-trip on raw SSZ bytes.
-    let wire = encode_req_resp_wire(fixture).expect("framed encode");
+    let wire = encode_req_resp_wire(fixture);
     let unwrapped = decode_req_resp_wire(&wire).expect("framed decode");
     assert_eq!(unwrapped, fixture, "{name}: framed wire round-trip");
 
@@ -122,8 +122,7 @@ where
 
     // (4) Generic value-level codec sanity (skip Status here — covered
     // separately because it isn't in the fixture corpus).
-    let value_back: T =
-        decode_req_resp(&encode_req_resp(&value).expect("value encode")).expect("value decode");
+    let value_back: T = decode_req_resp(&encode_req_resp(&value)).expect("value decode");
     assert_eq!(value_back, value, "{name}: typed req/resp round-trip");
 }
 
@@ -215,7 +214,7 @@ fn multi_chunk_stream_carries_independent_frames() {
 #[test]
 fn generic_codec_round_trips_status() {
     let status = Status::default();
-    let wire = encode_req_resp(&status).unwrap();
+    let wire = encode_req_resp(&status);
     let back: Status = decode_req_resp(&wire).unwrap();
     assert_eq!(back, status);
 }
@@ -224,7 +223,7 @@ fn generic_codec_round_trips_status() {
 fn truncated_ssz_payload_surfaces_typed_error() {
     let mut bytes = fixture("slot1-empty.signedblock").to_vec();
     bytes.pop();
-    let wire = encode_req_resp_wire(&bytes).unwrap();
+    let wire = encode_req_resp_wire(&bytes);
     let err = decode_req_resp::<SignedBlock>(&wire).unwrap_err();
     assert!(
         matches!(err, NetworkingError::Ssz(_)),

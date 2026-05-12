@@ -16,6 +16,16 @@
 //! [`encode_req_resp`] and [`decode_req_resp`] are generic over any
 //! [`ssz::Encode`] / [`ssz::Decode`] type, so callers don't need a
 //! hand-rolled wrapper per payload type.
+//!
+//! Every `encode_*` here returns [`Vec<u8>`] directly: `io::Write` into
+//! [`Vec`] is infallible by construction, and `snap::raw::Encoder` only
+//! errors on inputs exceeding 4 GiB (impossible for SSZ payloads in this
+//! crate, which are bounded far below that).
+
+// Justification: every `.expect(_)` below collapses a documented
+// infallible code path — `io::Write` into `Vec<u8>` cannot fail, and the
+// Snappy block encoder only rejects inputs >4 GiB.
+#![allow(clippy::expect_used)]
 
 use std::io::{self, Read, Write};
 
@@ -26,71 +36,74 @@ use ssz::{decode, encode, Decode, Encode};
 
 use crate::error::NetworkingError;
 
+const INFALLIBLE_VEC_WRITE: &str = "io::Write into Vec<u8> is infallible";
+const INFALLIBLE_SNAPPY_BLOCK: &str = "Snappy block encoder rejects only >4 GiB inputs";
+
 // =============================================================================
 // req/resp framed wire
 // =============================================================================
 
-/// Wraps `ssz` bytes in Snappy framed stream encoding.
+/// Wraps `ssz_bytes` in Snappy framed stream encoding.
 ///
-/// # Errors
-/// [`NetworkingError::Io`] if the framed-stream encoder reports an internal
-/// I/O failure (in practice never, since the sink is a [`Vec`]).
-pub fn encode_req_resp_wire(ssz_bytes: &[u8]) -> Result<Vec<u8>, NetworkingError> {
+/// # Panics
+/// Statically infallible — `io::Write` into [`Vec<u8>`] cannot fail.
+#[must_use]
+pub fn encode_req_resp_wire(ssz_bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(ssz_bytes.len());
-    {
-        let mut encoder = FrameEncoder::new(&mut out);
-        encoder.write_all(ssz_bytes)?;
-        encoder
-            .into_inner()
-            .map_err(|e| NetworkingError::Io(e.into_error()))?;
-    }
-    Ok(out)
+    let mut encoder = FrameEncoder::new(&mut out);
+    encoder.write_all(ssz_bytes).expect(INFALLIBLE_VEC_WRITE);
+    encoder.into_inner().expect(INFALLIBLE_VEC_WRITE);
+    out
 }
 
-/// Unwraps Snappy framed stream bytes into the underlying `ssz` bytes.
+/// Unwraps Snappy framed stream bytes into the underlying SSZ bytes.
 ///
 /// # Errors
 /// [`NetworkingError::Snappy`] if `wire` is not a valid Snappy framed stream.
 pub fn decode_req_resp_wire(wire: &[u8]) -> Result<Vec<u8>, NetworkingError> {
-    let mut decoder = FrameDecoder::new(wire);
     let mut out = Vec::with_capacity(wire.len());
-    decoder.read_to_end(&mut out).map_err(decoder_io_error)?;
+    FrameDecoder::new(wire)
+        .read_to_end(&mut out)
+        .map_err(snap_or_io)?;
     Ok(out)
 }
 
-/// Generic req/resp encoder: SSZ-encode `value`, wrap in Snappy framed bytes.
+/// SSZ-encode `value`, then wrap in Snappy framed bytes.
 ///
-/// # Errors
-/// Propagates [`encode_req_resp_wire`].
-pub fn encode_req_resp<T: Encode>(value: &T) -> Result<Vec<u8>, NetworkingError> {
+/// # Panics
+/// Statically infallible — see [`encode_req_resp_wire`].
+#[must_use]
+pub fn encode_req_resp<T: Encode>(value: &T) -> Vec<u8> {
     encode_req_resp_wire(&encode(value))
 }
 
-/// Generic req/resp decoder: unwrap Snappy framed bytes, SSZ-decode into `T`.
+/// Unwrap Snappy framed bytes, then SSZ-decode into `T`.
 ///
 /// # Errors
 /// [`NetworkingError::Snappy`] for framing failures;
 /// [`NetworkingError::Ssz`] for SSZ payload failures.
 pub fn decode_req_resp<T: Decode>(wire: &[u8]) -> Result<T, NetworkingError> {
-    Ok(decode::<T>(&decode_req_resp_wire(wire)?)?)
+    let ssz_bytes = decode_req_resp_wire(wire)?;
+    decode(&ssz_bytes).map_err(Into::into)
 }
 
 // =============================================================================
 // gossip block compression
 // =============================================================================
 
-/// Snappy block-compresses `ssz_bytes` for gossipsub transport.
+/// Snappy-block-compresses `ssz_bytes` for gossipsub transport.
 ///
-/// # Errors
-/// [`NetworkingError::Snappy`] if `snap::raw::Encoder::compress_vec` rejects
-/// the input (only `Error::TooBig` for inputs over 4 GiB).
-pub fn encode_gossip_data(ssz_bytes: &[u8]) -> Result<Vec<u8>, NetworkingError> {
+/// # Panics
+/// On inputs exceeding 4 GiB, which exceeds every SSZ payload bound in
+/// this crate by several orders of magnitude.
+#[must_use]
+pub fn encode_gossip_data(ssz_bytes: &[u8]) -> Vec<u8> {
     raw::Encoder::new()
         .compress_vec(ssz_bytes)
-        .map_err(NetworkingError::Snappy)
+        .expect(INFALLIBLE_SNAPPY_BLOCK)
 }
 
-/// Snappy block-decompresses gossipsub data into the underlying `ssz` bytes.
+/// Snappy-block-decompresses gossipsub data into the underlying SSZ bytes.
 ///
 /// # Errors
 /// [`NetworkingError::Snappy`] if `data` is not valid Snappy block output.
@@ -100,42 +113,38 @@ pub fn decode_gossip_data(data: &[u8]) -> Result<Vec<u8>, NetworkingError> {
         .map_err(NetworkingError::Snappy)
 }
 
-/// Generic gossip encoder: SSZ-encode `value`, Snappy-block-compress.
+/// SSZ-encode `value`, then Snappy-block-compress.
 ///
-/// # Errors
-/// Propagates [`encode_gossip_data`].
-pub fn encode_gossip<T: Encode>(value: &T) -> Result<Vec<u8>, NetworkingError> {
+/// # Panics
+/// See [`encode_gossip_data`].
+#[must_use]
+pub fn encode_gossip<T: Encode>(value: &T) -> Vec<u8> {
     encode_gossip_data(&encode(value))
 }
 
-/// Generic gossip decoder: Snappy-block-decompress, SSZ-decode into `T`.
+/// Snappy-block-decompress, then SSZ-decode into `T`.
 ///
 /// # Errors
 /// [`NetworkingError::Snappy`] for decompression failures;
 /// [`NetworkingError::Ssz`] for SSZ payload failures.
 pub fn decode_gossip<T: Decode>(data: &[u8]) -> Result<T, NetworkingError> {
-    Ok(decode::<T>(&decode_gossip_data(data)?)?)
+    let ssz_bytes = decode_gossip_data(data)?;
+    decode(&ssz_bytes).map_err(Into::into)
 }
 
 // =============================================================================
 // helpers
 // =============================================================================
 
-/// Maps an `io::Error` from [`FrameDecoder`] to either a Snappy or I/O variant.
+/// Routes a [`FrameDecoder`] failure to the matching [`NetworkingError`] arm.
 ///
 /// `snap::read::FrameDecoder` reports protocol-level framing failures by
 /// wrapping a [`snap::Error`] inside an [`io::Error`]. Surface that as the
 /// typed [`NetworkingError::Snappy`] so tests can `matches!` on it; fall
 /// back to [`NetworkingError::Io`] for genuine I/O errors.
-fn decoder_io_error(err: io::Error) -> NetworkingError {
-    let kind = err.kind();
-    let Some(inner) = err.into_inner() else {
-        return NetworkingError::Io(io::Error::from(kind));
-    };
-    match inner.downcast::<snap::Error>() {
-        Ok(snap_err) => NetworkingError::Snappy(*snap_err),
-        Err(other) => NetworkingError::Io(io::Error::new(kind, other)),
-    }
+fn snap_or_io(err: io::Error) -> NetworkingError {
+    err.downcast::<snap::Error>()
+        .map_or_else(NetworkingError::Io, NetworkingError::Snappy)
 }
 
 // =============================================================================
@@ -143,37 +152,34 @@ fn decoder_io_error(err: io::Error) -> NetworkingError {
 // =============================================================================
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
 
     #[test]
     fn req_resp_wire_round_trips() {
-        let ssz = b"hello world".as_slice();
-        let wire = encode_req_resp_wire(ssz).unwrap();
+        let ssz: &[u8] = b"hello world";
+        let wire = encode_req_resp_wire(ssz);
         assert_ne!(wire, ssz, "wire should differ from raw ssz");
-        let back = decode_req_resp_wire(&wire).unwrap();
-        assert_eq!(back, ssz);
+        assert_eq!(decode_req_resp_wire(&wire).unwrap(), ssz);
     }
 
     #[test]
     fn req_resp_wire_handles_empty_payload() {
-        let wire = encode_req_resp_wire(&[]).unwrap();
-        let back = decode_req_resp_wire(&wire).unwrap();
-        assert!(back.is_empty());
+        let wire = encode_req_resp_wire(&[]);
+        assert!(decode_req_resp_wire(&wire).unwrap().is_empty());
     }
 
     #[test]
     fn gossip_data_round_trips() {
-        let ssz = b"signed block placeholder".as_slice();
-        let data = encode_gossip_data(ssz).unwrap();
-        let back = decode_gossip_data(&data).unwrap();
-        assert_eq!(back, ssz);
+        let ssz: &[u8] = b"signed block placeholder";
+        let data = encode_gossip_data(ssz);
+        assert_eq!(decode_gossip_data(&data).unwrap(), ssz);
     }
 
     #[test]
     fn req_resp_wire_rejects_gossip_bytes() {
-        let gossip = encode_gossip_data(b"payload").unwrap();
+        let gossip = encode_gossip_data(b"payload");
         let err = decode_req_resp_wire(&gossip).unwrap_err();
         assert!(
             matches!(err, NetworkingError::Snappy(_)),
@@ -183,7 +189,7 @@ mod tests {
 
     #[test]
     fn gossip_rejects_req_resp_bytes() {
-        let wire = encode_req_resp_wire(b"payload").unwrap();
+        let wire = encode_req_resp_wire(b"payload");
         let err = decode_gossip_data(&wire).unwrap_err();
         assert!(
             matches!(err, NetworkingError::Snappy(_)),
@@ -193,7 +199,7 @@ mod tests {
 
     #[test]
     fn req_resp_rejects_truncated_wire() {
-        let wire = encode_req_resp_wire(b"payload").unwrap();
+        let wire = encode_req_resp_wire(b"payload");
         let err = decode_req_resp_wire(&wire[..wire.len() / 2]).unwrap_err();
         assert!(
             matches!(err, NetworkingError::Snappy(_) | NetworkingError::Io(_)),
