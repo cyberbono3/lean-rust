@@ -12,18 +12,13 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum NetworkingError {
-    /// `BlocksByRootRequest::new` was called with more roots than allowed.
-    #[error("blocks_by_root request length {len} exceeds max {max}")]
-    RequestTooLarge {
-        /// Length of the rejected input.
-        len: usize,
-        /// Inclusive upper bound.
-        max: usize,
-    },
-
-    /// `BlocksByRootResponse::new` was called with more blocks than allowed.
-    #[error("blocks_by_root response length {len} exceeds max {max}")]
-    ResponseTooLarge {
+    /// A bounded list constructor received more elements than allowed.
+    ///
+    /// `kind` identifies the rejected list (e.g. `"blocks_by_root request"`).
+    #[error("{kind} length {len} exceeds max {max}")]
+    ListTooLarge {
+        /// Short label for the list being constructed.
+        kind: &'static str,
         /// Length of the rejected input.
         len: usize,
         /// Inclusive upper bound.
