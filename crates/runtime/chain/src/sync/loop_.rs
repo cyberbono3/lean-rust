@@ -1,0 +1,379 @@
+//! Sync [`Loop`] — the gean-style devnet0 sync orchestrator.
+//!
+//! On each outbound peer-connect event the loop sends a `Status` RPC,
+//! compares heads, and—if the peer is ahead—walks backwards from the
+//! peer's head one root at a time via `BlocksByRoot` up to
+//! [`Config::max_sync_depth`], then imports the recovered chain in
+//! forward order through the [`Chain`] port.
+//!
+//! Per-block import errors are warn-logged and dropped: an unknown
+//! parent at the deepest layer (when the cap is hit before the walk
+//! finds a known block) is the expected outcome and is resolved on a
+//! future peer-connect or via gossip.
+
+use std::sync::Arc;
+
+use anyhow::{anyhow, Context};
+use async_trait::async_trait;
+use networking::BlocksByRootRequest;
+use parking_lot::Mutex;
+use protocol::SignedBlock;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use tracing::{debug, info, instrument, warn};
+use types::Bytes32;
+
+use super::config::Config;
+use super::error::{PeerId, SyncError};
+use super::ports::{Chain, Network, PeerEventProvider};
+
+/// Handle to the running watch task: the spawned `JoinHandle`, the
+/// `TaskTracker` that owns each per-peer `on_connect` task, and the
+/// `CancellationToken` that triggers loop exit.
+struct RunHandle {
+    watch: JoinHandle<()>,
+    peers: TaskTracker,
+    cancel: CancellationToken,
+}
+
+/// Single-watcher sync orchestrator.
+///
+/// Construct with [`Loop::new`]; supply impls of [`Chain`], [`Network`],
+/// and [`PeerEventProvider`] (the chain port is satisfied by
+/// `Arc<crate::Service>` in production; tests use in-memory fakes).
+///
+/// Spawned per-peer `on_connect` tasks are owned by an internal
+/// [`TaskTracker`]; [`Loop::stop`] cancels the shared token and awaits
+/// the tracker under the caller-supplied shutdown budget, so peer tasks
+/// always observe cancellation before the loop returns.
+pub struct Loop {
+    config: Config,
+    chain: Arc<dyn Chain>,
+    network: Arc<dyn Network>,
+    peers: Arc<dyn PeerEventProvider>,
+    run: Mutex<Option<RunHandle>>,
+}
+
+impl core::fmt::Debug for Loop {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Loop")
+            .field("config", &self.config)
+            .field("running", &self.run.lock().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Loop {
+    /// Builds a validated `Loop` around the supplied ports.
+    ///
+    /// # Errors
+    /// - [`SyncError::InvalidMaxSyncDepth`] when `config.max_sync_depth == 0`.
+    pub fn new(
+        config: Config,
+        chain: Arc<dyn Chain>,
+        network: Arc<dyn Network>,
+        peers: Arc<dyn PeerEventProvider>,
+    ) -> Result<Self, SyncError> {
+        config.validate()?;
+        Ok(Self {
+            config,
+            chain,
+            network,
+            peers,
+            run: Mutex::new(None),
+        })
+    }
+
+    /// Returns the validated configuration.
+    #[must_use]
+    pub fn config(&self) -> Config {
+        self.config
+    }
+}
+
+impl Drop for Loop {
+    /// Best-effort cleanup if the loop is dropped without going through
+    /// [`runtime_core::Service::stop`]: cancel the shared token so the
+    /// watch task exits on its next iteration and the per-peer tasks
+    /// observe shutdown. The handles detach; cancellation guarantees
+    /// they will not loop holding `Arc` clones.
+    fn drop(&mut self) {
+        if let Some(handle) = self.run.get_mut().take() {
+            handle.cancel.cancel();
+            handle.peers.close();
+        }
+    }
+}
+
+#[async_trait]
+impl runtime_core::Service for Loop {
+    fn name(&self) -> &'static str {
+        "sync"
+    }
+
+    #[instrument(level = "info", name = "sync.start", skip_all, err)]
+    async fn start(&self) -> anyhow::Result<()> {
+        // Subscribe first — a subscription failure must not flip the
+        // running flag, so `start` stays idempotent against retries.
+        let events = self
+            .peers
+            .subscribe_outbound_connected_peers()
+            .await
+            .map_err(|err| anyhow!("subscribe outbound connected peers: {err}"))?;
+
+        let mut slot = self.run.lock();
+        if slot.is_some() {
+            return Err(anyhow!("{}", SyncError::AlreadyStarted));
+        }
+        let cancel = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let watch = tokio::spawn(watch_loop(
+            self.config,
+            Arc::clone(&self.chain),
+            Arc::clone(&self.network),
+            events,
+            cancel.clone(),
+            tracker.clone(),
+        ));
+        *slot = Some(RunHandle {
+            watch,
+            peers: tracker,
+            cancel,
+        });
+        Ok(())
+    }
+
+    #[instrument(level = "info", name = "sync.stop", skip_all, err)]
+    async fn stop(&self, cancel: CancellationToken) -> anyhow::Result<()> {
+        let Some(RunHandle {
+            mut watch,
+            peers,
+            cancel: own_cancel,
+        }) = self.run.lock().take()
+        else {
+            return Ok(());
+        };
+        own_cancel.cancel();
+        peers.close();
+
+        let peers_wait = peers.wait();
+        tokio::pin!(peers_wait);
+
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                watch.abort();
+                let _ = (&mut watch).await;
+                Err(anyhow!("sync watch task did not stop within shutdown budget"))
+            }
+            join = &mut watch => {
+                join.context("sync watch task panicked")?;
+                // Watch exited cleanly; drain remaining per-peer tasks.
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => Err(anyhow!(
+                        "sync per-peer tasks did not drain within shutdown budget"
+                    )),
+                    () = &mut peers_wait => Ok(()),
+                }
+            }
+        }
+    }
+
+    async fn status(&self) -> anyhow::Result<()> {
+        match self.run.lock().as_ref() {
+            None => Err(anyhow!("{}", SyncError::NotStarted)),
+            Some(h) if h.watch.is_finished() => Err(anyhow!("sync watch task exited prematurely")),
+            Some(_) => Ok(()),
+        }
+    }
+}
+
+/// Drains peer-connect events until cancellation or sender close. Each
+/// event spawns an independent `on_connect` task tracked by `tracker`.
+#[instrument(level = "trace", name = "sync.watch", skip_all)]
+async fn watch_loop(
+    config: Config,
+    chain: Arc<dyn Chain>,
+    network: Arc<dyn Network>,
+    mut events: mpsc::Receiver<PeerId>,
+    cancel: CancellationToken,
+    tracker: TaskTracker,
+) {
+    loop {
+        tokio::select! {
+            // `biased`: cancellation has priority over event delivery.
+            biased;
+            () = cancel.cancelled() => break,
+            maybe_peer = events.recv() => {
+                let Some(peer) = maybe_peer else { break };
+                let chain_clone = Arc::clone(&chain);
+                let network_clone = Arc::clone(&network);
+                let cancel_clone = cancel.clone();
+                tracker.spawn(on_connect(
+                    config,
+                    chain_clone,
+                    network_clone,
+                    peer,
+                    cancel_clone,
+                ));
+            }
+        }
+    }
+}
+
+/// Handles a single peer-connect event: status exchange + walk-back.
+#[instrument(level = "debug", name = "sync.on_connect", skip_all, fields(peer = %peer))]
+async fn on_connect(
+    config: Config,
+    chain: Arc<dyn Chain>,
+    network: Arc<dyn Network>,
+    peer: PeerId,
+    cancel: CancellationToken,
+) {
+    if peer.as_str().is_empty() {
+        return;
+    }
+    if cancel.is_cancelled() {
+        return;
+    }
+    let local_status = match chain.local_status().await {
+        Ok(s) => s,
+        Err(err) => {
+            warn!(%err, "local_status failed");
+            return;
+        }
+    };
+    let peer_status = match network.send_status(&peer, local_status).await {
+        Ok(s) => s,
+        Err(err) => {
+            warn!(%err, "status exchange failed");
+            return;
+        }
+    };
+    if !should_sync(&local_status, &peer_status) {
+        debug!(
+            local_head = local_status.head.slot.get(),
+            peer_head = peer_status.head.slot.get(),
+            "sync not needed",
+        );
+        return;
+    }
+    info!(
+        local_head = local_status.head.slot.get(),
+        peer_head = peer_status.head.slot.get(),
+        "sync started",
+    );
+    sync_with_peer(
+        &config,
+        &chain,
+        &network,
+        &peer,
+        peer_status.head.root,
+        &cancel,
+    )
+    .await;
+}
+
+/// Walks back from `start_root` up to `config.max_sync_depth` blocks,
+/// then imports the recovered chain in forward order.
+async fn sync_with_peer(
+    config: &Config,
+    chain: &Arc<dyn Chain>,
+    network: &Arc<dyn Network>,
+    peer: &PeerId,
+    start_root: Bytes32,
+    cancel: &CancellationToken,
+) {
+    let mut pending: Vec<SignedBlock> = Vec::with_capacity(config.max_sync_depth);
+    let mut next_root = start_root;
+
+    for _ in 0..config.max_sync_depth {
+        if cancel.is_cancelled() {
+            return;
+        }
+        if next_root == Bytes32::zero() {
+            break;
+        }
+        match chain.has_block(next_root).await {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(err) => {
+                warn!(%err, "has_block failed");
+                return;
+            }
+        }
+
+        let request = match BlocksByRootRequest::new([next_root]) {
+            Ok(r) => r,
+            Err(err) => {
+                warn!(%err, "construct BlocksByRootRequest");
+                return;
+            }
+        };
+        let response = match network.request_blocks_by_root(peer, request).await {
+            Ok(r) => r,
+            Err(err) => {
+                warn!(%err, "blocks_by_root request failed");
+                return;
+            }
+        };
+        let Some(block) = response.blocks().first().cloned() else {
+            break;
+        };
+        next_root = block.message.parent_root;
+        pending.push(block);
+    }
+
+    // Forward-order import: oldest first so each block's parent is
+    // already resolved by the time the engine sees it.
+    for block in pending.into_iter().rev() {
+        if cancel.is_cancelled() {
+            return;
+        }
+        let slot = block.message.slot.get();
+        if let Err(err) = chain.import_block(block).await {
+            warn!(%err, slot, "import_block dropped");
+        }
+    }
+}
+
+fn should_sync(local: &networking::Status, peer: &networking::Status) -> bool {
+    peer.finalized.slot > local.finalized.slot || peer.head.slot > local.head.slot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use protocol::Checkpoint;
+    use protocol::Slot;
+
+    fn status(finalized_slot: u64, head_slot: u64) -> networking::Status {
+        networking::Status {
+            finalized: Checkpoint::new(Bytes32::zero(), Slot::new(finalized_slot)),
+            head: Checkpoint::new(Bytes32::zero(), Slot::new(head_slot)),
+        }
+    }
+
+    #[test]
+    fn should_sync_when_peer_head_ahead() {
+        assert!(should_sync(&status(0, 0), &status(0, 1)));
+    }
+
+    #[test]
+    fn should_sync_when_peer_finalized_ahead() {
+        assert!(should_sync(&status(0, 5), &status(1, 5)));
+    }
+
+    #[test]
+    fn no_sync_when_equal() {
+        assert!(!should_sync(&status(1, 5), &status(1, 5)));
+    }
+
+    #[test]
+    fn no_sync_when_local_ahead() {
+        assert!(!should_sync(&status(1, 5), &status(1, 4)));
+    }
+}

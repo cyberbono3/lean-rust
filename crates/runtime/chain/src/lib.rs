@@ -9,12 +9,20 @@
 //!   callers (`runtime/api`, `runtime/p2p`).
 //! - [`chain::ChainError`] — infrastructure failures (storage, engine
 //!   tick); logical import outcomes stay in the engine's sum types.
+//! - [`sync::Loop`] — peer-driven `BlocksByRoot` backfill orchestrator.
+//!   Declares the [`sync::Chain`], [`sync::Network`], and
+//!   [`sync::PeerEventProvider`] port traits (Decision 7); the chain
+//!   port is implemented for [`Service`] in this crate.
 //!
-//! Sync (#29) and duties (#30) build on top of this crate; they are
-//! intentionally absent here.
+//! Duties (#30) builds on top of this crate.
 
 #![forbid(unsafe_code)]
 
 pub mod chain;
+pub mod sync;
 
 pub use chain::{ChainError, ChainSnapshot, Service};
+pub use sync::{
+    Chain as SyncChain, Config as SyncConfig, Loop as SyncLoop, Network as SyncNetwork,
+    PeerEventProvider, PeerId, SyncError, DEFAULT_MAX_SYNC_DEPTH,
+};

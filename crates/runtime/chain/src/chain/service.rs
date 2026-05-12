@@ -13,6 +13,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use engine::{AttestationImportResult, BlockImportResult, Engine};
+use networking::Status;
 use parking_lot::{Mutex, RwLock};
 use protocol::{Checkpoint, SignedBlock, SignedVote, Slot};
 use storage::HeadInfo;
@@ -24,6 +25,7 @@ use types::Bytes32;
 use super::cache::ChainSnapshot;
 use super::error::ChainError;
 use super::tick;
+use crate::sync;
 
 /// Handle to the running tick task: the spawned `JoinHandle` and the
 /// `CancellationToken` that triggers its loop exit. Held as
@@ -125,6 +127,30 @@ impl Service {
             self.refresh_snapshot();
         }
         Ok(outcome)
+    }
+
+    /// Returns the local node's current [`Status`] for the peer-handshake.
+    ///
+    /// Backed by the cached [`ChainSnapshot`]: the value is eventually
+    /// consistent with engine state (refreshed after each `Accepted`
+    /// import and each tick). Acceptable for sync — the protocol
+    /// tolerates a one-tick handshake lag.
+    #[must_use]
+    pub fn local_status(&self) -> Status {
+        let snap = *self.snapshot.read();
+        let head = Checkpoint::new(snap.head_root, Slot::new(snap.current_slot));
+        Status {
+            finalized: snap.latest_finalized,
+            head,
+        }
+    }
+
+    /// Reports whether `root` is already known to local storage.
+    ///
+    /// # Errors
+    /// [`ChainError::Storage`] when the backing store call fails.
+    pub fn has_block(&self, root: &Bytes32) -> Result<bool, ChainError> {
+        Ok(self.store.has_block(root)?)
     }
 
     /// Replaces the cached snapshot with a fresh capture of engine state.
@@ -233,5 +259,23 @@ impl runtime_core::Service for Service {
             Some(h) if h.task.is_finished() => Err(anyhow!("chain tick task exited prematurely")),
             Some(_) => Ok(()),
         }
+    }
+}
+
+/// Adapter that lets the sync [`Loop`](crate::sync::Loop) drive this
+/// service through the [`sync::Chain`] port. The trait is satisfied via
+/// the existing public surface — no extra locking.
+#[async_trait]
+impl sync::Chain for Service {
+    async fn local_status(&self) -> Result<Status, ChainError> {
+        Ok(Service::local_status(self))
+    }
+
+    async fn has_block(&self, root: Bytes32) -> Result<bool, ChainError> {
+        Service::has_block(self, &root)
+    }
+
+    async fn import_block(&self, signed: SignedBlock) -> Result<BlockImportResult, ChainError> {
+        Service::import_block(self, signed).await
     }
 }
