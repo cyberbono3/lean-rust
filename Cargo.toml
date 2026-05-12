@@ -70,6 +70,7 @@ libp2p = { version = "0.55", features = [
     "ping",
 ] }
 snap = "1"
+crc32c = "0.6"
 
 # observability
 tracing            = "0.1"
