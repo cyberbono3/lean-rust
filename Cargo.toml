@@ -75,6 +75,8 @@ crc32c = "0.6"
 # observability
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-appender   = "0.2"
+time               = "0.3"
 
 # api
 axum       = "0.7"
@@ -94,6 +96,8 @@ insta             = { version = "1", features = ["yaml"] }
 wiremock          = "0.6"
 tokio-test        = "0.4"
 static_assertions = "1"
+tempfile          = "3"
+serial_test       = "3"
 
 [profile.release]
 lto           = "thin"
