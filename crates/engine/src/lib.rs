@@ -23,8 +23,8 @@ mod error;
 mod importer;
 mod results;
 
-#[cfg(test)]
-mod test_fixtures;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_fixtures;
 
 pub use engine::Engine;
 pub use error::EngineError;

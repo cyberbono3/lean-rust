@@ -5,7 +5,12 @@
 //! Shape mirrors `forkchoice::test_fixtures::genesis_anchor` but uses only
 //! re-exported `protocol` types.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::missing_panics_doc
+)]
 
 use protocol::{
     Block, BlockBody, BlockHeader, ProtocolConfig, SignedBlock, Slot, State, ValidatorIndex,
@@ -18,7 +23,7 @@ use crate::engine::Engine;
 /// Validator-count constant used by the import / produce tests. Four matches
 /// the forkchoice production-test default and keeps the round-robin proposer
 /// schedule deterministic across slots.
-pub(crate) const ENGINE_VALIDATORS: u64 = 4;
+pub const ENGINE_VALIDATORS: u64 = 4;
 
 const GENESIS_TIME: u64 = 1_700_000_000;
 
@@ -42,7 +47,8 @@ fn genesis_state(num_validators: u64) -> State {
 /// Returns a spec-compliant `(state, anchor_block)` pair such that
 /// `anchor_block.state_root == state.hash_tree_root()` and `parent_root` is
 /// the zero sentinel. Eligible input to [`Engine::from_anchor`].
-pub(crate) fn anchor_pair(num_validators: u64) -> (State, Block) {
+#[must_use]
+pub fn anchor_pair(num_validators: u64) -> (State, Block) {
     let state = genesis_state(num_validators);
     let block = Block {
         slot: Slot::ZERO,
@@ -55,7 +61,8 @@ pub(crate) fn anchor_pair(num_validators: u64) -> (State, Block) {
 }
 
 /// Builds an [`Engine`] anchored at genesis.
-pub(crate) fn engine_at_genesis(num_validators: u64) -> Engine {
+#[must_use]
+pub fn engine_at_genesis(num_validators: u64) -> Engine {
     let (state, block) = anchor_pair(num_validators);
     Engine::from_anchor(state, block).expect("genesis anchor invariants")
 }
@@ -63,11 +70,8 @@ pub(crate) fn engine_at_genesis(num_validators: u64) -> Engine {
 /// Produces a [`SignedBlock`] via [`Engine::produce_block`] and wraps it with
 /// a zero-filled signature. Used to manufacture realistic import inputs for
 /// the importer-side tests without re-implementing the production flow.
-pub(crate) fn produce_signed_block(
-    engine: &Engine,
-    slot: Slot,
-    validator: ValidatorIndex,
-) -> SignedBlock {
+#[must_use]
+pub fn produce_signed_block(engine: &Engine, slot: Slot, validator: ValidatorIndex) -> SignedBlock {
     let produced = engine
         .produce_block(slot, validator)
         .expect("produce_block on genesis engine");

@@ -106,6 +106,25 @@ impl Engine {
             .map_err(EngineError::from)
     }
 
+    /// Advances the forkchoice clock by one interval.
+    ///
+    /// `has_proposal` is the spec parameter to `Store::tick_interval`:
+    /// `true` when the local node is the proposer for the slot that begins
+    /// at this interval and has already gossiped a block, `false` otherwise.
+    ///
+    /// Mutating call — held under the engine mutex like the `import_*`
+    /// paths. Reserved for `runtime-chain` (the only writer); other
+    /// subsystems clone the engine for read-through accessors.
+    ///
+    /// # Errors
+    /// Forwards every variant raised by [`Store::tick_interval`] via
+    /// [`EngineError::Forkchoice`].
+    pub fn tick_interval(&self, has_proposal: bool) -> Result<(), EngineError> {
+        self.lock()
+            .tick_interval(has_proposal)
+            .map_err(EngineError::from)
+    }
+
     /// Acquires the store lock for the duration of the returned guard.
     ///
     /// Crate-private: external callers go through the public accessors or
