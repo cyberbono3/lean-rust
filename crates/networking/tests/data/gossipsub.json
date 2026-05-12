@@ -1,0 +1,85 @@
+{
+  "schema_version": "devnet0-fixtures/v1",
+  "family": "gossipsub_message_ids",
+  "description": "Deterministic gossipsub message-id fixtures across snappy modes.",
+  "source_revision": "4b750f2748a3718fe3e1e9cdb3c65e3a7ddabff5",
+  "source_modules": [
+    "src/lean_spec/subspecs/networking/gossipsub.py",
+    "tests/lean_spec/subspecs/networking/test_gossipsub.py"
+  ],
+  "cases": [
+    {
+      "id": "invalid_snappy_no_decompressor",
+      "summary": "No decompressor uses the invalid-snappy domain.",
+      "tags": [
+        "networking",
+        "gossipsub"
+      ],
+      "input": {
+        "topic_hex": "746573745f746f706963",
+        "raw_data_hex": "7261775f746573745f64617461",
+        "snappy_mode": "none"
+      },
+      "output": {
+        "domain_hex": "00000000",
+        "hash_input_hex": "000000000a00000000000000746573745f746f7069637261775f746573745f64617461",
+        "message_id_hex": "c42d60f10f213a0e31532b4435b7ad3b0c42391a"
+      }
+    },
+    {
+      "id": "valid_snappy_decompressor",
+      "summary": "Successful decompression uses the valid-snappy domain and decompressed payload.",
+      "tags": [
+        "networking",
+        "gossipsub"
+      ],
+      "input": {
+        "topic_hex": "746573745f746f706963",
+        "raw_data_hex": "7261775f746573745f64617461",
+        "snappy_mode": "success",
+        "decompressed_hex": "6465636f6d707265737365645f746573745f64617461"
+      },
+      "output": {
+        "domain_hex": "01000000",
+        "hash_input_hex": "010000000a00000000000000746573745f746f7069636465636f6d707265737365645f746573745f64617461",
+        "message_id_hex": "212378135e5d92e9aeadefb51f00ad06a47b9883"
+      }
+    },
+    {
+      "id": "invalid_snappy_failure",
+      "summary": "Failed decompression falls back to the invalid-snappy domain and raw payload.",
+      "tags": [
+        "networking",
+        "gossipsub"
+      ],
+      "input": {
+        "topic_hex": "746573745f746f706963",
+        "raw_data_hex": "7261775f746573745f64617461",
+        "snappy_mode": "failure"
+      },
+      "output": {
+        "domain_hex": "00000000",
+        "hash_input_hex": "000000000a00000000000000746573745f746f7069637261775f746573745f64617461",
+        "message_id_hex": "c42d60f10f213a0e31532b4435b7ad3b0c42391a"
+      }
+    },
+    {
+      "id": "binary_payload",
+      "summary": "Binary topic and payload still produce a deterministic 20-byte message id.",
+      "tags": [
+        "networking",
+        "gossipsub"
+      ],
+      "input": {
+        "topic_hex": "00ff01fe",
+        "raw_data_hex": "000102030405060708090a0b0c0d0e0f",
+        "snappy_mode": "none"
+      },
+      "output": {
+        "domain_hex": "00000000",
+        "hash_input_hex": "00000000040000000000000000ff01fe000102030405060708090a0b0c0d0e0f",
+        "message_id_hex": "7d3a4bee74ae72b9239086163857279b852cc10b"
+      }
+    }
+  ]
+}
