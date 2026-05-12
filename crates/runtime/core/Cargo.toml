@@ -5,9 +5,20 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Service trait, Node, lifecycle, leanlog formatter, httpsvc shell. Implementation lands in a later issue (Tier 5)."
+description   = "Service trait, Node, lifecycle (Tier 5)."
 
 [lints]
 workspace = true
 
 [dependencies]
+tokio       = { workspace = true }
+tokio-util  = { workspace = true }
+async-trait = { workspace = true }
+tracing     = { workspace = true }
+parking_lot = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+
+[dev-dependencies]
+static_assertions = { workspace = true }
+tokio             = { workspace = true, features = ["test-util"] }
