@@ -8,9 +8,11 @@
 mod config;
 mod error;
 mod loop_;
+mod peer_id;
 mod ports;
 
-pub use config::{Config, DEFAULT_MAX_SYNC_DEPTH};
-pub use error::{PeerId, SyncError};
+pub use config::Config;
+pub use error::SyncError;
 pub use loop_::Loop;
+pub use peer_id::PeerId;
 pub use ports::{Chain, Network, PeerEventProvider};

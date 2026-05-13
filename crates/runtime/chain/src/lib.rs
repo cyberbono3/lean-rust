@@ -14,7 +14,7 @@
 //!   [`sync::PeerEventProvider`] port traits (Decision 7); the chain
 //!   port is implemented for [`Service`] in this crate.
 //!
-//! Duties (#30) builds on top of this crate.
+//! The duties service builds on top of this crate.
 
 #![forbid(unsafe_code)]
 
@@ -24,5 +24,5 @@ pub mod sync;
 pub use chain::{ChainError, ChainSnapshot, Service};
 pub use sync::{
     Chain as SyncChain, Config as SyncConfig, Loop as SyncLoop, Network as SyncNetwork,
-    PeerEventProvider, PeerId, SyncError, DEFAULT_MAX_SYNC_DEPTH,
+    PeerEventProvider, PeerId, SyncError,
 };

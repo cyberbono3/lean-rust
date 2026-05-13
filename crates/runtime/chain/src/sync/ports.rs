@@ -1,20 +1,34 @@
 //! Port traits consumed by the sync [`Loop`](super::Loop).
 //!
-//! Declared here per Decision 7 (Dependency Inversion): impls live in
-//! the `node` crate (libp2p-backed) and the `chain::Service` adapter
-//! provided in this crate. The sync module compiles with zero `libp2p`
-//! exposure on its dependency graph.
+//! Following the dependency-inversion pattern: this module declares
+//! the traits, and adapters in the `node` crate (libp2p-backed) and
+//! the [`crate::Service`] adapter implement them. The sync module
+//! compiles with zero `libp2p` exposure on its dependency graph.
+//!
+//! # Trait bounds
+//!
+//! Each trait carries `Send + Sync + 'static` because [`Loop`] holds
+//! its ports as `Arc<dyn Trait>` and shares them across spawned tasks.
+//!
+//! # Cancellation
+//!
+//! All async trait methods are expected to be cancellation-safe by
+//! drop: if the caller drops the returned future before completion,
+//! the impl must abort any in-flight transport request or storage
+//! read without corrupting shared state. Impls that cannot honour
+//! this contract MUST document the deviation per method.
 
 use async_trait::async_trait;
+use engine::BlockImportResult;
 use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use protocol::SignedBlock;
 use tokio::sync::mpsc;
 use types::Bytes32;
 
 use crate::chain::ChainError;
-use engine::BlockImportResult;
 
-use super::error::{PeerId, SyncError};
+use super::error::SyncError;
+use super::peer_id::PeerId;
 
 /// Narrow chain-facing surface required by the sync loop.
 ///
@@ -32,20 +46,20 @@ pub trait Chain: Send + Sync + 'static {
     /// Reports whether `root` is already known to local storage.
     async fn has_block(&self, root: Bytes32) -> Result<bool, ChainError>;
 
-    /// Imports `signed` through the engine.
-    async fn import_block(&self, signed: SignedBlock) -> Result<BlockImportResult, ChainError>;
+    /// Imports `block` through the engine.
+    async fn import_block(&self, block: SignedBlock) -> Result<BlockImportResult, ChainError>;
 }
 
 /// Outbound peer RPC surface required by the sync loop.
 ///
-/// Implemented by the `node`-level libp2p adapter (Issue #37).
+/// Implemented by the `node`-level libp2p adapter.
 #[async_trait]
 pub trait Network: Send + Sync + 'static {
     /// Sends an outbound `Status` to `peer` and returns the peer's reply.
     ///
     /// # Errors
     /// Transport / decode failures surface as [`SyncError::Network`].
-    async fn send_status(&self, peer: &PeerId, local: Status) -> Result<Status, SyncError>;
+    async fn send_status(&self, peer: &PeerId, local_status: Status) -> Result<Status, SyncError>;
 
     /// Sends an outbound `BlocksByRoot` request to `peer`.
     ///
@@ -54,7 +68,7 @@ pub trait Network: Send + Sync + 'static {
     async fn request_blocks_by_root(
         &self,
         peer: &PeerId,
-        req: BlocksByRootRequest,
+        request: BlocksByRootRequest,
     ) -> Result<BlocksByRootResponse, SyncError>;
 }
 

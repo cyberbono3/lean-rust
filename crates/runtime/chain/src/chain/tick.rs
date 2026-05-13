@@ -20,7 +20,7 @@ const TICK_PERIOD: Duration = Duration::from_secs(config::SECONDS_PER_INTERVAL);
 
 /// Drives `engine.tick_interval(false)` once per [`TICK_PERIOD`] until
 /// `cancel` fires. `has_proposal` is hard-coded `false`; the duties
-/// service (#30) flips it once block production lands.
+/// service will flip it once block production lands.
 #[instrument(level = "trace", name = "chain.tick_loop", skip_all)]
 pub(super) async fn run_tick_loop(
     engine: Engine,

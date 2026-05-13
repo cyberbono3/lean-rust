@@ -241,12 +241,14 @@ async fn drive_once(
         chain.clone() as Arc<dyn Chain>,
         network.clone() as Arc<dyn Network>,
         peers.clone() as Arc<dyn PeerEventProvider>,
-    )
-    .unwrap();
+    );
     lp.start().await.unwrap();
 
     let sender = peers.sender();
-    sender.send(PeerId::new("peer-a")).await.unwrap();
+    sender
+        .send(PeerId::new("peer-a").expect("non-empty test peer id"))
+        .await
+        .unwrap();
 
     let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
     while tokio::time::Instant::now() < deadline {
@@ -418,7 +420,7 @@ async fn sync_caps_walk_at_max_sync_depth() {
 
     let peers = ChannelPeers::new();
     drive_once(
-        Config { max_sync_depth: 3 },
+        Config::try_from(3usize).expect("3 is non-zero"),
         chain.clone(),
         network.clone(),
         peers,
@@ -463,11 +465,14 @@ async fn peer_network_failure_aborts_peer_sync_not_loop() {
         chain.clone() as Arc<dyn Chain>,
         network.clone() as Arc<dyn Network>,
         peers.clone() as Arc<dyn PeerEventProvider>,
-    )
-    .unwrap();
+    );
     lp.start().await.unwrap();
 
-    peers.sender().send(PeerId::new("peer-x")).await.unwrap();
+    peers
+        .sender()
+        .send(PeerId::new("peer-x").expect("non-empty test peer id"))
+        .await
+        .unwrap();
 
     let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
     while tokio::time::Instant::now() < deadline {

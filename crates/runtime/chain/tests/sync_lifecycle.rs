@@ -17,9 +17,7 @@ use engine::BlockImportResult;
 use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use parking_lot::Mutex;
 use protocol::SignedBlock;
-use runtime_chain::sync::{
-    Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError, DEFAULT_MAX_SYNC_DEPTH,
-};
+use runtime_chain::sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
 use runtime_chain::ChainError;
 use runtime_core::Service as _;
 use static_assertions::assert_impl_all;
@@ -98,34 +96,28 @@ fn build_noop_loop() -> Loop {
         Arc::new(NoopNetwork),
         peers,
     )
-    .expect("default config validates")
 }
 
 // ---- Config / construction ------------------------------------------------
 
 #[test]
-fn default_config_is_valid() {
-    assert!(Config::default().validate().is_ok());
-    assert_eq!(Config::default().max_sync_depth, DEFAULT_MAX_SYNC_DEPTH);
+fn default_config_uses_default_max_sync_depth() {
+    assert_eq!(
+        Config::default().max_sync_depth,
+        Config::DEFAULT_MAX_SYNC_DEPTH
+    );
 }
 
 #[test]
-fn config_rejects_zero_max_sync_depth() {
-    let err = Config { max_sync_depth: 0 }.validate().unwrap_err();
+fn config_try_from_rejects_zero_max_sync_depth() {
+    let err = Config::try_from(0usize).unwrap_err();
     assert!(matches!(err, SyncError::InvalidMaxSyncDepth));
 }
 
 #[test]
-fn new_loop_rejects_invalid_config() {
-    let (peers, _) = ScriptedPeers::new();
-    let err = Loop::new(
-        Config { max_sync_depth: 0 },
-        Arc::new(NoopChain),
-        Arc::new(NoopNetwork),
-        peers,
-    )
-    .unwrap_err();
-    assert!(matches!(err, SyncError::InvalidMaxSyncDepth));
+fn config_try_from_accepts_non_zero_max_sync_depth() {
+    let cfg = Config::try_from(7usize).expect("7 is non-zero");
+    assert_eq!(cfg.max_sync_depth.get(), 7);
 }
 
 // ---- Lifecycle ------------------------------------------------------------
