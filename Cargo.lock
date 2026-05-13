@@ -1550,6 +1550,7 @@ dependencies = [
  "config",
  "engine",
  "forkchoice",
+ "networking",
  "parking_lot",
  "protocol",
  "runtime-core",

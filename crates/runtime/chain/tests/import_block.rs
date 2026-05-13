@@ -104,7 +104,7 @@ async fn accepted_block_persists_to_storage() {
     assert_eq!(block_root, root);
     assert_eq!(head_root, engine.head());
 
-    // AC #2 — block, state, and head all persisted.
+    // Block, state, and head all persisted.
     assert!(store.has_block(&root).unwrap());
     let saved_block = store.load_block(&root).unwrap().unwrap();
     assert_eq!(saved_block.message.slot, Slot::ONE);
@@ -157,7 +157,7 @@ async fn missing_parent_surfaces_outcome_without_persist() {
         outcome,
         BlockImportResult::MissingParent { parent_root, .. } if parent_root == bogus_parent
     ));
-    // AC #3 — no storage writes; service did not loop or retry.
+    // No storage writes; service did not loop or retry.
     assert_eq!(store.save_block_calls.load(Ordering::SeqCst), 0);
     assert_eq!(store.save_state_calls.load(Ordering::SeqCst), 0);
     assert_eq!(store.save_head_calls.load(Ordering::SeqCst), 0);
