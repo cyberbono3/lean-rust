@@ -1,5 +1,6 @@
 //! Error type for the chain [`Service`](super::Service).
 
+use engine::EngineError;
 use thiserror::Error;
 use types::Bytes32;
 
@@ -7,8 +8,9 @@ use types::Bytes32;
 ///
 /// Logical import outcomes (`Accepted` / `DuplicateBlock` / `MissingParent`
 /// / `Rejected`) are *not* errors — they flow through the import-result
-/// sum types. `ChainError` is reserved for storage failures and
-/// engine-state invariant violations.
+/// sum types. `ChainError` is reserved for storage failures, engine-state
+/// invariant violations, and production-path failures (where the engine
+/// surfaces `Result<_, EngineError>` directly).
 ///
 /// Forkchoice tick failures are deliberately *not* part of this enum: the
 /// tick loop logs and continues (see [`super::tick::run_tick_loop`]). If
@@ -29,4 +31,10 @@ pub enum ChainError {
         /// Root of the block whose post-state could not be re-fetched.
         block_root: Bytes32,
     },
+
+    /// The engine refused a `produce_block` / `produce_attestation_vote`
+    /// call. Surfaces the underlying [`EngineError`] (forkchoice or
+    /// state-transition) — duties callers warn-log and continue.
+    #[error("engine: {0}")]
+    Engine(#[from] EngineError),
 }

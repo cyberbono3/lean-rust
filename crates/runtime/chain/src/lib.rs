@@ -3,26 +3,23 @@
 //! # Scope
 //!
 //! - [`chain::Service`] — wraps [`engine::Engine`] + [`storage::Store`],
-//!   exposes async `import_block` / `import_attestation`, and drives the
+//!   exposes async `import_block` / `import_attestation` /
+//!   `produce_block` / `produce_attestation`, and drives the
 //!   forkchoice tick loop on a `tokio` background task.
-//! - [`chain::ChainSnapshot`] — projection of engine state for hot-read
-//!   callers (`runtime/api`, `runtime/p2p`).
-//! - [`chain::ChainError`] — infrastructure failures (storage, engine
-//!   tick); logical import outcomes stay in the engine's sum types.
-//! - [`sync::Loop`] — peer-driven `BlocksByRoot` backfill orchestrator.
-//!   Declares the [`sync::Chain`], [`sync::Network`], and
-//!   [`sync::PeerEventProvider`] port traits (Decision 7); the chain
-//!   port is implemented for [`Service`] in this crate.
+//! - [`chain::ChainSnapshot`] — projection of engine state for
+//!   hot-read callers (`runtime/api`, `runtime/p2p`).
+//! - [`chain::ChainError`] — infrastructure failures (storage,
+//!   engine invariant violations, engine forkchoice / state-
+//!   transition errors); logical import outcomes stay in the engine's
+//!   sum types.
 //!
-//! The duties service builds on top of this crate.
+//! The sync backfill loop lives in the sibling `runtime-sync` crate;
+//! the proposer / attester scheduler lives in `runtime-duties`. Each
+//! drives this crate's [`Service`] through a narrow async port whose
+//! adapter `impl` lives in the consumer crate (orphan rule).
 
 #![forbid(unsafe_code)]
 
 pub mod chain;
-pub mod sync;
 
 pub use chain::{ChainError, ChainSnapshot, Service};
-pub use sync::{
-    Chain as SyncChain, Config as SyncConfig, Loop as SyncLoop, Network as SyncNetwork,
-    PeerEventProvider, PeerId, SyncError,
-};

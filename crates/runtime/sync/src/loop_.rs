@@ -25,10 +25,10 @@ use tokio_util::task::TaskTracker;
 use tracing::{debug, info, instrument, warn, Instrument, Span};
 use types::Bytes32;
 
-use super::config::Config;
-use super::error::SyncError;
-use super::peer_id::PeerId;
-use super::ports::{Chain, Network, PeerEventProvider};
+use crate::config::Config;
+use crate::error::SyncError;
+use crate::peer_id::PeerId;
+use crate::ports::{Chain, Network, PeerEventProvider};
 
 /// Handle to the running watch task: the spawned `JoinHandle`, the
 /// `TaskTracker` that owns each per-peer `on_connect` task, and the

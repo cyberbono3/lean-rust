@@ -1,8 +1,8 @@
-//! Sync [`Loop`](super::Loop) tunables.
+//! Sync [`Loop`](crate::Loop) tunables.
 
 use core::num::NonZeroUsize;
 
-use super::error::SyncError;
+use crate::error::SyncError;
 
 /// Builds a [`NonZeroUsize`] from a literal at compile time; panics if
 /// the input is zero. Used to define non-zero associated constants
@@ -15,7 +15,7 @@ const fn nz(n: usize) -> NonZeroUsize {
     }
 }
 
-/// Type-validated configuration for the sync [`Loop`](super::Loop).
+/// Type-validated configuration for the sync [`Loop`](crate::Loop).
 ///
 /// Marked `#[non_exhaustive]` so additional fields can be introduced
 /// without breaking downstream callers; construct via [`Config::new`],
@@ -25,12 +25,12 @@ const fn nz(n: usize) -> NonZeroUsize {
 /// # Examples
 /// ```
 /// use core::num::NonZeroUsize;
-/// use runtime_chain::SyncConfig;
+/// use runtime_sync::Config;
 ///
-/// let cfg = SyncConfig::try_from(32usize).unwrap();
+/// let cfg = Config::try_from(32usize).unwrap();
 /// assert_eq!(cfg.max_sync_depth.get(), 32);
 ///
-/// let deeper = SyncConfig::default()
+/// let deeper = Config::default()
 ///     .with_max_sync_depth(NonZeroUsize::new(128).unwrap());
 /// assert_eq!(deeper.max_sync_depth.get(), 128);
 /// ```

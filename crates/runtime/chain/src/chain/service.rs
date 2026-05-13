@@ -15,17 +15,16 @@ use async_trait::async_trait;
 use engine::{AttestationImportResult, BlockImportResult, Engine};
 use networking::Status;
 use parking_lot::{Mutex, RwLock};
-use protocol::{Checkpoint, SignedBlock, SignedVote, Slot};
+use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
 use storage::HeadInfo;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::instrument;
-use types::Bytes32;
+use tracing::{instrument, warn};
+use types::{Bytes32, Bytes4000};
 
 use super::cache::ChainSnapshot;
 use super::error::ChainError;
 use super::tick;
-use crate::sync;
 
 /// Handle to the running tick task: the spawned `JoinHandle` and the
 /// `CancellationToken` that triggers its loop exit. Held as
@@ -127,6 +126,82 @@ impl Service {
             self.refresh_snapshot();
         }
         Ok(outcome)
+    }
+
+    /// Builds one locally authored block via [`Engine::produce_block`],
+    /// wraps it as a [`SignedBlock`] with a zero-filled signature
+    /// placeholder, and persists block + post-state + head to storage.
+    ///
+    /// The engine has already tracked the produced block (its `track_block`
+    /// step inside `produce_block`); persistence mirrors the
+    /// [`Self::import_block`] sweep so storage stays consistent with
+    /// engine state.
+    ///
+    /// # Errors
+    /// - [`ChainError::Engine`] if [`Engine::produce_block`] rejects the
+    ///   request (unauthorized proposer, missing head state, etc.).
+    /// - [`ChainError::Storage`] / [`ChainError::PostStateMissing`] from
+    ///   the shared persist sweep on the same conditions as
+    ///   [`Self::import_block`].
+    #[instrument(level = "debug", skip_all, fields(slot = slot.get(), validator = validator.get()), err)]
+    pub async fn produce_block(
+        &self,
+        slot: Slot,
+        validator: ValidatorIndex,
+    ) -> Result<SignedBlock, ChainError> {
+        let produced = self.engine.produce_block(slot, validator)?;
+        let signed = SignedBlock {
+            message: produced.block,
+            signature: Bytes4000::new([0; 4000]),
+        };
+        let head_root = self.engine.head();
+        self.persist_accepted(produced.root, head_root, signed.clone())?;
+        self.refresh_snapshot();
+        Ok(signed)
+    }
+
+    /// Builds one locally authored attestation via
+    /// [`Engine::produce_attestation_vote`], wraps it as a [`SignedVote`]
+    /// with a zero-filled signature placeholder, and re-imports the vote
+    /// locally so it lands in the engine's `latest_known_votes` pool.
+    ///
+    /// The local re-import is load-bearing: without it, this validator's
+    /// own attestations only reach peers via gossip, and the next produced
+    /// block would omit them — quorum on a small devnet can stall. Mirror
+    /// of the upstream Go fix at `lean-go/runtime/chain/service.go`
+    /// (`PR105 Phase 8`).
+    ///
+    /// # Errors
+    /// [`ChainError::Engine`] if [`Engine::produce_attestation_vote`]
+    /// rejects the request.
+    #[instrument(level = "debug", skip_all, fields(slot = slot.get(), validator = validator.get()), err)]
+    pub async fn produce_attestation(
+        &self,
+        slot: Slot,
+        validator: ValidatorIndex,
+    ) -> Result<SignedVote, ChainError> {
+        let produced = self.engine.produce_attestation_vote(slot)?;
+        let signed = SignedVote {
+            validator_id: validator,
+            message: produced.vote,
+            signature: Bytes4000::new([0; 4000]),
+        };
+        // Best-effort re-import: when `latest_justified` is still the
+        // zero-sentinel (e.g. fresh anchor before the first justified
+        // checkpoint), the produced vote's source.root is unresolvable
+        // and the engine returns `Rejected`. lean-go behaves the same and
+        // warn-logs; we mirror that and continue.
+        let outcome = self.engine.import_attestation(signed.clone());
+        if matches!(outcome, AttestationImportResult::Rejected { .. }) {
+            warn!(
+                ?outcome,
+                slot = slot.get(),
+                validator = validator.get(),
+                "own-attestation re-import rejected (vote still propagates to peers)",
+            );
+        }
+        self.refresh_snapshot();
+        Ok(signed)
     }
 
     /// Returns the local node's current [`Status`] for the peer-handshake.
@@ -262,20 +337,8 @@ impl runtime_core::Service for Service {
     }
 }
 
-/// Adapter that lets the sync [`Loop`](crate::sync::Loop) drive this
-/// service through the [`sync::Chain`] port. The trait is satisfied via
-/// the existing public surface — no extra locking.
-#[async_trait]
-impl sync::Chain for Service {
-    async fn local_status(&self) -> Result<Status, ChainError> {
-        Ok(Service::local_status(self))
-    }
-
-    async fn has_block(&self, root: Bytes32) -> Result<bool, ChainError> {
-        Service::has_block(self, &root)
-    }
-
-    async fn import_block(&self, signed: SignedBlock) -> Result<BlockImportResult, ChainError> {
-        Service::import_block(self, signed).await
-    }
-}
+// Adapter `impl` blocks for the Tier-6 services that drive this
+// chain Service live in the consuming crates (orphan rule: each
+// trait is defined in the same crate as its adapter):
+//   - `runtime-sync::chain_adapter`    impl sync::Chain for Service
+//   - `runtime-duties::chain_adapter`  impl duties::Chain for Service
