@@ -1,0 +1,33 @@
+[package]
+name          = "runtime-sync"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Sync service: peer-driven BlocksByRoot backfill loop (Tier 6)."
+
+[lints]
+workspace = true
+
+[dependencies]
+runtime-core  = { path = "../core" }
+runtime-chain = { path = "../chain" }
+networking    = { path = "../../networking" }
+engine        = { path = "../../engine" }
+protocol      = { path = "../../protocol" }
+types         = { path = "../../types" }
+tokio         = { workspace = true }
+tokio-util    = { workspace = true }
+async-trait   = { workspace = true }
+tracing       = { workspace = true }
+parking_lot   = { workspace = true }
+thiserror     = { workspace = true }
+anyhow        = { workspace = true }
+
+[dev-dependencies]
+engine            = { path = "../../engine", features = ["test-fixtures"] }
+storage           = { path = "../../storage" }
+ssz               = { path = "../../ssz" }
+static_assertions = { workspace = true }
+tokio             = { workspace = true, features = ["test-util"] }

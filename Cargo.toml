@@ -12,6 +12,8 @@ members = [
     "crates/networking",
     "crates/runtime/core",
     "crates/runtime/chain",
+    "crates/runtime/sync",
+    "crates/runtime/duties",
     "crates/runtime/p2p",
     "crates/runtime/api",
     "crates/node",

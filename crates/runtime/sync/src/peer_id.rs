@@ -1,6 +1,6 @@
 //! Opaque [`PeerId`] newtype for the sync module.
 
-use super::error::SyncError;
+use crate::error::SyncError;
 
 /// Opaque peer identifier — guaranteed non-empty.
 ///

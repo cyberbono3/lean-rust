@@ -25,10 +25,10 @@ use protocol::SignedBlock;
 use tokio::sync::mpsc;
 use types::Bytes32;
 
-use crate::chain::ChainError;
+use runtime_chain::ChainError;
 
-use super::error::SyncError;
-use super::peer_id::PeerId;
+use crate::error::SyncError;
+use crate::peer_id::PeerId;
 
 /// Narrow chain-facing surface required by the sync loop.
 ///

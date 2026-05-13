@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::chain::ChainError;
+use runtime_chain::ChainError;
 
 /// Failures raised by the sync module.
 ///

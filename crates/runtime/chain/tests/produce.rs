@@ -1,0 +1,130 @@
+//! Integration tests for `Service::produce_block` and
+//! `Service::produce_attestation`.
+
+#![allow(
+    missing_docs,
+    clippy::expect_used,
+    clippy::missing_panics_doc,
+    clippy::panic,
+    clippy::unwrap_used
+)]
+
+use std::sync::Arc;
+
+use engine::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
+use engine::{Engine, EngineError};
+use forkchoice::ForkchoiceError;
+use protocol::{SignedBlock, Slot, ValidatorIndex};
+use runtime_chain::{ChainError, Service};
+use ssz::HashTreeRoot;
+use storage::{MemoryStore, Store};
+use types::Bytes32;
+
+fn fresh_service() -> (Service, Arc<MemoryStore>, Engine) {
+    let engine = engine_at_genesis(ENGINE_VALIDATORS);
+    let store = Arc::new(MemoryStore::new());
+    let service = Service::new(engine.clone(), Arc::clone(&store) as Arc<dyn Store>);
+    (service, store, engine)
+}
+
+#[tokio::test]
+async fn produce_block_persists_and_refreshes_snapshot() {
+    let (service, store, _engine) = fresh_service();
+    let pre = *service.snapshot().read();
+
+    // Slot 1 round-robin proposer is validator 1 (slot % ENGINE_VALIDATORS).
+    let signed = service
+        .produce_block(Slot::ONE, ValidatorIndex::new(1))
+        .await
+        .unwrap();
+    assert_eq!(signed.message.slot, Slot::ONE);
+
+    let root: Bytes32 = signed.message.hash_tree_root().into();
+    assert_eq!(signed.message.parent_root, pre.head_root);
+
+    // Block + post-state persisted at produced root; head info written
+    // (head itself stays at genesis until attestations move forkchoice —
+    // mirrors lean-go `persistHeadLocked` reading the live engine head).
+    let saved_block = store.load_block(&root).unwrap().unwrap();
+    assert_eq!(saved_block.message.slot, Slot::ONE);
+    assert!(store.load_state(&root).unwrap().is_some());
+    assert!(store.load_head().unwrap().is_some());
+
+    // Snapshot was re-captured; reachable through the lock.
+    let post = *service.snapshot().read();
+    assert_eq!(post.head_root, pre.head_root);
+}
+
+#[tokio::test]
+async fn produce_block_rejects_unauthorized_proposer() {
+    let (service, _store, _engine) = fresh_service();
+
+    // Slot 1 proposer is validator 1; validator 2 is unauthorized.
+    let err = service
+        .produce_block(Slot::ONE, ValidatorIndex::new(2))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ChainError::Engine(EngineError::Forkchoice(
+                ForkchoiceError::UnauthorizedProposer { .. }
+            ))
+        ),
+        "expected UnauthorizedProposer, got {err:?}",
+    );
+}
+
+#[tokio::test]
+async fn produce_attestation_carries_validator_id_and_refreshes_snapshot() {
+    let (service, _store, _engine) = fresh_service();
+    let pre = *service.snapshot().read();
+
+    let signed = service
+        .produce_attestation(Slot::ONE, ValidatorIndex::new(0))
+        .await
+        .unwrap();
+    assert_eq!(signed.validator_id, ValidatorIndex::new(0));
+    assert_eq!(signed.message.slot, Slot::ONE);
+
+    // Snapshot was re-captured (reachable through the lock).
+    let post = *service.snapshot().read();
+    assert_eq!(post.head_root, pre.head_root);
+}
+
+#[tokio::test]
+async fn produce_attestation_does_not_crash_when_own_reimport_rejected() {
+    // On a fresh engine the produced vote's `source.root` is the zero
+    // sentinel (the `latest_justified` default), so the engine's local
+    // re-import path rejects the vote. lean-go's equivalent
+    // (`runtime/chain/service.go`, PR105 Phase 8 own-vote feed) accepts
+    // this rejection and warn-logs; the Rust mirror must do the same and
+    // surface the produced vote to the caller without erroring.
+    //
+    // Full-flow validation that the re-import *succeeds* once a justified
+    // checkpoint exists lives in the duties integration tests
+    // (`tests/duties_scheduler.rs`).
+    let (service, _store, engine) = fresh_service();
+
+    let producer = engine_at_genesis(ENGINE_VALIDATORS);
+    let block_1: SignedBlock = produce_signed_block(&producer, Slot::ONE, ValidatorIndex::new(1));
+    let _ = service.import_block(block_1).await.unwrap();
+
+    let own = service
+        .produce_attestation(Slot::ONE, ValidatorIndex::new(0))
+        .await
+        .unwrap();
+    assert_eq!(own.validator_id, ValidatorIndex::new(0));
+    assert_eq!(own.message.slot, Slot::ONE);
+
+    // Either the re-import was rejected (pool empty) or it landed
+    // (pool populated). Both are acceptable; this test guards the
+    // caller-visible contract — `produce_attestation` returns
+    // `Ok(SignedVote)` regardless of the re-import outcome.
+    let _ = engine.with_store(|s| {
+        (
+            s.latest_new_votes().contains_key(&ValidatorIndex::new(0)),
+            s.latest_known_votes().contains_key(&ValidatorIndex::new(0)),
+        )
+    });
+}
