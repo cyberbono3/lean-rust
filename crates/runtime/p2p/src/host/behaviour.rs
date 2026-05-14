@@ -27,8 +27,8 @@ use networking::{
 use crate::error::{HostError, HostResult};
 use crate::options::AgentVersion;
 
-mod codec;
-pub(crate) use codec::SszSnappyCodec;
+pub(crate) mod codec;
+pub(crate) use codec::{RpcRequest, RpcResponse, SszSnappyCodec};
 
 /// Application-specific identify protocol-version string advertised at
 /// the libp2p identify handshake.

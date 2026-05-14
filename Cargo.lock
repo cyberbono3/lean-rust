@@ -3436,6 +3436,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "types",
 ]
 
 [[package]]

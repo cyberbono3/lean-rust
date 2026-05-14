@@ -16,6 +16,7 @@ networking        = { path = "../../networking" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }
 ssz               = { path = "../../ssz" }
+types             = { path = "../../types" }
 tokio             = { workspace = true }
 tokio-util        = { workspace = true }
 async-trait       = { workspace = true }
