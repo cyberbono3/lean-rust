@@ -13,25 +13,23 @@ use tracing::{debug, warn};
 use super::{RpcProvider, RpcResponse};
 use crate::host::behaviour::DevnetBehaviour;
 
-/// Pure helper: looks up each requested root via `provider` and folds
-/// the present blocks into a [`BlocksByRootResponse`]. Unknown roots
-/// are dropped silently — the response is empty when every root is
-/// missing.
-///
-/// The `BlocksByRootResponse::new` constructor enforces the
-/// [`networking::MAX_REQUEST_BLOCKS`] cap. The request side is
-/// independently capped at SSZ-decode time, so the cap is never
-/// exceeded here in practice; on the unreachable error path we surface
-/// a warning and return an empty response.
+/// Pure helper backing [`on_inbound`]. See the module-level doc for the
+/// drop-unknown-roots contract; this function holds no side effects
+/// beyond the provider lookups.
 pub(crate) fn build_response(
     request: &BlocksByRootRequest,
     provider: &dyn RpcProvider,
 ) -> BlocksByRootResponse {
-    let blocks: Vec<_> = request
+    let blocks = request
         .roots()
         .iter()
-        .filter_map(|root| provider.get_block_by_root(root))
-        .collect();
+        .filter_map(|root| provider.get_block_by_root(root));
+    // The `BlocksByRootResponse::new` constructor enforces the
+    // `networking::MAX_REQUEST_BLOCKS` cap. The request side is
+    // independently capped at SSZ-decode time and `filter_map` only
+    // ever shrinks the iterator, so the cap is never exceeded here in
+    // practice; the warn-and-default branch is defensive belt-and-
+    // suspenders for a future invariant change.
     BlocksByRootResponse::new(blocks).unwrap_or_else(|err| {
         warn!(%err, "blocks_by_root response build failed; sending empty");
         BlocksByRootResponse::default()
@@ -56,7 +54,7 @@ pub(crate) fn on_inbound(
     );
     let _ = swarm
         .behaviour_mut()
-        .request_response
+        .blocks_rr
         .send_response(channel, RpcResponse::BlocksByRoot(response));
 }
 
@@ -89,39 +87,28 @@ mod tests {
         Bytes32::new([byte; 32])
     }
 
-    #[test]
-    fn returns_known_blocks() {
-        let mut blocks = HashMap::new();
-        blocks.insert(root(0x11), SignedBlock::default());
-        blocks.insert(root(0x22), SignedBlock::default());
-        let provider = MapProvider { blocks };
-
-        let request = BlocksByRootRequest::new(vec![root(0x11), root(0x22)]).unwrap();
-        let response = build_response(&request, &provider);
-
-        assert_eq!(response.blocks().len(), 2);
+    fn provider_with(known: &[u8]) -> MapProvider {
+        MapProvider {
+            blocks: known
+                .iter()
+                .map(|&b| (root(b), SignedBlock::default()))
+                .collect(),
+        }
     }
 
     #[test]
-    fn unknown_roots_yield_empty_response() {
-        let provider = MapProvider {
-            blocks: HashMap::new(),
-        };
-        let request = BlocksByRootRequest::new(vec![root(0x11), root(0x22), root(0x33)]).unwrap();
-        let response = build_response(&request, &provider);
-
-        assert!(response.blocks().is_empty());
-    }
-
-    #[test]
-    fn mixed_known_and_unknown_returns_only_known() {
-        let mut blocks = HashMap::new();
-        blocks.insert(root(0x11), SignedBlock::default());
-        let provider = MapProvider { blocks };
-
-        let request = BlocksByRootRequest::new(vec![root(0x11), root(0xFF)]).unwrap();
-        let response = build_response(&request, &provider);
-
-        assert_eq!(response.blocks().len(), 1);
+    fn build_response_returns_only_known_roots() {
+        // (case, known_roots, requested_roots, expected_block_count)
+        let cases: &[(&str, &[u8], &[u8], usize)] = &[
+            ("all_known", &[0x11, 0x22], &[0x11, 0x22], 2),
+            ("none_known", &[], &[0x11, 0x22, 0x33], 0),
+            ("partial_overlap", &[0x11], &[0x11, 0xFF], 1),
+        ];
+        for &(case, known, requested, expected) in cases {
+            let provider = provider_with(known);
+            let request = BlocksByRootRequest::new(requested.iter().copied().map(root)).unwrap();
+            let response = build_response(&request, &provider);
+            assert_eq!(response.blocks().len(), expected, "case {case}");
+        }
     }
 }

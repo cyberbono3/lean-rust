@@ -88,6 +88,13 @@ enum State {
         host: Host,
         cancel: CancellationToken,
         join: JoinHandle<()>,
+        /// Actual multiaddr the listener bound to. Equal to the
+        /// configured listen address when a concrete port was provided,
+        /// or the OS-assigned port when the configured address used
+        /// `udp/0`. Surfaced via [`P2pService::bound_addr`] so callers
+        /// (notably the two-node integration tests) can dial the
+        /// service without knowing the port up front.
+        bound_addr: Multiaddr,
     },
     /// Lifecycle terminal: `stop` ran. `start` from this state would
     /// surface [`HostError::AlreadyStarted`] just like a double-start
@@ -155,6 +162,20 @@ impl P2pService {
         }
     }
 
+    /// Returns the multiaddr the listener bound to while the service is
+    /// `Running`. Equal to the configured listen address when a concrete
+    /// port was provided; equal to the OS-assigned address when the
+    /// configured address used `udp/0`. Outside the `Running` state the
+    /// listener does not exist (before `start`) or has been torn down
+    /// (after `stop`), so the method returns `None`.
+    #[must_use]
+    pub fn bound_addr(&self) -> Option<Multiaddr> {
+        match &*self.state.lock() {
+            State::Running { bound_addr, .. } => Some(bound_addr.clone()),
+            _ => None,
+        }
+    }
+
     fn take_idle(&self) -> HostResult<(HostOptions, Box<Swarm<DevnetBehaviour>>, Vec<Bootnode>)> {
         let mut guard = self.state.lock();
         match std::mem::replace(&mut *guard, State::Transitioning) {
@@ -172,8 +193,19 @@ impl P2pService {
         }
     }
 
-    fn install_running(&self, host: Host, cancel: CancellationToken, join: JoinHandle<()>) {
-        *self.state.lock() = State::Running { host, cancel, join };
+    fn install_running(
+        &self,
+        host: Host,
+        cancel: CancellationToken,
+        join: JoinHandle<()>,
+        bound_addr: Multiaddr,
+    ) {
+        *self.state.lock() = State::Running {
+            host,
+            cancel,
+            join,
+            bound_addr,
+        };
     }
 
     fn restore_idle(
@@ -192,7 +224,12 @@ impl P2pService {
     fn take_running(&self) -> Option<(CancellationToken, JoinHandle<()>, Host)> {
         let mut guard = self.state.lock();
         match std::mem::replace(&mut *guard, State::Transitioning) {
-            State::Running { host, cancel, join } => {
+            State::Running {
+                host,
+                cancel,
+                join,
+                bound_addr: _,
+            } => {
                 *guard = State::Stopped;
                 Some((cancel, join, host))
             }
@@ -223,20 +260,7 @@ impl Service for P2pService {
             }
         };
         info!(%bound_addr, "host listener up");
-
-        for bootnode in &bootnodes {
-            // Dial errors at this stage are non-fatal — peers may come
-            // up later; the swarm-poll task will receive and surface
-            // the eventual `OutgoingConnectionError`.
-            if let Err(err) = swarm.dial(bootnode.addr.clone()) {
-                warn!(
-                    peer = %bootnode.peer_id,
-                    addr = %bootnode.addr,
-                    %err,
-                    "bootnode dial dispatch failed",
-                );
-            }
-        }
+        dial_bootnodes(&mut swarm, &bootnodes);
 
         let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let (block_tx, block_rx) = mpsc::channel::<SignedBlock>(GOSSIP_CHANNEL_CAPACITY);
@@ -254,7 +278,7 @@ impl Service for P2pService {
 
         *self.block_rx.lock() = Some(BlockReceiver::new(block_rx));
         *self.vote_rx.lock() = Some(VoteReceiver::new(vote_rx));
-        self.install_running(host, cancel, join);
+        self.install_running(host, cancel, join, bound_addr);
         Ok(())
     }
 
@@ -291,10 +315,13 @@ impl Service for P2pService {
 
     async fn status(&self) -> anyhow::Result<()> {
         match &*self.state.lock() {
-            State::Running { join, .. } if join.is_finished() => {
-                Err(anyhow!("p2p swarm task exited unexpectedly"))
+            State::Running { join, .. } => {
+                if join.is_finished() {
+                    Err(anyhow!("p2p swarm task exited unexpectedly"))
+                } else {
+                    Ok(())
+                }
             }
-            State::Running { .. } => Ok(()),
             State::Idle { .. } => Err(anyhow!("p2p service not started")),
             State::Stopped => Err(anyhow!("p2p service stopped")),
             State::Transitioning => Err(anyhow!("p2p service mid-transition")),
@@ -307,7 +334,7 @@ impl Service for P2pService {
 async fn bind(swarm: &mut Swarm<DevnetBehaviour>, addr: Multiaddr) -> HostResult<Multiaddr> {
     let listener_id = swarm
         .listen_on(addr.clone())
-        .map_err(|err| bind_err(addr.clone(), err.to_string()))?;
+        .map_err(|err| bind_err(addr.clone(), err))?;
     let bind_deadline = sleep(BIND_DEADLINE);
     tokio::pin!(bind_deadline);
     loop {
@@ -328,12 +355,12 @@ async fn bind(swarm: &mut Swarm<DevnetBehaviour>, addr: Multiaddr) -> HostResult
                     SwarmEvent::ListenerClosed { listener_id: id, reason: Err(err), .. }
                         if id == listener_id =>
                     {
-                        return Err(bind_err(addr, err.to_string()));
+                        return Err(bind_err(addr, err));
                     }
                     SwarmEvent::ListenerError { listener_id: id, error }
                         if id == listener_id =>
                     {
-                        return Err(bind_err(addr, error.to_string()));
+                        return Err(bind_err(addr, error));
                     }
                     other => {
                         debug!(?other, "swarm event during bind handshake");
@@ -344,10 +371,36 @@ async fn bind(swarm: &mut Swarm<DevnetBehaviour>, addr: Multiaddr) -> HostResult
     }
 }
 
-fn bind_err(addr: Multiaddr, reason: impl Into<String>) -> HostError {
+fn bind_err(addr: Multiaddr, reason: impl std::fmt::Display) -> HostError {
     HostError::Bind {
         addr,
-        reason: reason.into(),
+        reason: reason.to_string(),
+    }
+}
+
+/// Registers each bootnode's `peer-id ↔ multiaddr` mapping and fires a
+/// best-effort dial.
+///
+/// Bootnode entries strip the trailing `/p2p/<peer-id>` component at
+/// parse time, so libp2p has no other way to learn the mapping until
+/// identify completes — which is too late for outbound RPC. We register
+/// the address up front so any subsequent
+/// `request_response::send_request(peer_id, _)` call that triggers an
+/// implicit dial can resolve the peer.
+///
+/// Dial dispatch errors are non-fatal: peers may come up later, and the
+/// swarm-poll task surfaces the eventual `OutgoingConnectionError`.
+fn dial_bootnodes(swarm: &mut Swarm<DevnetBehaviour>, bootnodes: &[Bootnode]) {
+    for bootnode in bootnodes {
+        swarm.add_peer_address(bootnode.peer_id, bootnode.addr.clone());
+        if let Err(err) = swarm.dial(bootnode.addr.clone()) {
+            warn!(
+                peer = %bootnode.peer_id,
+                addr = %bootnode.addr,
+                %err,
+                "bootnode dial dispatch failed",
+            );
+        }
     }
 }
 
@@ -422,10 +475,23 @@ async fn swarm_task(
                         let _ = reply.send(result);
                     }
                     Some(HostCommand::SendRequest { peer, request, reply }) => {
-                        let id = swarm
-                            .behaviour_mut()
-                            .request_response
-                            .send_request(&peer, request);
+                        // Route by variant: each protocol lives on its
+                        // own `request_response::Behaviour` instance so
+                        // multistream-select negotiates the correct
+                        // wire protocol. Only the `BlocksByRoot` flow
+                        // wires an oneshot reply today; `Status` is
+                        // fire-and-validate from `initiate_status_handshake`
+                        // and never reaches this command path.
+                        let id = match &request {
+                            RpcRequest::Status(_) => swarm
+                                .behaviour_mut()
+                                .status_rr
+                                .send_request(&peer, request),
+                            RpcRequest::BlocksByRoot(_) => swarm
+                                .behaviour_mut()
+                                .blocks_rr
+                                .send_request(&peer, request),
+                        };
                         outbound.insert(id, reply);
                     }
                 }
@@ -465,10 +531,13 @@ fn handle_swarm_event(
                 topic = %message.topic.as_str(),
                 "gossipsub message received",
             );
-            handler::route_gossipsub_message(&message, block_tx, vote_tx);
+            handler::route_gossipsub_message(&message_id, &message, block_tx, vote_tx);
         }
-        SwarmEvent::Behaviour(DevnetBehaviourEvent::RequestResponse(event)) => {
-            handle_rpc_event(event, swarm, outbound, provider);
+        SwarmEvent::Behaviour(DevnetBehaviourEvent::StatusRr(event)) => {
+            handle_status_rr_event(event, swarm, provider);
+        }
+        SwarmEvent::Behaviour(DevnetBehaviourEvent::BlocksRr(event)) => {
+            handle_blocks_rr_event(event, swarm, outbound, provider);
         }
         SwarmEvent::Behaviour(inner) => debug!(?inner, "behaviour event"),
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -503,14 +572,17 @@ fn initiate_status_handshake(
     let local = provider.local_status();
     let _ = swarm
         .behaviour_mut()
-        .request_response
+        .status_rr
         .send_request(&peer_id, RpcRequest::Status(local));
 }
 
-fn handle_rpc_event(
+/// Handles events from the [`Status`-protocol] `request_response::Behaviour`.
+/// Status is fire-and-validate: no oneshot caller awaits the response,
+/// so outbound failures are logged but never surfaced through the
+/// outbound table.
+fn handle_status_rr_event(
     event: request_response::Event<RpcRequest, RpcResponse>,
     swarm: &mut Swarm<DevnetBehaviour>,
-    outbound: &mut OutboundTable,
     provider: &dyn RpcProvider,
 ) {
     match event {
@@ -521,22 +593,59 @@ fn handle_rpc_event(
                 RpcRequest::Status(s) => {
                     status_handler::on_inbound(peer, &s, channel, swarm, provider);
                 }
+                RpcRequest::BlocksByRoot(_) => {
+                    log_wrong_variant(peer, "status", "blocks_by_root request");
+                }
+            },
+            request_response::Message::Response { response, .. } => match response {
+                RpcResponse::Status(s) => {
+                    status_handler::on_outbound_response(peer, &s, swarm, provider);
+                }
+                RpcResponse::BlocksByRoot(_) => {
+                    log_wrong_variant(peer, "status", "blocks_by_root response");
+                }
+            },
+        },
+        request_response::Event::OutboundFailure { peer, error, .. } => {
+            log_rpc_failure(peer, &error, "status", "outbound");
+        }
+        request_response::Event::InboundFailure { peer, error, .. } => {
+            log_rpc_failure(peer, &error, "status", "inbound");
+        }
+        request_response::Event::ResponseSent { .. } => {}
+    }
+}
+
+/// Handles events from the [`BlocksByRoot`-protocol] `request_response::Behaviour`.
+/// Outbound flows are paired with oneshot replies parked in
+/// [`OutboundTable`]; failures fail the matching oneshot.
+fn handle_blocks_rr_event(
+    event: request_response::Event<RpcRequest, RpcResponse>,
+    swarm: &mut Swarm<DevnetBehaviour>,
+    outbound: &mut OutboundTable,
+    provider: &dyn RpcProvider,
+) {
+    match event {
+        request_response::Event::Message { peer, message, .. } => match message {
+            request_response::Message::Request {
+                request, channel, ..
+            } => match request {
                 RpcRequest::BlocksByRoot(r) => {
                     blocks_handler::on_inbound(peer, &r, channel, swarm, provider);
+                }
+                RpcRequest::Status(_) => {
+                    log_wrong_variant(peer, "blocks_by_root", "status request");
                 }
             },
             request_response::Message::Response {
                 request_id,
                 response,
             } => match response {
-                RpcResponse::Status(s) => {
-                    status_handler::on_outbound_response(peer, &s, swarm, provider);
-                    // Status handshake is fire-and-validate; no caller
-                    // is awaiting an oneshot reply for it.
-                    let _ = request_id;
-                }
                 RpcResponse::BlocksByRoot(_) => {
                     outbound.fulfill(request_id, response);
+                }
+                RpcResponse::Status(_) => {
+                    log_wrong_variant(peer, "blocks_by_root", "status response");
                 }
             },
         },
@@ -546,14 +655,38 @@ fn handle_rpc_event(
             error,
             ..
         } => {
-            warn!(peer = %peer, %error, "rpc outbound failure");
+            log_rpc_failure(peer, &error, "blocks_by_root", "outbound");
             outbound.fail(request_id, error.to_string());
         }
         request_response::Event::InboundFailure { peer, error, .. } => {
-            warn!(peer = %peer, %error, "rpc inbound failure");
+            log_rpc_failure(peer, &error, "blocks_by_root", "inbound");
         }
         request_response::Event::ResponseSent { .. } => {}
     }
+}
+
+/// Logs that a peer routed an `RpcRequest` / `RpcResponse` variant onto
+/// the wrong `request_response::Behaviour`. Each behaviour negotiates
+/// exactly one protocol (`STATUS_PROTOCOL_V1` /
+/// `BLOCKS_BY_ROOT_PROTOCOL_V1`); seeing the other side's variant here
+/// means the peer's codec mapped the variant to the wrong stream
+/// protocol. We log and drop — libp2p surfaces an inbound failure to
+/// the peer via the unconsumed `ResponseChannel`.
+fn log_wrong_variant(peer: PeerId, on_protocol: &'static str, got: &'static str) {
+    warn!(peer = %peer, "unexpected {got} on {on_protocol} protocol");
+}
+
+/// Logs a `request_response` outbound / inbound failure with a uniform
+/// `"{protocol} rpc {direction} failure"` message, so log scraping is
+/// consistent across the two protocols. `direction` is either
+/// `"outbound"` or `"inbound"`.
+fn log_rpc_failure(
+    peer: PeerId,
+    error: &dyn std::fmt::Display,
+    protocol: &'static str,
+    direction: &'static str,
+) {
+    warn!(peer = %peer, %error, "{protocol} rpc {direction} failure");
 }
 
 // Compile-time witness that we wired the same peer-id channel both
@@ -609,5 +742,31 @@ mod tests {
         assert!(service.host().is_some());
         service.stop(CancellationToken::new()).await.unwrap();
         assert!(service.host().is_none());
+    }
+
+    #[tokio::test]
+    async fn bound_addr_reflects_running_lifecycle_and_resolves_port() {
+        use libp2p::multiaddr::Protocol;
+
+        let (_dir, service) = build_service();
+        assert!(service.bound_addr().is_none(), "none before start");
+
+        service.start().await.unwrap();
+        let bound = service.bound_addr().expect("some while running");
+
+        // `udp/0` in the request must resolve to a concrete OS-assigned
+        // port; the bound address must therefore expose a non-zero UDP
+        // port component.
+        let udp_port = bound.iter().find_map(|proto| match proto {
+            Protocol::Udp(port) => Some(port),
+            _ => None,
+        });
+        assert!(
+            udp_port.is_some_and(|p| p != 0),
+            "expected non-zero UDP port in bound addr, got {bound}",
+        );
+
+        service.stop(CancellationToken::new()).await.unwrap();
+        assert!(service.bound_addr().is_none(), "none after stop");
     }
 }
