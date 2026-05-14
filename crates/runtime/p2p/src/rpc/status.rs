@@ -21,11 +21,7 @@ use crate::host::behaviour::DevnetBehaviour;
 /// fork-digest); confirm against spec at review time.
 #[must_use]
 pub(crate) fn validate(local: &Status, peer: &Status) -> bool {
-    use std::cmp::Ordering;
-    match local.finalized.slot.cmp(&peer.finalized.slot) {
-        Ordering::Equal => local.finalized.root == peer.finalized.root,
-        Ordering::Less | Ordering::Greater => true,
-    }
+    local.finalized.slot != peer.finalized.slot || local.finalized.root == peer.finalized.root
 }
 
 /// Inbound `Status` request: respond with the local Status if the peer
@@ -38,21 +34,15 @@ pub(crate) fn on_inbound(
     provider: &dyn RpcProvider,
 ) {
     let local = provider.local_status();
-    if validate(&local, peer_status) {
-        let _ = swarm
-            .behaviour_mut()
-            .request_response
-            .send_response(channel, RpcResponse::Status(local));
-        debug!(peer = %peer, "status handshake ok (inbound)");
-    } else {
-        warn!(
-            peer = %peer,
-            ?local,
-            peer_status = ?peer_status,
-            "status mismatch on inbound request; disconnecting",
-        );
-        let _ = swarm.disconnect_peer_id(peer);
+    if !validate(&local, peer_status) {
+        disconnect_on_mismatch(peer, &local, peer_status, swarm, "inbound request");
+        return;
     }
+    let _ = swarm
+        .behaviour_mut()
+        .status_rr
+        .send_response(channel, RpcResponse::Status(local));
+    debug!(peer = %peer, "status handshake ok (inbound)");
 }
 
 /// Outbound `Status` response: validate the peer's Status and
@@ -65,17 +55,30 @@ pub(crate) fn on_outbound_response(
     provider: &dyn RpcProvider,
 ) {
     let local = provider.local_status();
-    if validate(&local, peer_status) {
-        debug!(peer = %peer, "status handshake ok (outbound)");
-    } else {
-        warn!(
-            peer = %peer,
-            ?local,
-            peer_status = ?peer_status,
-            "status mismatch on outbound response; disconnecting",
-        );
-        let _ = swarm.disconnect_peer_id(peer);
+    if !validate(&local, peer_status) {
+        disconnect_on_mismatch(peer, &local, peer_status, swarm, "outbound response");
+        return;
     }
+    debug!(peer = %peer, "status handshake ok (outbound)");
+}
+
+/// Logs the mismatch and tears down the peer connection. `direction`
+/// (`"inbound request"` or `"outbound response"`) names the half of
+/// the handshake that failed for forensic logs.
+fn disconnect_on_mismatch(
+    peer: PeerId,
+    local: &Status,
+    peer_status: &Status,
+    swarm: &mut Swarm<DevnetBehaviour>,
+    direction: &'static str,
+) {
+    warn!(
+        peer = %peer,
+        ?local,
+        peer_status = ?peer_status,
+        "status mismatch on {direction}; disconnecting",
+    );
+    let _ = swarm.disconnect_peer_id(peer);
 }
 
 #[cfg(test)]
@@ -96,36 +99,41 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_identical_status() {
-        let s = status(10, 0xAA, 20, 0xBB);
-        assert!(validate(&s, &s));
-    }
-
-    #[test]
-    fn validate_accepts_default() {
-        // Two NoOpRpcProvider peers both report Status::default();
-        // handshake must succeed so lifecycle tests don't disconnect.
-        assert!(validate(&Status::default(), &Status::default()));
-    }
-
-    #[test]
-    fn validate_rejects_same_slot_different_root() {
-        let local = status(10, 0xAA, 20, 0xCC);
-        let peer = status(10, 0xBB, 20, 0xDD);
-        assert!(!validate(&local, &peer));
-    }
-
-    #[test]
-    fn validate_accepts_peer_ahead() {
-        let local = status(10, 0xAA, 20, 0xCC);
-        let peer = status(15, 0xBB, 25, 0xDD);
-        assert!(validate(&local, &peer));
-    }
-
-    #[test]
-    fn validate_accepts_peer_behind() {
-        let local = status(20, 0xAA, 30, 0xCC);
-        let peer = status(10, 0xBB, 15, 0xDD);
-        assert!(validate(&local, &peer));
+    fn validate_table() {
+        // (case, local, peer, expected)
+        // Same finalized slot ⇒ roots must agree; different slot ⇒ accept.
+        // The `default` case is load-bearing: two NoOpRpcProvider peers
+        // both report Status::default(); lifecycle tests rely on the
+        // handshake succeeding so the connection is not torn down.
+        let cases = [
+            (
+                "identical",
+                status(10, 0xAA, 20, 0xBB),
+                status(10, 0xAA, 20, 0xBB),
+                true,
+            ),
+            ("default", Status::default(), Status::default(), true),
+            (
+                "same_slot_different_root",
+                status(10, 0xAA, 20, 0xCC),
+                status(10, 0xBB, 20, 0xDD),
+                false,
+            ),
+            (
+                "peer_ahead",
+                status(10, 0xAA, 20, 0xCC),
+                status(15, 0xBB, 25, 0xDD),
+                true,
+            ),
+            (
+                "peer_behind",
+                status(20, 0xAA, 30, 0xCC),
+                status(10, 0xBB, 15, 0xDD),
+                true,
+            ),
+        ];
+        for (case, local, peer, expected) in cases {
+            assert_eq!(validate(&local, &peer), expected, "case {case}");
+        }
     }
 }

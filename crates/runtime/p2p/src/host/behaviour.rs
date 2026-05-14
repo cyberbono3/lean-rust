@@ -1,13 +1,14 @@
 //! Composite [`libp2p::swarm::NetworkBehaviour`] for the devnet0 host.
 //!
-//! Combines gossipsub, `request_response` (for the `Status` and
-//! `BlocksByRoot` protocols), identify, and ping into a single typed
-//! behaviour. The gossipsub message-id function is wired to the
-//! deterministic 20-byte primitive in [`networking::compute_gossipsub_message_id`].
+//! Combines gossipsub, two `request_response` behaviours (one each for
+//! [`STATUS_PROTOCOL_V1`] and [`BLOCKS_BY_ROOT_PROTOCOL_V1`]), identify,
+//! and ping into a single typed behaviour. The gossipsub message-id
+//! function is wired to the deterministic 20-byte primitive in
+//! [`networking::compute_gossipsub_message_id`].
 //!
-//! Request/response handler logic lives outside this crate — the
-//! [`SszSnappyCodec`] stub below is a placeholder that returns
-//! "unsupported" until the real handler replaces it.
+//! Request/response handler logic lives outside this crate; the codec
+//! is implemented in [`codec::SszSnappyCodec`] and dispatched per
+//! protocol in [`crate::service`].
 
 use std::{cell::RefCell, time::Duration};
 
@@ -20,8 +21,8 @@ use libp2p::{
     StreamProtocol,
 };
 use networking::{
-    compute_gossipsub_message_id, BLOCKS_BY_ROOT_PROTOCOL_V1, MESSAGE_DOMAIN_INVALID_SNAPPY,
-    MESSAGE_DOMAIN_VALID_SNAPPY, STATUS_PROTOCOL_V1,
+    compute_gossipsub_message_id, ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1,
+    MESSAGE_DOMAIN_INVALID_SNAPPY, MESSAGE_DOMAIN_VALID_SNAPPY, STATUS_PROTOCOL_V1,
 };
 
 use crate::error::{HostError, HostResult};
@@ -32,17 +33,33 @@ pub(crate) use codec::{RpcRequest, RpcResponse, SszSnappyCodec};
 
 /// Application-specific identify protocol-version string advertised at
 /// the libp2p identify handshake.
-pub(crate) const IDENTIFY_PROTOCOL_VERSION: &str = "lean/0.1.0";
+const IDENTIFY_PROTOCOL_VERSION: &str = "lean/0.1.0";
+
+/// Gossipsub heartbeat interval. Drives mesh maintenance cadence; lower
+/// values shorten mesh-formation latency at the cost of more bookkeeping
+/// traffic. One second matches the devnet0 reference profile.
+const GOSSIPSUB_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Composite behaviour driven by the host swarm task.
 ///
 /// Field names double as gossipsub / `request_response` / identify / ping
 /// dispatch tags via the `NetworkBehaviour` derive macro — renaming a
 /// field renames the generated `DevnetBehaviourEvent` variant.
+///
+/// `Status` and `BlocksByRoot` are split across two
+/// [`request_response::Behaviour`] instances rather than colocated on
+/// one. Multistream-select picks a single protocol per outbound
+/// substream from the first matching entry in the proposing peer's
+/// protocol list; with one combined behaviour, a `BlocksByRoot` request
+/// would always negotiate onto the leading protocol (e.g. Status) and
+/// the codec would reject the variant. Separating them gives each
+/// request kind its own behaviour and therefore its own protocol
+/// negotiation path.
 #[derive(NetworkBehaviour)]
 pub(crate) struct DevnetBehaviour {
     pub(crate) gossipsub: gossipsub::Behaviour,
-    pub(crate) request_response: request_response::Behaviour<SszSnappyCodec>,
+    pub(crate) status_rr: request_response::Behaviour<SszSnappyCodec>,
+    pub(crate) blocks_rr: request_response::Behaviour<SszSnappyCodec>,
     pub(crate) identify: identify::Behaviour,
     pub(crate) ping: ping::Behaviour,
 }
@@ -56,39 +73,46 @@ impl DevnetBehaviour {
     ///   wholly internal).
     pub(crate) fn build(keypair: &Keypair, agent_version: &AgentVersion) -> HostResult<Self> {
         Ok(Self {
-            gossipsub: build_gossipsub()?,
-            request_response: build_request_response(),
-            identify: build_identify(keypair, agent_version),
+            gossipsub: Self::build_gossipsub()?,
+            status_rr: Self::build_request_response(STATUS_PROTOCOL_V1),
+            blocks_rr: Self::build_request_response(BLOCKS_BY_ROOT_PROTOCOL_V1),
+            identify: Self::build_identify(keypair, agent_version),
             ping: ping::Behaviour::new(ping::Config::new()),
         })
     }
-}
 
-fn build_identify(keypair: &Keypair, agent_version: &AgentVersion) -> identify::Behaviour {
-    identify::Behaviour::new(
-        identify::Config::new(IDENTIFY_PROTOCOL_VERSION.to_owned(), keypair.public())
-            .with_agent_version(agent_version.as_str().to_owned()),
-    )
-}
+    fn build_gossipsub() -> HostResult<gossipsub::Behaviour> {
+        // Devnet0 publishes unsigned messages; `Anonymous` authenticity
+        // pairs with the message-id function below to give
+        // deterministic 20-byte IDs derived purely from `(topic, payload)`.
+        let config = gossipsub::ConfigBuilder::default()
+            .validation_mode(gossipsub::ValidationMode::Anonymous)
+            .heartbeat_interval(GOSSIPSUB_HEARTBEAT_INTERVAL)
+            .message_id_fn(gossipsub_message_id)
+            .build()
+            .map_err(Self::gossipsub_init_err)?;
+        gossipsub::Behaviour::new(gossipsub::MessageAuthenticity::Anonymous, config)
+            .map_err(Self::gossipsub_init_err)
+    }
 
-fn build_gossipsub() -> HostResult<gossipsub::Behaviour> {
-    // Devnet0 publishes unsigned messages; `Anonymous` authenticity
-    // pairs with the message-id function below to give deterministic
-    // 20-byte IDs derived purely from `(topic, payload)`.
-    let config = gossipsub::ConfigBuilder::default()
-        .validation_mode(gossipsub::ValidationMode::Anonymous)
-        .heartbeat_interval(Duration::from_secs(1))
-        .message_id_fn(gossipsub_message_id)
-        .build()
-        .map_err(|err| HostError::GossipsubInit(err.to_string()))?;
-    gossipsub::Behaviour::new(gossipsub::MessageAuthenticity::Anonymous, config)
-        .map_err(|err| HostError::GossipsubInit(err.to_string()))
-}
+    fn build_identify(keypair: &Keypair, agent_version: &AgentVersion) -> identify::Behaviour {
+        identify::Behaviour::new(
+            identify::Config::new(IDENTIFY_PROTOCOL_VERSION.to_owned(), keypair.public())
+                .with_agent_version(agent_version.as_str().to_owned()),
+        )
+    }
 
-fn build_request_response() -> request_response::Behaviour<SszSnappyCodec> {
-    let protocols = [STATUS_PROTOCOL_V1, BLOCKS_BY_ROOT_PROTOCOL_V1]
-        .map(|p| (StreamProtocol::new(p.as_str()), ProtocolSupport::Full));
-    request_response::Behaviour::new(protocols, request_response::Config::default())
+    fn build_request_response(protocol: ProtocolId) -> request_response::Behaviour<SszSnappyCodec> {
+        let protocols = [(
+            StreamProtocol::new(protocol.as_str()),
+            ProtocolSupport::Full,
+        )];
+        request_response::Behaviour::new(protocols, request_response::Config::default())
+    }
+
+    fn gossipsub_init_err<E: std::fmt::Display>(err: E) -> HostError {
+        HostError::GossipsubInit(err.to_string())
+    }
 }
 
 /// Defensive upper bound on a single decompressed gossipsub payload. A
@@ -97,45 +121,93 @@ fn build_request_response() -> request_response::Behaviour<SszSnappyCodec> {
 const MAX_SNAPPY_DECOMPRESSED: usize = 16 * 1024 * 1024;
 
 thread_local! {
-    static SNAPPY_PROBE: RefCell<(snap::raw::Decoder, Vec<u8>)> =
-        RefCell::new((snap::raw::Decoder::new(), Vec::with_capacity(4096)));
+    /// Scratch buffer reused across [`is_valid_snappy`] calls. The
+    /// snappy `Decoder` itself is a zero-sized type (`snap::raw::Decoder`
+    /// holds no state), so only the output buffer is worth keeping
+    /// thread-local.
+    static SNAPPY_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(4096));
+
+    /// Single-slot inbound-routing cache. Populated by
+    /// [`gossipsub_message_id`] whenever it observes a valid snappy
+    /// payload, then consumed by
+    /// [`crate::gossip::handler::route_gossipsub_message`] via
+    /// [`take_decompressed_for`] to skip a second decompression on the
+    /// SSZ-decode path. Same-poll write/read on the swarm-poll task
+    /// guarantees hit for inbound messages; outbound publishes write
+    /// entries that get evicted on the next inbound. See module-level
+    /// note on libp2p call ordering.
+    static DECOMPRESSED_CACHE: RefCell<Option<(gossipsub::MessageId, Vec<u8>)>> =
+        const { RefCell::new(None) };
 }
 
-/// Reports whether `data` is a fully-decodable snappy frame. Reuses a
-/// thread-local decoder + scratch buffer to keep this call alloc-free
-/// on the gossipsub hot path.
-fn is_valid_snappy(data: &[u8]) -> bool {
-    let Ok(decompressed_len) = snap::raw::decompress_len(data) else {
-        return false;
-    };
+/// Reports whether `data` is a fully-decodable snappy frame, returning
+/// the decompressed length on success so the caller can read the bytes
+/// from the [`SNAPPY_SCRATCH`] thread-local. Reuses the scratch buffer
+/// to keep this call allocation-free on the gossipsub hot path (once
+/// the buffer has grown enough for the largest payload seen on this
+/// thread).
+fn is_valid_snappy(data: &[u8]) -> Option<usize> {
+    let decompressed_len = snap::raw::decompress_len(data).ok()?;
     if decompressed_len > MAX_SNAPPY_DECOMPRESSED {
-        return false;
+        return None;
     }
-    SNAPPY_PROBE.with(|cell| {
-        let (decoder, buf) = &mut *cell.borrow_mut();
+    SNAPPY_SCRATCH.with_borrow_mut(|buf| {
         if buf.len() < decompressed_len {
             buf.resize(decompressed_len, 0);
         }
-        decoder
+        snap::raw::Decoder::new()
             .decompress(data, &mut buf[..decompressed_len])
-            .is_ok()
+            .ok()
+            .map(|_| decompressed_len)
     })
 }
 
 /// Resolves the snappy domain by attempting to decode `msg.data`, then
-/// delegates to [`networking::compute_gossipsub_message_id`].
+/// delegates to [`networking::compute_gossipsub_message_id`]. Wired in
+/// as the gossipsub `message_id_fn` at host build time.
 ///
-/// `pub(crate)` so the gossip-module tests can call it directly to
-/// verify the configured message-id wiring matches the canonical
-/// primitive without needing a live swarm.
+/// On a valid snappy payload, the decompressed bytes are snapshotted
+/// into [`DECOMPRESSED_CACHE`] keyed by the freshly-computed
+/// [`gossipsub::MessageId`] so the inbound routing layer can skip a
+/// second decompression — libp2p calls this function and emits the
+/// matching `Event::Message` within the same `Swarm::poll_next` cycle
+/// on the swarm-poll task, so the cache is consumed before any other
+/// gossipsub call can evict it.
 pub(crate) fn gossipsub_message_id(msg: &gossipsub::Message) -> gossipsub::MessageId {
-    let domain = if is_valid_snappy(&msg.data) {
+    let valid_len = is_valid_snappy(&msg.data);
+    let domain = if valid_len.is_some() {
         MESSAGE_DOMAIN_VALID_SNAPPY
     } else {
         MESSAGE_DOMAIN_INVALID_SNAPPY
     };
-    let id = compute_gossipsub_message_id(domain, msg.topic.as_str().as_bytes(), &msg.data);
-    gossipsub::MessageId::from(id.to_vec())
+    let id = gossipsub::MessageId::from(compute_gossipsub_message_id(
+        domain,
+        msg.topic.as_str().as_bytes(),
+        &msg.data,
+    ));
+
+    if let Some(len) = valid_len {
+        // Snapshot scratch → cache. The clone is a memcpy and amortises
+        // against the avoided second snappy decompression in
+        // `route_gossipsub_message` (snappy ≈ 1 GB/s; memcpy ≈ 10–30 GB/s).
+        let bytes = SNAPPY_SCRATCH.with_borrow(|scratch| scratch[..len].to_vec());
+        DECOMPRESSED_CACHE.with_borrow_mut(|cache| *cache = Some((id.clone(), bytes)));
+    }
+    id
+}
+
+/// Returns and clears the cached decompressed payload if the most-recent
+/// [`gossipsub_message_id`] call computed `id`. Returns `None` on a
+/// cache miss (different id, the entry was already taken, or the
+/// previous payload was not a valid snappy frame). Single-slot,
+/// thread-local; intended to be called once per inbound message from
+/// [`crate::gossip::handler::route_gossipsub_message`].
+pub(crate) fn take_decompressed_for(id: &gossipsub::MessageId) -> Option<Vec<u8>> {
+    DECOMPRESSED_CACHE.with_borrow_mut(|cache| {
+        cache
+            .take_if(|(cached_id, _)| cached_id == id)
+            .map(|(_, v)| v)
+    })
 }
 
 #[cfg(test)]
@@ -164,35 +236,36 @@ mod tests {
     }
 
     #[test]
-    fn message_id_invalid_snappy_path() {
-        let payload = vec![0xFF, 0xFF, 0xFF, 0xFF]; // undecodable
-        let topic = "/lean/block";
-        let got = gossipsub_message_id(&message(topic, payload.clone()));
-        assert_eq!(
-            got,
-            expected_id(MESSAGE_DOMAIN_INVALID_SNAPPY, topic, &payload)
-        );
-    }
-
-    #[test]
-    fn message_id_valid_snappy_path() {
-        let encoded = snappy_encode(b"hello world");
-        let topic = "/lean/vote";
-        let got = gossipsub_message_id(&message(topic, encoded.clone()));
-        assert_eq!(
-            got,
-            expected_id(MESSAGE_DOMAIN_VALID_SNAPPY, topic, &encoded)
-        );
+    fn message_id_picks_domain_by_snappy_validity() {
+        // (case_name, topic, payload, expected_domain)
+        let cases: [(&str, &str, Vec<u8>, [u8; 4]); 2] = [
+            (
+                "invalid_snappy",
+                "/lean/block",
+                vec![0xFF, 0xFF, 0xFF, 0xFF],
+                MESSAGE_DOMAIN_INVALID_SNAPPY,
+            ),
+            (
+                "valid_snappy",
+                "/lean/vote",
+                snappy_encode(b"hello world"),
+                MESSAGE_DOMAIN_VALID_SNAPPY,
+            ),
+        ];
+        for (name, topic, payload, domain) in cases {
+            let got = gossipsub_message_id(&message(topic, payload.clone()));
+            assert_eq!(got, expected_id(domain, topic, &payload), "case {name}");
+        }
     }
 
     #[test]
     fn is_valid_snappy_rejects_empty_input() {
-        assert!(!is_valid_snappy(&[]));
+        assert!(is_valid_snappy(&[]).is_none());
     }
 
     #[test]
     fn is_valid_snappy_rejects_truncated_header() {
-        assert!(!is_valid_snappy(&[0xFF, 0xFF]));
+        assert!(is_valid_snappy(&[0xFF, 0xFF]).is_none());
     }
 
     #[test]
@@ -202,13 +275,47 @@ mod tests {
         // must reject before any buffer allocation is attempted.
         const _: () = assert!(MAX_SNAPPY_DECOMPRESSED < 32 * 1024 * 1024);
         let bogus = [0x80, 0x80, 0x80, 0x10];
-        assert!(!is_valid_snappy(&bogus));
+        assert!(is_valid_snappy(&bogus).is_none());
     }
 
     #[test]
     fn is_valid_snappy_accepts_round_trip() {
-        let encoded = snappy_encode(b"payload");
-        assert!(is_valid_snappy(&encoded));
+        let raw = b"payload";
+        let encoded = snappy_encode(raw);
+        let len = is_valid_snappy(&encoded).expect("valid snappy frame");
+        assert_eq!(len, raw.len());
+    }
+
+    #[test]
+    fn decompressed_cache_round_trips_through_gossipsub_message_id() {
+        // Computing the message ID on a valid snappy payload populates
+        // the cache; the routing layer (via `take_decompressed_for`)
+        // then consumes it once. A miss with a different id, and a
+        // second take of the same id, both return None.
+        let raw = b"unit-test payload";
+        let encoded = snappy_encode(raw);
+        let msg = message("/lean/block", encoded);
+        let id = gossipsub_message_id(&msg);
+
+        let other = gossipsub::MessageId::from(vec![0u8; 20]);
+        assert!(take_decompressed_for(&other).is_none(), "miss on wrong id");
+
+        let bytes = take_decompressed_for(&id).expect("cache must be populated");
+        assert_eq!(bytes, raw, "cached bytes must equal pre-snappy payload");
+        assert!(
+            take_decompressed_for(&id).is_none(),
+            "cache slot must clear after take",
+        );
+    }
+
+    #[test]
+    fn invalid_snappy_payload_does_not_populate_cache() {
+        let msg = message("/lean/block", vec![0xFF, 0xFF, 0xFF, 0xFF]);
+        let id = gossipsub_message_id(&msg);
+        assert!(
+            take_decompressed_for(&id).is_none(),
+            "no cache entry for invalid snappy frames",
+        );
     }
 
     #[test]
