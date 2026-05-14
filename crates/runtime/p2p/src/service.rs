@@ -20,8 +20,9 @@ use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::StreamExt;
-use libp2p::{swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
+use libp2p::{gossipsub, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
 use parking_lot::Mutex;
+use protocol::{SignedBlock, SignedVote};
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
@@ -29,10 +30,18 @@ use tracing::{debug, error, info, instrument, warn};
 use runtime_core::Service;
 
 use crate::error::{HostError, HostResult};
+use crate::gossip::{handler, BlockReceiver, Topic, VoteReceiver};
 use crate::host::{
-    behaviour::DevnetBehaviour, bootnodes::Bootnode, Host, HostCommand, COMMAND_CHANNEL_CAPACITY,
+    behaviour::{DevnetBehaviour, DevnetBehaviourEvent},
+    bootnodes::Bootnode,
+    Host, HostCommand, COMMAND_CHANNEL_CAPACITY,
 };
 use crate::options::HostOptions;
+
+/// Per-topic inbound channel capacity. Sized to absorb a brief burst of
+/// gossip without blocking the swarm-poll task. `try_send` drops on
+/// overflow; gossipsub mesh replay handles transient loss.
+const GOSSIP_CHANNEL_CAPACITY: usize = 256;
 
 /// How long [`Service::start`] waits for the first `NewListenAddr` /
 /// `ListenerClosed(Err)` event before treating the bind as failed.
@@ -46,6 +55,14 @@ const BIND_DEADLINE: Duration = Duration::from_secs(2);
 pub struct P2pService {
     peer_id: PeerId,
     state: Mutex<State>,
+    /// One-shot inbound channel for decoded `SignedBlock` payloads.
+    /// Populated by [`Service::start`]; consumed once via
+    /// [`Self::take_block_receiver`].
+    block_rx: Mutex<Option<BlockReceiver>>,
+    /// One-shot inbound channel for decoded `SignedVote` payloads.
+    /// Populated by [`Service::start`]; consumed once via
+    /// [`Self::take_vote_receiver`].
+    vote_rx: Mutex<Option<VoteReceiver>>,
 }
 
 enum State {
@@ -88,7 +105,25 @@ impl P2pService {
                 swarm: Box::new(swarm),
                 bootnodes,
             }),
+            block_rx: Mutex::new(None),
+            vote_rx: Mutex::new(None),
         }
+    }
+
+    /// Consumes the inbound block channel. Returns `Some` exactly once
+    /// after [`Service::start`] has run; subsequent calls return `None`.
+    /// Returns `None` before `start` and after the channel has already
+    /// been taken.
+    #[must_use]
+    pub fn take_block_receiver(&self) -> Option<BlockReceiver> {
+        self.block_rx.lock().take()
+    }
+
+    /// Consumes the inbound vote channel. Same one-shot semantics as
+    /// [`Self::take_block_receiver`].
+    #[must_use]
+    pub fn take_vote_receiver(&self) -> Option<VoteReceiver> {
+        self.vote_rx.lock().take()
     }
 
     /// Returns the local peer id (stable across the service lifetime).
@@ -169,15 +204,14 @@ impl Service for P2pService {
         let (options, mut swarm, bootnodes) = self.take_idle()?;
         let listen_addr = options.listen_addr().as_multiaddr().clone();
 
-        match bind(&mut swarm, listen_addr.clone()).await {
-            Ok(bound_addr) => {
-                info!(%bound_addr, "host listener up");
-            }
+        let bound_addr = match prepare(&mut swarm, listen_addr.clone()).await {
+            Ok(addr) => addr,
             Err(err) => {
                 self.restore_idle(options, swarm, bootnodes);
                 return Err(err.into());
             }
-        }
+        };
+        info!(%bound_addr, "host listener up");
 
         for bootnode in &bootnodes {
             // Dial errors at this stage are non-fatal — peers may come
@@ -194,10 +228,20 @@ impl Service for P2pService {
         }
 
         let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+        let (block_tx, block_rx) = mpsc::channel::<SignedBlock>(GOSSIP_CHANNEL_CAPACITY);
+        let (vote_tx, vote_rx) = mpsc::channel::<SignedVote>(GOSSIP_CHANNEL_CAPACITY);
         let host = Host::new(self.peer_id, commands_tx);
         let cancel = CancellationToken::new();
-        let join = tokio::spawn(swarm_task(*swarm, commands_rx, cancel.clone()));
+        let join = tokio::spawn(swarm_task(
+            *swarm,
+            commands_rx,
+            cancel.clone(),
+            block_tx,
+            vote_tx,
+        ));
 
+        *self.block_rx.lock() = Some(BlockReceiver::new(block_rx));
+        *self.vote_rx.lock() = Some(VoteReceiver::new(vote_rx));
         self.install_running(host, cancel, join);
         Ok(())
     }
@@ -295,12 +339,41 @@ fn bind_err(addr: Multiaddr, reason: impl Into<String>) -> HostError {
     }
 }
 
+/// Groups the fallible setup phases of [`Service::start`] (bind +
+/// gossipsub subscribe) behind a single `?`-chained call so the caller
+/// rolls state back to `Idle` from one place.
+async fn prepare(
+    swarm: &mut Swarm<DevnetBehaviour>,
+    listen_addr: Multiaddr,
+) -> HostResult<Multiaddr> {
+    let bound = bind(swarm, listen_addr).await?;
+    subscribe_topics(swarm)?;
+    Ok(bound)
+}
+
+/// Subscribes the swarm's gossipsub behaviour to every [`Topic`] this
+/// crate registers. Failure is surfaced as [`HostError::GossipSubscribe`]
+/// so the caller (`Service::start`) can roll state back to `Idle`.
+fn subscribe_topics(swarm: &mut Swarm<DevnetBehaviour>) -> HostResult<()> {
+    for topic in Topic::all() {
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&topic.ident())
+            .map_err(|err| HostError::GossipSubscribe(err.to_string()))?;
+        debug!(topic = %topic.as_str(), "subscribed to gossipsub topic");
+    }
+    Ok(())
+}
+
 /// Long-running swarm-poll task. Owns the `Swarm` and drives it until
 /// the cancellation token fires or the command channel closes.
 async fn swarm_task(
     mut swarm: Swarm<DevnetBehaviour>,
     mut commands: mpsc::Receiver<HostCommand>,
     cancel: CancellationToken,
+    block_tx: mpsc::Sender<SignedBlock>,
+    vote_tx: mpsc::Sender<SignedVote>,
 ) {
     info!(local_peer = %swarm.local_peer_id(), "p2p swarm-poll task up");
     // Pin once outside the loop: the cancellation future is monotonic
@@ -322,10 +395,20 @@ async fn swarm_task(
             command = commands.recv() => {
                 match command {
                     Some(HostCommand::Shutdown) | None => break,
+                    Some(HostCommand::Publish { topic, payload, reply }) => {
+                        let result = swarm
+                            .behaviour_mut()
+                            .gossipsub
+                            .publish(topic, payload);
+                        // The receiver may already have been dropped if
+                        // the caller was cancelled — ignore the send
+                        // error so the swarm task keeps running.
+                        let _ = reply.send(result);
+                    }
                 }
             }
             Some(event) = swarm.next() => {
-                handle_swarm_event(event);
+                handle_swarm_event(event, &block_tx, &vote_tx);
             }
         }
     }
@@ -333,11 +416,25 @@ async fn swarm_task(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn handle_swarm_event(event: SwarmEvent<crate::host::behaviour::DevnetBehaviourEvent>) {
-    // Event dispatch logic for gossip / req-resp / identify lands in
-    // later additions. For host-construction scope, structured
-    // tracing is enough.
+fn handle_swarm_event(
+    event: SwarmEvent<DevnetBehaviourEvent>,
+    block_tx: &mpsc::Sender<SignedBlock>,
+    vote_tx: &mpsc::Sender<SignedVote>,
+) {
     match event {
+        SwarmEvent::Behaviour(DevnetBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+            propagation_source,
+            message_id,
+            message,
+        })) => {
+            debug!(
+                from = %propagation_source,
+                id = %message_id,
+                topic = %message.topic.as_str(),
+                "gossipsub message received",
+            );
+            handler::route_gossipsub_message(&message, block_tx, vote_tx);
+        }
         SwarmEvent::Behaviour(inner) => debug!(?inner, "behaviour event"),
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
             debug!(peer = %peer_id, "connection established");
