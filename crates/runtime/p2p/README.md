@@ -7,7 +7,7 @@ Assembles the libp2p identity, transport, and composite
 swarm-poll task. The public [`Host`] handle is a cheap clone that
 reaches the swarm through an `mpsc::Sender<HostCommand>` — the only
 ownership shape that scales to gossip publish and req/resp send in
-follow-up issues without `Arc<Mutex<Swarm>>` contention.
+later additions without `Arc<Mutex<Swarm>>` contention.
 
 ## Scope
 
@@ -21,7 +21,7 @@ follow-up issues without `Arc<Mutex<Swarm>>` contention.
   token and joins the task.
 - [`Host`] — clone-friendly handle. `peer_id()` and a
   `pub(crate)` command channel today; gossip publish / req/resp
-  send variants extend [`HostCommand`] in later issues.
+  send variants extend [`HostCommand`] in later milestones.
 - [`HostOptions`] + newtypes — `ListenAddr`, `AgentVersion`,
   `IdentityPath`, `BootnodesPath`. Always-valid: construction goes
   through `HostOptions::new` (typed) or `HostOptions::try_new`
@@ -47,11 +47,14 @@ follow-up issues without `Arc<Mutex<Swarm>>` contention.
   message-id function from
   [`networking::compute_gossipsub_message_id`]. Snappy domain
   (`MESSAGE_DOMAIN_VALID_SNAPPY` / `MESSAGE_DOMAIN_INVALID_SNAPPY`)
-  is resolved per-message by attempting `snap::raw::Decoder`.
+  is resolved per-message via a thread-local `snap::raw::Decoder`
+  + reusable scratch buffer (alloc-free on the hot path). Frames
+  claiming a decompressed size larger than 16 MiB are rejected as
+  invalid without allocating (DOS cap).
   Authenticity: `ValidationMode::Anonymous` (devnet0 is unsigned).
 - `request_response::Behaviour<SszSnappyCodec>` advertising
   `STATUS_PROTOCOL_V1` and `BLOCKS_BY_ROOT_PROTOCOL_V1`. The
-  codec is a stub in this issue — every read/write returns
+  codec is a stub — every read/write returns
   `io::ErrorKind::Unsupported` until the handler logic lands.
 - `identify::Behaviour` advertising `lean/0.1.0` as the protocol
   version plus the configured [`AgentVersion`].
@@ -113,10 +116,10 @@ cargo metadata --format-version=1 \
 
 ## Out of scope
 
-- Topic subscribe / publish — follow-up issue.
-- `Status` / `BlocksByRoot` handler logic — follow-up issue
+- Topic subscribe / publish — follow-up work.
+- `Status` / `BlocksByRoot` handler logic — follow-up work
   (codec is a stub in this crate).
-- Two-node loopback interop — follow-up issue.
+- Two-node loopback interop — follow-up work.
 - `runtime-chain::Publisher` adapter wiring — `node` crate.
 
 ## Tier and dependencies
@@ -135,10 +138,3 @@ cargo clippy -p runtime-p2p --all-targets -- -D warnings
 cargo test -p runtime-p2p
 cargo test -p runtime-p2p --test host_build
 ```
-
-## Issue reference
-
-Implements Issue #31. See [`lean-rust-github-issues.md`] for the
-deliverables checklist.
-
-[`lean-rust-github-issues.md`]: ../../../.claude/prompts/lean-rust-github-issues.md
