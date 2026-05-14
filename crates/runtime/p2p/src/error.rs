@@ -121,6 +121,12 @@ pub enum HostError {
     #[error("gossipsub init: {0}")]
     GossipsubInit(String),
 
+    /// `Service::start` could not subscribe to a gossipsub topic.
+    /// Wraps the libp2p `SubscriptionError` message — typically the
+    /// max-subscribed-topics cap or a publish-only config mismatch.
+    #[error("gossipsub subscribe: {0}")]
+    GossipSubscribe(String),
+
     /// `Service::start` was called more than once on the same instance.
     #[error("host service already started")]
     AlreadyStarted,

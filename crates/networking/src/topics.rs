@@ -1,5 +1,35 @@
-//! Gossipsub topic constants.
+//! Gossipsub topic identifiers for the consensus networking layer.
 //!
-//! Empty in this revision; topic identifiers are populated by the
-//! gossipsub-id work that builds on the protocol-ID + message-type
-//! foundation laid here.
+//! Topic strings are the canonical identifiers libp2p hashes into a
+//! `TopicHash` and that the deterministic message-id function
+//! ([`crate::compute_gossipsub_message_id`]) folds into the SHA-256 input.
+//! Centralising them here keeps `runtime-p2p` free of protocol-level
+//! constants — `runtime-p2p::gossip::Topic` is a typed wrapper that
+//! delegates to these values.
+
+/// Gossipsub topic carrying [`protocol::SignedBlock`] payloads
+/// (SSZ + Snappy block compression — see [`crate::encode_gossip`]).
+pub const BLOCK_TOPIC_V1: &str = "/lean/block";
+
+/// Gossipsub topic carrying [`protocol::SignedVote`] payloads
+/// (SSZ + Snappy block compression — see [`crate::encode_gossip`]).
+pub const VOTE_TOPIC_V1: &str = "/lean/vote";
+
+// Compile-time enforcement of the libp2p `StreamProtocol` / `IdentTopic`
+// invariant: topic strings must start with `/`. Violations fail the
+// build, not just the test suite.
+const _: () = {
+    assert!(BLOCK_TOPIC_V1.as_bytes()[0] == b'/');
+    assert!(VOTE_TOPIC_V1.as_bytes()[0] == b'/');
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_constants_match_spec() {
+        assert_eq!(BLOCK_TOPIC_V1, "/lean/block");
+        assert_eq!(VOTE_TOPIC_V1, "/lean/vote");
+    }
+}

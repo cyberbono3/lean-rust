@@ -124,7 +124,11 @@ fn is_valid_snappy(data: &[u8]) -> bool {
 
 /// Resolves the snappy domain by attempting to decode `msg.data`, then
 /// delegates to [`networking::compute_gossipsub_message_id`].
-fn gossipsub_message_id(msg: &gossipsub::Message) -> gossipsub::MessageId {
+///
+/// `pub(crate)` so the gossip-module tests can call it directly to
+/// verify the configured message-id wiring matches the canonical
+/// primitive without needing a live swarm.
+pub(crate) fn gossipsub_message_id(msg: &gossipsub::Message) -> gossipsub::MessageId {
     let domain = if is_valid_snappy(&msg.data) {
         MESSAGE_DOMAIN_VALID_SNAPPY
     } else {

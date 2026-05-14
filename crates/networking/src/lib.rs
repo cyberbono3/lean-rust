@@ -41,3 +41,4 @@ pub use gossipsub::{
 };
 pub use messages::{BlocksByRootRequest, BlocksByRootResponse, Status};
 pub use protocol_ids::{ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1};
+pub use topics::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};

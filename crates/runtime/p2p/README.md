@@ -19,9 +19,12 @@ later additions without `Arc<Mutex<Swarm>>` contention.
   any configured bootnodes, and spawns the swarm-poll task.
   `stop` signals shutdown via the command channel + cancellation
   token and joins the task.
-- [`Host`] — clone-friendly handle. `peer_id()` and a
-  `pub(crate)` command channel today; gossip publish / req/resp
-  send variants extend [`HostCommand`] in later milestones.
+- [`Host`] — clone-friendly handle. `peer_id()` +
+  `publish_block` / `publish_vote` (gossipsub) today; req/resp send
+  variants extend [`HostCommand`] in later milestones.
+- [`gossip`] — typed [`Topic`] wrapper, [`MessageId`] / [`PublishError`]
+  re-exports, and one-shot [`BlockReceiver`] / [`VoteReceiver`] handles
+  for inbound `SignedBlock` / `SignedVote` payloads.
 - [`HostOptions`] + newtypes — `ListenAddr`, `AgentVersion`,
   `IdentityPath`, `BootnodesPath`. Always-valid: construction goes
   through `HostOptions::new` (typed) or `HostOptions::try_new`
@@ -36,6 +39,12 @@ later additions without `Arc<Mutex<Swarm>>` contention.
 [`HostCommand`]: ./src/host/mod.rs
 [`HostOptions`]: ./src/options.rs
 [`HostError`]: ./src/error.rs
+[`gossip`]: ./src/gossip/mod.rs
+[`Topic`]: ./src/gossip/mod.rs
+[`MessageId`]: ./src/gossip/publisher.rs
+[`PublishError`]: ./src/gossip/publisher.rs
+[`BlockReceiver`]: ./src/gossip/handler.rs
+[`VoteReceiver`]: ./src/gossip/handler.rs
 [`runtime_core::Service`]: ../core/src/service.rs
 [`NetworkBehaviour`]: https://docs.rs/libp2p/0.55/libp2p/swarm/trait.NetworkBehaviour.html
 
@@ -63,6 +72,46 @@ later additions without `Arc<Mutex<Swarm>>` contention.
 [`DevnetBehaviour`]: ./src/host/behaviour.rs
 [`src/host/behaviour.rs`]: ./src/host/behaviour.rs
 [`networking::compute_gossipsub_message_id`]: ../../networking/src/gossipsub.rs
+
+## Gossip
+
+`Service::start` subscribes the swarm's gossipsub behaviour to every
+[`Topic`] variant (`/lean/block`, `/lean/vote` — see
+[`networking::BLOCK_TOPIC_V1`] / [`networking::VOTE_TOPIC_V1`]). Failure
+surfaces as [`HostError::GossipSubscribe`] and rolls the lifecycle back
+to `Idle`.
+
+Outbound: [`Host::publish_block`] / [`Host::publish_vote`] SSZ-encode +
+Snappy-block-compress the payload via [`networking::encode_gossip`],
+dispatch a [`HostCommand::Publish`] to the swarm-poll task, and await
+the libp2p [`MessageId`] over a `oneshot` reply. The single-task
+ownership invariant on the `Swarm` is preserved — there is no
+`Arc<Mutex<Swarm>>` on the publish path.
+
+Inbound: `gossipsub::Event::Message` is routed inside the swarm task
+through [`gossip::handler::route_gossipsub_message`]. The payload is
+[`networking::decode_gossip`]-ed into a typed `SignedBlock` /
+`SignedVote` and forwarded over per-topic `mpsc::Sender`s. The
+receivers live on [`P2pService`] behind a one-shot guard:
+
+```rust
+let mut blocks = service.take_block_receiver().expect("one-shot");
+let mut votes  = service.take_vote_receiver().expect("one-shot");
+while let Some(block) = blocks.recv().await { /* ... */ }
+```
+
+Backpressure: the handler uses `try_send` and drops on a full receiver
+(logged at `warn`). Gossipsub mesh replay covers transient loss.
+
+[`Host::publish_block`]: ./src/gossip/publisher.rs
+[`Host::publish_vote`]: ./src/gossip/publisher.rs
+[`HostCommand::Publish`]: ./src/host/mod.rs
+[`HostError::GossipSubscribe`]: ./src/error.rs
+[`gossip::handler::route_gossipsub_message`]: ./src/gossip/handler.rs
+[`networking::BLOCK_TOPIC_V1`]: ../../networking/src/topics.rs
+[`networking::VOTE_TOPIC_V1`]: ../../networking/src/topics.rs
+[`networking::encode_gossip`]: ../../networking/src/codecs.rs
+[`networking::decode_gossip`]: ../../networking/src/codecs.rs
 
 ## Identity persistence
 
@@ -116,11 +165,13 @@ cargo metadata --format-version=1 \
 
 ## Out of scope
 
-- Topic subscribe / publish — follow-up work.
 - `Status` / `BlocksByRoot` handler logic — follow-up work
   (codec is a stub in this crate).
 - Two-node loopback interop — follow-up work.
 - `runtime-chain::Publisher` adapter wiring — `node` crate.
+- Topic scoring / peer scoring / mesh tuning.
+- Backpressure-aware ingestion (current handler drops on full
+  receiver; gossipsub mesh replay covers transient loss).
 
 ## Tier and dependencies
 

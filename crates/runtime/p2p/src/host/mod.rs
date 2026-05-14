@@ -6,8 +6,8 @@
 //! defines the `Shutdown` command — gossip publish / req/resp send
 //! extend the enum in later additions.
 
-use libp2p::PeerId;
-use tokio::sync::mpsc;
+use libp2p::{gossipsub, PeerId};
+use tokio::sync::{mpsc, oneshot};
 
 pub(crate) mod behaviour;
 pub(crate) mod bootnodes;
@@ -23,14 +23,32 @@ pub(crate) const COMMAND_CHANNEL_CAPACITY: usize = 64;
 
 /// Commands the [`Host`] handle dispatches to the swarm-poll task.
 ///
-/// The enum is `#[non_exhaustive]` so later variants (gossip publish,
-/// `request_response` send) can be added without churning every match
-/// arm in this crate.
+/// The enum is `#[non_exhaustive]` so later variants
+/// (`request_response` send, etc.) can be added without churning every
+/// match arm in this crate.
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) enum HostCommand {
     /// Cancel the swarm-poll loop. Sent at `Service::stop`.
     Shutdown,
+    /// Publish a gossipsub message and reply with the resulting
+    /// [`gossipsub::MessageId`] or libp2p [`gossipsub::PublishError`].
+    /// Constructed by [`crate::gossip::Host::publish_block`] /
+    /// [`crate::gossip::Host::publish_vote`].
+    Publish {
+        /// Pre-built libp2p topic (constructed from the canonical
+        /// [`networking::BLOCK_TOPIC_V1`] / [`networking::VOTE_TOPIC_V1`]
+        /// strings via [`gossipsub::IdentTopic::new`]).
+        topic: gossipsub::IdentTopic,
+        /// SSZ + Snappy-block-compressed payload — produced upstream by
+        /// [`networking::encode_gossip`] so the swarm task does not need
+        /// to know the payload type.
+        payload: Vec<u8>,
+        /// One-shot reply channel — the swarm task forwards the libp2p
+        /// publish result here; the caller maps it into a typed
+        /// [`crate::gossip::PublishError`].
+        reply: oneshot::Sender<Result<gossipsub::MessageId, gossipsub::PublishError>>,
+    },
 }
 
 /// Cheap clone-friendly handle pointing at one swarm-poll task.

@@ -15,6 +15,7 @@ runtime-core      = { path = "../core" }
 networking        = { path = "../../networking" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }
+ssz               = { path = "../../ssz" }
 tokio             = { workspace = true }
 tokio-util        = { workspace = true }
 async-trait       = { workspace = true }
