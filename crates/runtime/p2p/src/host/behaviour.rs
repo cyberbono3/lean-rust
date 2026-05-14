@@ -98,7 +98,7 @@ impl DevnetBehaviour {
     fn build_identify(keypair: &Keypair, agent_version: &AgentVersion) -> identify::Behaviour {
         identify::Behaviour::new(
             identify::Config::new(IDENTIFY_PROTOCOL_VERSION.to_owned(), keypair.public())
-                .with_agent_version(agent_version.as_str().to_owned()),
+                .with_agent_version(agent_version.to_string()),
         )
     }
 

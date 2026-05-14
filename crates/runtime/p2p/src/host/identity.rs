@@ -7,7 +7,7 @@
 
 use std::{
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
@@ -62,10 +62,7 @@ fn generate_and_persist(path: &IdentityPath) -> HostResult<Keypair> {
         fs::create_dir_all(parent).map_err(|source| io_err(parent, source))?;
     }
 
-    fs::write(p, &bytes).map_err(|source| io_err(p, source))?;
-
-    #[cfg(unix)]
-    set_owner_only_permissions(p)?;
+    write_identity_bytes(p, &bytes)?;
 
     info!(
         path = %p.display(),
@@ -75,11 +72,26 @@ fn generate_and_persist(path: &IdentityPath) -> HostResult<Keypair> {
     Ok(keypair)
 }
 
+/// On Unix, atomically creates the identity file with mode `0o600` so
+/// the keypair is never world-readable in the window between creation
+/// and a follow-up `chmod`. On non-Unix targets, falls back to
+/// [`fs::write`] (the platform's permission model differs and is not
+/// part of this crate's threat model).
 #[cfg(unix)]
-fn set_owner_only_permissions(path: &Path) -> HostResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .map_err(|source| io_err(path, source))
+fn write_identity_bytes(path: &Path, bytes: &[u8]) -> HostResult<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|source| io_err(path, source))?;
+    file.write_all(bytes).map_err(|source| io_err(path, source))
+}
+
+#[cfg(not(unix))]
+fn write_identity_bytes(path: &Path, bytes: &[u8]) -> HostResult<()> {
+    fs::write(path, bytes).map_err(|source| io_err(path, source))
 }
 
 fn io_err(path: impl Into<PathBuf>, source: std::io::Error) -> HostError {

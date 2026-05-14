@@ -25,15 +25,21 @@ pub(crate) struct OutboundTable {
 }
 
 impl OutboundTable {
-    /// Records a pending outbound request. Subsequent calls with the
-    /// same id would replace the existing entry, but libp2p guarantees
-    /// fresh ids per `send_request` call — collisions are unreachable.
+    /// Records a pending outbound request. libp2p guarantees fresh ids
+    /// per `send_request` call so collisions are unreachable; the
+    /// `debug_assert!` catches a future id-recycling regression in
+    /// debug/test builds while keeping the release-build cost identical
+    /// to a bare `HashMap::insert`.
     pub(crate) fn insert(
         &mut self,
         id: OutboundRequestId,
         reply: oneshot::Sender<Result<RpcResponse, RpcError>>,
     ) {
-        self.pending.insert(id, reply);
+        let prior = self.pending.insert(id, reply);
+        debug_assert!(
+            prior.is_none(),
+            "OutboundTable id collision: libp2p reused OutboundRequestId {id:?}",
+        );
     }
 
     /// Wakes the pending caller for `id` with the libp2p response.

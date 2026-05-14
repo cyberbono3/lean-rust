@@ -83,19 +83,20 @@ pub(crate) fn route_gossipsub_message(
     block_tx: &mpsc::Sender<SignedBlock>,
     vote_tx: &mpsc::Sender<SignedVote>,
 ) {
-    let topic_str = msg.topic.as_str();
-    if topic_str != networking::BLOCK_TOPIC_V1 && topic_str != networking::VOTE_TOPIC_V1 {
-        debug!(topic = %topic_str, "unknown gossip topic");
-        return;
-    }
-    // Drain the cache exactly once per message regardless of topic — a
-    // stale entry left in the slot would otherwise collide with the
-    // next inbound message's id.
+    // Drain the cache exactly once per message regardless of topic —
+    // keeps the populate-by-`gossipsub_message_id` ↔ consume-here
+    // lifetime symmetric and prevents an unknown-topic entry from
+    // lingering in the slot until the next valid-snappy populate.
     let cached = take_decompressed_for(message_id);
-    if topic_str == networking::BLOCK_TOPIC_V1 {
-        forward::<SignedBlock>(&msg.data, cached.as_deref(), block_tx, "block");
-    } else {
-        forward::<SignedVote>(&msg.data, cached.as_deref(), vote_tx, "vote");
+    let topic_str = msg.topic.as_str();
+    match topic_str {
+        networking::BLOCK_TOPIC_V1 => {
+            forward::<SignedBlock>(&msg.data, cached.as_deref(), block_tx, "block");
+        }
+        networking::VOTE_TOPIC_V1 => {
+            forward::<SignedVote>(&msg.data, cached.as_deref(), vote_tx, "vote");
+        }
+        _ => debug!(topic = %topic_str, "unknown gossip topic"),
     }
 }
 

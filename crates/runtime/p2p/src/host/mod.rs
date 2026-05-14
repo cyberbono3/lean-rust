@@ -2,9 +2,12 @@
 //!
 //! The handle holds an `mpsc::Sender<HostCommand>` only; the
 //! `Swarm<DevnetBehaviour>` is owned by exactly one swarm-poll task
-//! spawned at [`crate::service::P2pService::start`]. Current scope only
-//! defines the `Shutdown` command — gossip publish / req/resp send
-//! extend the enum in later additions.
+//! spawned at [`crate::service::P2pService::start`]. The command enum
+//! covers three operations — `Shutdown` (lifecycle teardown), `Publish`
+//! (gossipsub publish via the typed [`crate::gossip::publisher`]
+//! methods), and `SendRequest` (outbound `BlocksByRoot` RPC via
+//! [`crate::rpc::client`]) — and is `#[non_exhaustive]` so further
+//! variants can land without a breaking match-arm churn.
 
 use libp2p::{gossipsub, PeerId};
 use tokio::sync::{mpsc, oneshot};
