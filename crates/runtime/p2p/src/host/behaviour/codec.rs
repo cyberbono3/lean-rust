@@ -1,90 +1,278 @@
-//! Stub [`request_response::Codec`] for the devnet0 req/resp protocols.
+//! [`request_response::Codec`] for the devnet0 `Status` +
+//! `BlocksByRoot` protocols.
 //!
-//! The codec advertises [`STATUS_PROTOCOL_V1`] and
-//! [`BLOCKS_BY_ROOT_PROTOCOL_V1`] (see [`crate::host::behaviour`]), but
-//! its read/write methods short-circuit with
-//! [`io::ErrorKind::Unsupported`] until the handler logic lands.
+//! Wire shape per message: SSZ payload wrapped in Snappy framed bytes
+//! ([`networking::encode_req_resp`] / [`networking::decode_req_resp`]).
+//! The substream half-closes after the sender finishes, so each codec
+//! method reads to EOF and decodes the resulting buffer in one shot.
 //!
-//! Stub status:
-//! - `read_request` / `read_response` return
-//!   [`io::ErrorKind::Unsupported`].
-//! - `write_request` / `write_response` return
-//!   [`io::ErrorKind::Unsupported`].
-//!
-//! Inbound peers see the protocol on identify but every exchange
-//! errors out — sufficient for the construction smoke tests in this
-//! crate while keeping the wire surface available for later handler
-//! work.
+//! The codec dispatches on the libp2p protocol id ([`STATUS_PROTOCOL_V1`]
+//! / [`BLOCKS_BY_ROOT_PROTOCOL_V1`]) carried in the codec method's
+//! `protocol` parameter; unknown protocols surface as
+//! [`io::ErrorKind::Unsupported`].
 
 use std::io;
 
 use async_trait::async_trait;
-use futures::{AsyncRead, AsyncWrite};
+use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::{request_response, StreamProtocol};
+use networking::{
+    encode_req_resp, BlocksByRootRequest, BlocksByRootResponse, Status, BLOCKS_BY_ROOT_PROTOCOL_V1,
+    STATUS_PROTOCOL_V1,
+};
 
-const ERR_READ_REQ: &str = "ssz_snappy request decoder not yet implemented";
-const ERR_READ_RES: &str = "ssz_snappy response decoder not yet implemented";
-const ERR_WRITE_REQ: &str = "ssz_snappy request encoder not yet implemented";
-const ERR_WRITE_RES: &str = "ssz_snappy response encoder not yet implemented";
-
-#[inline]
-fn unsupported(msg: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::Unsupported, msg)
+/// Outbound or inbound request payload on one of the devnet0 req/resp
+/// protocols.
+#[derive(Debug, Clone)]
+pub enum RpcRequest {
+    /// Initial handshake — sender advertises its `(finalized, head)`
+    /// checkpoints.
+    Status(Status),
+    /// Request a list of blocks by their tree roots; bounded at
+    /// [`networking::MAX_REQUEST_BLOCKS`] at decode time.
+    BlocksByRoot(BlocksByRootRequest),
 }
 
-/// Concrete [`request_response::Codec`] used by the host behaviour.
+/// Outbound or inbound response payload paired with one [`RpcRequest`].
+#[derive(Debug, Clone)]
+pub enum RpcResponse {
+    /// Status response — receiver's `(finalized, head)` checkpoints.
+    Status(Status),
+    /// Response carrying ≤ `MAX_REQUEST_BLOCKS` signed blocks for the
+    /// matching `BlocksByRoot` request.
+    BlocksByRoot(BlocksByRootResponse),
+}
+
+/// Codec implementing [`request_response::Codec`] for the devnet0
+/// `Status` + `BlocksByRoot` protocols.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SszSnappyCodec;
 
 #[async_trait]
 impl request_response::Codec for SszSnappyCodec {
     type Protocol = StreamProtocol;
-    type Request = Vec<u8>;
-    type Response = Vec<u8>;
+    type Request = RpcRequest;
+    type Response = RpcResponse;
 
     async fn read_request<T>(
         &mut self,
-        _protocol: &Self::Protocol,
-        _io: &mut T,
+        protocol: &Self::Protocol,
+        io: &mut T,
     ) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
-        Err(unsupported(ERR_READ_REQ))
+        let buf = read_to_end(io).await?;
+        match protocol.as_ref() {
+            s if s == STATUS_PROTOCOL_V1.as_str() => {
+                Ok(RpcRequest::Status(decode::<Status>(&buf)?))
+            }
+            s if s == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => Ok(RpcRequest::BlocksByRoot(
+                decode::<BlocksByRootRequest>(&buf)?,
+            )),
+            other => Err(unknown_protocol(other)),
+        }
     }
 
     async fn read_response<T>(
         &mut self,
-        _protocol: &Self::Protocol,
-        _io: &mut T,
+        protocol: &Self::Protocol,
+        io: &mut T,
     ) -> io::Result<Self::Response>
     where
         T: AsyncRead + Unpin + Send,
     {
-        Err(unsupported(ERR_READ_RES))
+        let buf = read_to_end(io).await?;
+        match protocol.as_ref() {
+            s if s == STATUS_PROTOCOL_V1.as_str() => {
+                Ok(RpcResponse::Status(decode::<Status>(&buf)?))
+            }
+            s if s == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => Ok(RpcResponse::BlocksByRoot(
+                decode::<BlocksByRootResponse>(&buf)?,
+            )),
+            other => Err(unknown_protocol(other)),
+        }
     }
 
     async fn write_request<T>(
         &mut self,
-        _protocol: &Self::Protocol,
-        _io: &mut T,
-        _req: Self::Request,
+        protocol: &Self::Protocol,
+        io: &mut T,
+        req: Self::Request,
     ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        Err(unsupported(ERR_WRITE_REQ))
+        let bytes = match (&req, protocol.as_ref()) {
+            (RpcRequest::Status(s), p) if p == STATUS_PROTOCOL_V1.as_str() => encode_req_resp(s),
+            (RpcRequest::BlocksByRoot(r), p) if p == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => {
+                encode_req_resp(r)
+            }
+            (_, other) => return Err(protocol_mismatch(other, "request")),
+        };
+        write_framed(io, &bytes).await
     }
 
     async fn write_response<T>(
         &mut self,
-        _protocol: &Self::Protocol,
-        _io: &mut T,
-        _res: Self::Response,
+        protocol: &Self::Protocol,
+        io: &mut T,
+        res: Self::Response,
     ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        Err(unsupported(ERR_WRITE_RES))
+        let bytes = match (&res, protocol.as_ref()) {
+            (RpcResponse::Status(s), p) if p == STATUS_PROTOCOL_V1.as_str() => encode_req_resp(s),
+            (RpcResponse::BlocksByRoot(r), p) if p == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => {
+                encode_req_resp(r)
+            }
+            (_, other) => return Err(protocol_mismatch(other, "response")),
+        };
+        write_framed(io, &bytes).await
+    }
+}
+
+/// Writes `bytes` to the substream and signals end-of-message by
+/// closing the write half. libp2p's req/resp framework relies on this
+/// half-close to surface EOF to the peer's codec read.
+async fn write_framed<T: AsyncWrite + Unpin + Send>(io: &mut T, bytes: &[u8]) -> io::Result<()> {
+    io.write_all(bytes).await?;
+    io.close().await
+}
+
+async fn read_to_end<T: AsyncRead + Unpin + Send>(io: &mut T) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    io.read_to_end(&mut buf).await?;
+    Ok(buf)
+}
+
+fn decode<T: ssz::Decode>(buf: &[u8]) -> io::Result<T> {
+    networking::decode_req_resp::<T>(buf)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))
+}
+
+fn unknown_protocol(name: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!("unknown rpc protocol: {name}"),
+    )
+}
+
+fn protocol_mismatch(name: &str, kind: &'static str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("rpc {kind} variant does not match protocol {name}"),
+    )
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use futures::io::Cursor;
+    use libp2p::request_response::Codec;
+    use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
+    use protocol::SignedBlock;
+
+    fn status_proto() -> StreamProtocol {
+        StreamProtocol::new(STATUS_PROTOCOL_V1.as_str())
+    }
+
+    fn blocks_proto() -> StreamProtocol {
+        StreamProtocol::new(BLOCKS_BY_ROOT_PROTOCOL_V1.as_str())
+    }
+
+    #[tokio::test]
+    async fn status_request_round_trip() {
+        let mut codec = SszSnappyCodec;
+        let req = RpcRequest::Status(Status::default());
+
+        let mut wire = Vec::new();
+        codec
+            .write_request(&status_proto(), &mut wire, req.clone())
+            .await
+            .unwrap();
+
+        let mut reader = Cursor::new(&wire[..]);
+        let decoded = codec
+            .read_request(&status_proto(), &mut reader)
+            .await
+            .unwrap();
+        match decoded {
+            RpcRequest::Status(s) => assert_eq!(s, Status::default()),
+            RpcRequest::BlocksByRoot(_) => panic!("expected Status, got BlocksByRoot"),
+        }
+    }
+
+    #[tokio::test]
+    async fn blocks_by_root_request_round_trip() {
+        let mut codec = SszSnappyCodec;
+        let req = RpcRequest::BlocksByRoot(BlocksByRootRequest::new(std::iter::empty()).unwrap());
+
+        let mut wire = Vec::new();
+        codec
+            .write_request(&blocks_proto(), &mut wire, req)
+            .await
+            .unwrap();
+
+        let mut reader = Cursor::new(&wire[..]);
+        let decoded = codec
+            .read_request(&blocks_proto(), &mut reader)
+            .await
+            .unwrap();
+        match decoded {
+            RpcRequest::BlocksByRoot(r) => assert!(r.is_empty()),
+            RpcRequest::Status(_) => panic!("expected BlocksByRoot, got Status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn blocks_by_root_response_round_trip() {
+        let mut codec = SszSnappyCodec;
+        let resp = RpcResponse::BlocksByRoot(
+            BlocksByRootResponse::new(vec![SignedBlock::default()]).unwrap(),
+        );
+
+        let mut wire = Vec::new();
+        codec
+            .write_response(&blocks_proto(), &mut wire, resp)
+            .await
+            .unwrap();
+
+        let mut reader = Cursor::new(&wire[..]);
+        let decoded = codec
+            .read_response(&blocks_proto(), &mut reader)
+            .await
+            .unwrap();
+        match decoded {
+            RpcResponse::BlocksByRoot(r) => assert_eq!(r.blocks().len(), 1),
+            RpcResponse::Status(_) => panic!("expected BlocksByRoot, got Status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_protocol_rejected() {
+        let mut codec = SszSnappyCodec;
+        let unknown = StreamProtocol::new("/lean/unknown/1");
+        let mut reader = Cursor::new(&b""[..]);
+        let err = codec.read_request(&unknown, &mut reader).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn variant_protocol_mismatch_rejected() {
+        let mut codec = SszSnappyCodec;
+        let mut wire = Vec::new();
+        // Status request on the blocks_by_root protocol → mismatch.
+        let err = codec
+            .write_request(
+                &blocks_proto(),
+                &mut wire,
+                RpcRequest::Status(Status::default()),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }

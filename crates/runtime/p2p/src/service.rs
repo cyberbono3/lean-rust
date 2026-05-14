@@ -15,12 +15,12 @@
 //! The `Swarm` is owned by exactly one task. The public [`Host`] handle
 //! reaches it via `mpsc::Sender<HostCommand>`.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::StreamExt;
-use libp2p::{gossipsub, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
+use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
 use parking_lot::Mutex;
 use protocol::{SignedBlock, SignedVote};
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
@@ -32,11 +32,15 @@ use runtime_core::Service;
 use crate::error::{HostError, HostResult};
 use crate::gossip::{handler, BlockReceiver, Topic, VoteReceiver};
 use crate::host::{
-    behaviour::{DevnetBehaviour, DevnetBehaviourEvent},
+    behaviour::{DevnetBehaviour, DevnetBehaviourEvent, RpcRequest, RpcResponse},
     bootnodes::Bootnode,
     Host, HostCommand, COMMAND_CHANNEL_CAPACITY,
 };
 use crate::options::HostOptions;
+use crate::rpc::{
+    blocks_by_root as blocks_handler, outbound::OutboundTable, status as status_handler,
+    RpcProvider, SharedRpcProvider,
+};
 
 /// Per-topic inbound channel capacity. Sized to absorb a brief burst of
 /// gossip without blocking the swarm-poll task. `try_send` drops on
@@ -55,6 +59,11 @@ const BIND_DEADLINE: Duration = Duration::from_secs(2);
 pub struct P2pService {
     peer_id: PeerId,
     state: Mutex<State>,
+    /// Pluggable provider that supplies the local `Status` and answers
+    /// `BlocksByRoot` lookups. Cloned into the swarm-poll task at
+    /// [`Service::start`] so request handlers can call it without
+    /// touching `&self`.
+    provider: SharedRpcProvider,
     /// One-shot inbound channel for decoded `SignedBlock` payloads.
     /// Populated by [`Service::start`]; consumed once via
     /// [`Self::take_block_receiver`].
@@ -97,6 +106,7 @@ impl P2pService {
         peer_id: PeerId,
         swarm: Swarm<DevnetBehaviour>,
         bootnodes: Vec<Bootnode>,
+        provider: SharedRpcProvider,
     ) -> Self {
         Self {
             peer_id,
@@ -105,6 +115,7 @@ impl P2pService {
                 swarm: Box::new(swarm),
                 bootnodes,
             }),
+            provider,
             block_rx: Mutex::new(None),
             vote_rx: Mutex::new(None),
         }
@@ -238,6 +249,7 @@ impl Service for P2pService {
             cancel.clone(),
             block_tx,
             vote_tx,
+            Arc::clone(&self.provider),
         ));
 
         *self.block_rx.lock() = Some(BlockReceiver::new(block_rx));
@@ -374,6 +386,7 @@ async fn swarm_task(
     cancel: CancellationToken,
     block_tx: mpsc::Sender<SignedBlock>,
     vote_tx: mpsc::Sender<SignedVote>,
+    provider: SharedRpcProvider,
 ) {
     info!(local_peer = %swarm.local_peer_id(), "p2p swarm-poll task up");
     // Pin once outside the loop: the cancellation future is monotonic
@@ -381,6 +394,9 @@ async fn swarm_task(
     // avoids constructing a fresh waker registration each poll.
     let cancelled = cancel.cancelled();
     tokio::pin!(cancelled);
+    // Outbound RPC correlation lives here — single-threaded inside the
+    // swarm task, no locking.
+    let mut outbound = OutboundTable::default();
     loop {
         // `biased` polls arms in source order, skipping the per-poll
         // RNG that `tokio::select!` uses for fairness. Cancel first
@@ -405,21 +421,37 @@ async fn swarm_task(
                         // error so the swarm task keeps running.
                         let _ = reply.send(result);
                     }
+                    Some(HostCommand::SendRequest { peer, request, reply }) => {
+                        let id = swarm
+                            .behaviour_mut()
+                            .request_response
+                            .send_request(&peer, request);
+                        outbound.insert(id, reply);
+                    }
                 }
             }
             Some(event) = swarm.next() => {
-                handle_swarm_event(event, &block_tx, &vote_tx);
+                handle_swarm_event(
+                    event,
+                    &mut swarm,
+                    &block_tx,
+                    &vote_tx,
+                    &mut outbound,
+                    provider.as_ref(),
+                );
             }
         }
     }
     info!("p2p swarm-poll task down");
 }
 
-#[allow(clippy::needless_pass_by_value)]
 fn handle_swarm_event(
     event: SwarmEvent<DevnetBehaviourEvent>,
+    swarm: &mut Swarm<DevnetBehaviour>,
     block_tx: &mpsc::Sender<SignedBlock>,
     vote_tx: &mpsc::Sender<SignedVote>,
+    outbound: &mut OutboundTable,
+    provider: &dyn RpcProvider,
 ) {
     match event {
         SwarmEvent::Behaviour(DevnetBehaviourEvent::Gossipsub(gossipsub::Event::Message {
@@ -435,9 +467,12 @@ fn handle_swarm_event(
             );
             handler::route_gossipsub_message(&message, block_tx, vote_tx);
         }
+        SwarmEvent::Behaviour(DevnetBehaviourEvent::RequestResponse(event)) => {
+            handle_rpc_event(event, swarm, outbound, provider);
+        }
         SwarmEvent::Behaviour(inner) => debug!(?inner, "behaviour event"),
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-            debug!(peer = %peer_id, "connection established");
+            initiate_status_handshake(peer_id, swarm, provider);
         }
         SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
             debug!(peer = %peer_id, ?cause, "connection closed");
@@ -452,6 +487,72 @@ fn handle_swarm_event(
             error!(%error, "listener error");
         }
         other => debug!(?other, "swarm event"),
+    }
+}
+
+/// Sends a Status request to a freshly-connected peer. Both sides
+/// fire this on `ConnectionEstablished`; libp2p assigns distinct
+/// `OutboundRequestId`s and substreams so the two outbound requests do
+/// not collide.
+fn initiate_status_handshake(
+    peer_id: PeerId,
+    swarm: &mut Swarm<DevnetBehaviour>,
+    provider: &dyn RpcProvider,
+) {
+    debug!(peer = %peer_id, "connection established; initiating status handshake");
+    let local = provider.local_status();
+    let _ = swarm
+        .behaviour_mut()
+        .request_response
+        .send_request(&peer_id, RpcRequest::Status(local));
+}
+
+fn handle_rpc_event(
+    event: request_response::Event<RpcRequest, RpcResponse>,
+    swarm: &mut Swarm<DevnetBehaviour>,
+    outbound: &mut OutboundTable,
+    provider: &dyn RpcProvider,
+) {
+    match event {
+        request_response::Event::Message { peer, message, .. } => match message {
+            request_response::Message::Request {
+                request, channel, ..
+            } => match request {
+                RpcRequest::Status(s) => {
+                    status_handler::on_inbound(peer, &s, channel, swarm, provider);
+                }
+                RpcRequest::BlocksByRoot(r) => {
+                    blocks_handler::on_inbound(peer, &r, channel, swarm, provider);
+                }
+            },
+            request_response::Message::Response {
+                request_id,
+                response,
+            } => match response {
+                RpcResponse::Status(s) => {
+                    status_handler::on_outbound_response(peer, &s, swarm, provider);
+                    // Status handshake is fire-and-validate; no caller
+                    // is awaiting an oneshot reply for it.
+                    let _ = request_id;
+                }
+                RpcResponse::BlocksByRoot(_) => {
+                    outbound.fulfill(request_id, response);
+                }
+            },
+        },
+        request_response::Event::OutboundFailure {
+            peer,
+            request_id,
+            error,
+            ..
+        } => {
+            warn!(peer = %peer, %error, "rpc outbound failure");
+            outbound.fail(request_id, error.to_string());
+        }
+        request_response::Event::InboundFailure { peer, error, .. } => {
+            warn!(peer = %peer, %error, "rpc inbound failure");
+        }
+        request_response::Event::ResponseSent { .. } => {}
     }
 }
 

@@ -49,6 +49,20 @@ pub(crate) enum HostCommand {
         /// [`crate::gossip::PublishError`].
         reply: oneshot::Sender<Result<gossipsub::MessageId, gossipsub::PublishError>>,
     },
+    /// Send an outbound RPC request to `peer` and reply with the typed
+    /// [`crate::rpc::RpcResponse`] (or an [`crate::rpc::RpcError`] on
+    /// failure). Constructed by [`crate::Host::send_blocks_by_root`].
+    SendRequest {
+        /// Target peer for the request.
+        peer: PeerId,
+        /// Typed request — the swarm task hands it directly to
+        /// `request_response::Behaviour::send_request`.
+        request: crate::rpc::RpcRequest,
+        /// One-shot reply channel — the swarm task parks it in the
+        /// outbound correlation table until the matching libp2p
+        /// response or failure event arrives.
+        reply: oneshot::Sender<Result<crate::rpc::RpcResponse, crate::rpc::RpcError>>,
+    },
 }
 
 /// Cheap clone-friendly handle pointing at one swarm-poll task.

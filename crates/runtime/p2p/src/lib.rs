@@ -24,6 +24,7 @@ pub mod gossip;
 mod host;
 mod local;
 mod options;
+pub mod rpc;
 mod service;
 mod wiring;
 
@@ -32,4 +33,5 @@ pub use error::{HostError, HostResult};
 pub use gossip::{BlockReceiver, GossipReceiver, MessageId, PublishError, Topic, VoteReceiver};
 pub use host::Host;
 pub use options::{AgentVersion, BootnodesPath, HostOptions, IdentityPath, ListenAddr};
+pub use rpc::{NoOpRpcProvider, RpcError, RpcProvider, RpcRequest, RpcResponse};
 pub use service::P2pService;

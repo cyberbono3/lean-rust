@@ -20,11 +20,14 @@ later additions without `Arc<Mutex<Swarm>>` contention.
   `stop` signals shutdown via the command channel + cancellation
   token and joins the task.
 - [`Host`] — clone-friendly handle. `peer_id()` +
-  `publish_block` / `publish_vote` (gossipsub) today; req/resp send
-  variants extend [`HostCommand`] in later milestones.
+  `publish_block` / `publish_vote` (gossipsub) +
+  `send_blocks_by_root` (req/resp).
 - [`gossip`] — typed [`Topic`] wrapper, [`MessageId`] / [`PublishError`]
   re-exports, and one-shot [`BlockReceiver`] / [`VoteReceiver`] handles
   for inbound `SignedBlock` / `SignedVote` payloads.
+- [`rpc`] — [`RpcProvider`] trait (composing binary implements over
+  `storage::Store`), [`NoOpRpcProvider`] convenience, typed
+  [`RpcRequest`] / [`RpcResponse`] enums, [`RpcError`] failure surface.
 - [`HostOptions`] + newtypes — `ListenAddr`, `AgentVersion`,
   `IdentityPath`, `BootnodesPath`. Always-valid: construction goes
   through `HostOptions::new` (typed) or `HostOptions::try_new`
@@ -45,6 +48,12 @@ later additions without `Arc<Mutex<Swarm>>` contention.
 [`PublishError`]: ./src/gossip/publisher.rs
 [`BlockReceiver`]: ./src/gossip/handler.rs
 [`VoteReceiver`]: ./src/gossip/handler.rs
+[`rpc`]: ./src/rpc/mod.rs
+[`RpcProvider`]: ./src/rpc/mod.rs
+[`NoOpRpcProvider`]: ./src/rpc/mod.rs
+[`RpcRequest`]: ./src/host/behaviour/codec.rs
+[`RpcResponse`]: ./src/host/behaviour/codec.rs
+[`RpcError`]: ./src/rpc/mod.rs
 [`runtime_core::Service`]: ../core/src/service.rs
 [`NetworkBehaviour`]: https://docs.rs/libp2p/0.55/libp2p/swarm/trait.NetworkBehaviour.html
 
@@ -113,6 +122,47 @@ Backpressure: the handler uses `try_send` and drops on a full receiver
 [`networking::encode_gossip`]: ../../networking/src/codecs.rs
 [`networking::decode_gossip`]: ../../networking/src/codecs.rs
 
+## Req/Resp
+
+Two protocols on `request_response::Behaviour<SszSnappyCodec>`:
+
+- [`networking::STATUS_PROTOCOL_V1`] (`/lean/status/1`) — handshake.
+  Each side sends a `Status` request on `ConnectionEstablished`. The
+  peer's reply is validated against the local Status from
+  [`RpcProvider::local_status`]; mismatched peers are disconnected via
+  `Swarm::disconnect_peer_id`. Devnet0-permissive predicate: same
+  finalized slot ⇒ roots must agree; otherwise one party is ahead and
+  the other can sync.
+- [`networking::BLOCKS_BY_ROOT_PROTOCOL_V1`] (`/lean/blocks_by_root/1`)
+  — request a list of blocks by tree-root. Inbound requests are
+  answered by looking up each root via
+  [`RpcProvider::get_block_by_root`]; unknown roots are silently
+  dropped (response is empty when every root is missing). Outbound
+  requests go through [`Host::send_blocks_by_root`]; the swarm task
+  parks the reply oneshot in an `OutboundRequestId`-keyed correlation
+  table until the matching libp2p response or failure event fires.
+
+The codec ([`SszSnappyCodec`]) bridges sync-encoded SSZ + Snappy frames
+(from [`networking::encode_req_resp`] / [`networking::decode_req_resp`])
+to libp2p's async substream API via a read-to-end + sync-decode
+pattern.
+
+Storage decoupling: [`RpcProvider`] is the trait the composing binary
+(`node`) implements over `storage::Store`. `runtime-p2p` accepts
+`Arc<dyn RpcProvider>` at [`DevnetHost::build_with_provider`].
+Lifecycle tests use [`DevnetHost::build`], which wires a
+[`NoOpRpcProvider`] internally.
+
+[`networking::STATUS_PROTOCOL_V1`]: ../../networking/src/protocol_ids.rs
+[`networking::BLOCKS_BY_ROOT_PROTOCOL_V1`]: ../../networking/src/protocol_ids.rs
+[`Host::send_blocks_by_root`]: ./src/rpc/client.rs
+[`SszSnappyCodec`]: ./src/host/behaviour/codec.rs
+[`networking::encode_req_resp`]: ../../networking/src/codecs.rs
+[`networking::decode_req_resp`]: ../../networking/src/codecs.rs
+[`RpcProvider::local_status`]: ./src/rpc/mod.rs
+[`RpcProvider::get_block_by_root`]: ./src/rpc/mod.rs
+[`DevnetHost::build_with_provider`]: ./src/devnet.rs
+
 ## Identity persistence
 
 `<identity_path>` holds the libp2p protobuf-encoded keypair. Missing
@@ -165,10 +215,10 @@ cargo metadata --format-version=1 \
 
 ## Out of scope
 
-- `Status` / `BlocksByRoot` handler logic — follow-up work
-  (codec is a stub in this crate).
-- Two-node loopback interop — follow-up work.
+- Two-node loopback interop smoke test — follow-up work.
 - `runtime-chain::Publisher` adapter wiring — `node` crate.
+- Per-block streaming `BlocksByRoot` wire format (current shape is one
+  SSZ container per response).
 - Topic scoring / peer scoring / mesh tuning.
 - Backpressure-aware ingestion (current handler drops on full
   receiver; gossipsub mesh replay covers transient loss).
