@@ -26,4 +26,7 @@ pub mod http;
 pub mod metrics;
 
 pub use http::{HttpError, HttpService};
-pub use metrics::{GaugeProvider, LabeledGaugeProvider, MetricsError, MetricsService, Recorder};
+pub use metrics::{
+    GaugeProvider, LabeledGaugeProvider, LabeledGaugeSamples, MetricsError, MetricsService,
+    Recorder,
+};

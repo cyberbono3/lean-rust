@@ -16,11 +16,16 @@ use super::error::MetricsError;
 /// Provider for a single unsigned integer gauge.
 pub type GaugeProvider = dyn Fn() -> u64 + Send + Sync + 'static;
 
+/// Samples returned by a one-label gauge provider.
+///
+/// Each tuple is `(label_value, metric_value)`.
+pub type LabeledGaugeSamples = Vec<(String, u64)>;
+
 /// Provider for one-label unsigned integer gauge samples.
 ///
 /// The tuple shape is `(label_value, metric_value)`. The metric
 /// definition supplies the label name.
-pub type LabeledGaugeProvider = dyn Fn() -> Vec<(String, u64)> + Send + Sync + 'static;
+pub type LabeledGaugeProvider = dyn Fn() -> LabeledGaugeSamples + Send + Sync + 'static;
 
 /// Runtime metrics recorder backed by injected provider closures.
 #[derive(Clone)]
@@ -82,7 +87,7 @@ impl Recorder {
         label_name: impl Into<String>,
         provider: F,
     ) where
-        F: Fn() -> Vec<(String, u64)> + Send + Sync + 'static,
+        F: Fn() -> LabeledGaugeSamples + Send + Sync + 'static,
     {
         self.push_metric(MetricDefinition::labeled_gauge(
             name, help, label_name, provider,
@@ -136,7 +141,7 @@ impl MetricDefinition {
         provider: F,
     ) -> Self
     where
-        F: Fn() -> Vec<(String, u64)> + Send + Sync + 'static,
+        F: Fn() -> LabeledGaugeSamples + Send + Sync + 'static,
     {
         Self::LabeledGauge {
             name: name.into(),
@@ -181,7 +186,7 @@ fn register_labeled_gauge(
     name: &str,
     help: &str,
     label_name: &str,
-    samples: Vec<(String, u64)>,
+    samples: LabeledGaugeSamples,
 ) -> Result<(), MetricsError> {
     let gauge = IntGaugeVec::new(Opts::new(name.to_owned(), help), &[label_name])?;
     for (label, raw_value) in samples {
