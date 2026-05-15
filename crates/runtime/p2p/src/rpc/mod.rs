@@ -73,8 +73,11 @@ impl RpcProvider for NoOpRpcProvider {
 }
 
 /// Convenience alias for the shared-provider shape stored on
-/// [`crate::P2pService`].
-pub type SharedRpcProvider = Arc<dyn RpcProvider>;
+/// [`crate::P2pService`]. Internal to this crate — public consumers
+/// (notably the `node` adapter at the composition root) construct an
+/// `Arc<dyn RpcProvider>` directly and pass it to
+/// [`crate::DevnetHost::build_with_provider`].
+pub(crate) type SharedRpcProvider = Arc<dyn RpcProvider>;
 
 /// Failure surface for outbound RPC calls.
 #[derive(Debug, thiserror::Error)]

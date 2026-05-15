@@ -284,7 +284,7 @@ impl Service for P2pService {
 
     #[instrument(name = "p2p.stop", skip_all, fields(peer_id = %self.peer_id))]
     async fn stop(&self, cancel: CancellationToken) -> anyhow::Result<()> {
-        let Some((task_cancel, join, host)) = self.take_running() else {
+        let Some((task_cancel, mut join, host)) = self.take_running() else {
             debug!("stop called on non-running service");
             return Ok(());
         };
@@ -297,7 +297,7 @@ impl Service for P2pService {
         // Bound the join on the caller-supplied cancellation token —
         // when it fires we abort the task and return.
         tokio::select! {
-            res = join => {
+            res = &mut join => {
                 if let Err(err) = res {
                     if err.is_panic() {
                         return Err(anyhow!("p2p swarm task panicked: {err}"));
@@ -307,7 +307,13 @@ impl Service for P2pService {
                 Ok(())
             }
             () = cancel.cancelled() => {
-                warn!("shutdown cancel fired before swarm task drained");
+                // Caller's deadline fired before the task drained on
+                // its own. Abort to guarantee no orphaned swarm task
+                // outlives `stop()`; a cooperative shutdown via
+                // `task_cancel` may still be in flight, so the abort
+                // is belt-and-suspenders.
+                warn!("shutdown cancel fired before swarm task drained; aborting");
+                join.abort();
                 Ok(())
             }
         }
