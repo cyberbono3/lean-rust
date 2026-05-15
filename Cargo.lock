@@ -2667,6 +2667,24 @@ dependencies = [
 [[package]]
 name = "node"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "engine",
+ "networking",
+ "protocol",
+ "runtime-api",
+ "runtime-chain",
+ "runtime-core",
+ "runtime-duties",
+ "runtime-p2p",
+ "storage",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "types",
+]
 
 [[package]]
 name = "nohash-hasher"
