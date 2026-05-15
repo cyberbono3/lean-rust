@@ -22,6 +22,8 @@
 
 #![forbid(unsafe_code)]
 
+mod server;
+
 pub mod http;
 pub mod metrics;
 
