@@ -10,17 +10,20 @@
 //!   serves `/eth/v1/...` head endpoints, backed by an
 //!   `Arc<dyn storage::Store>` injected at construction.
 //! - [`HttpError`] — public error surface returned to clients.
+//! - [`MetricsService`] — [`runtime_core::Service`] implementation that
+//!   serves Prometheus text exposition on `/metrics`, backed by
+//!   injected provider closures.
 //!
 //! # Architecture
-//! The crate intentionally depends only on `runtime-core` (for the
-//! `Service` trait and shared `httpsvc::Server`), `storage` (for the
-//! `Store` trait + `HeadInfo`), and `protocol` (for `Checkpoint`).
-//! There are no compile-time references to `engine`, `forkchoice`,
-//! `statetransition`, `runtime/chain`, or `runtime/p2p` — composition
-//! happens at the `node` crate (Issue #37).
+//! Runtime data sources stay injected through narrow traits or
+//! closures. There are no compile-time references to `engine`,
+//! `forkchoice`, `statetransition`, `runtime/chain`, or `runtime/p2p` —
+//! composition happens at the `node` crate (Issue #37).
 
 #![forbid(unsafe_code)]
 
 pub mod http;
+pub mod metrics;
 
 pub use http::{HttpError, HttpService};
+pub use metrics::{GaugeProvider, LabeledGaugeProvider, MetricsError, MetricsService, Recorder};

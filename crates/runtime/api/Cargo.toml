@@ -16,6 +16,7 @@ protocol     = { path = "../../protocol" }
 storage      = { path = "../../storage" }
 types        = { path = "../../types" }
 axum         = { workspace = true, features = ["json"] }
+prometheus   = { workspace = true }
 serde        = { workspace = true, features = ["derive"] }
 tokio        = { workspace = true }
 tokio-util   = { workspace = true }
