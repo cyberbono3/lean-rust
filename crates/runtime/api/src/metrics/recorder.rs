@@ -30,10 +30,9 @@ pub type LabeledGaugeProvider = dyn Fn() -> LabeledGaugeSamples + Send + Sync + 
 /// Runtime metrics recorder backed by injected provider closures.
 #[derive(Clone)]
 pub struct Recorder {
-    metrics: Arc<RwLock<Vec<MetricDefinition>>>,
+    metrics: Arc<RwLock<Vec<Arc<MetricDefinition>>>>,
 }
 
-#[derive(Clone)]
 enum MetricDefinition {
     Gauge {
         name: String,
@@ -108,10 +107,10 @@ impl Recorder {
     }
 
     fn push_metric(&self, definition: MetricDefinition) {
-        self.metrics.write().push(definition);
+        self.metrics.write().push(Arc::new(definition));
     }
 
-    fn snapshot_metrics(&self) -> Vec<MetricDefinition> {
+    fn snapshot_metrics(&self) -> Vec<Arc<MetricDefinition>> {
         self.metrics.read().clone()
     }
 }
@@ -188,7 +187,7 @@ fn register_labeled_gauge(
     label_name: &str,
     samples: LabeledGaugeSamples,
 ) -> Result<(), MetricsError> {
-    let gauge = IntGaugeVec::new(Opts::new(name.to_owned(), help), &[label_name])?;
+    let gauge = IntGaugeVec::new(Opts::new(name, help), &[label_name])?;
     for (label, raw_value) in samples {
         let value = metric_value(name, raw_value)?;
         gauge
