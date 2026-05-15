@@ -5,9 +5,28 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Wires concrete services into a `Node`. Implementation lands in a later issue (Tier 7)."
+description   = "Composition root wiring concrete runtime services into a Node."
 
 [lints]
 workspace = true
 
 [dependencies]
+runtime-core   = { path = "../runtime/core" }
+runtime-chain  = { path = "../runtime/chain" }
+runtime-duties = { path = "../runtime/duties" }
+runtime-p2p    = { path = "../runtime/p2p" }
+runtime-api    = { path = "../runtime/api" }
+engine         = { path = "../engine" }
+networking     = { path = "../networking" }
+protocol       = { path = "../protocol" }
+storage        = { path = "../storage" }
+types          = { path = "../types" }
+anyhow         = { workspace = true }
+async-trait    = { workspace = true }
+tracing        = { workspace = true }
+
+[dev-dependencies]
+engine   = { path = "../engine", features = ["test-fixtures"] }
+tempfile = { workspace = true }
+tokio    = { workspace = true }
+tokio-util = { workspace = true }
