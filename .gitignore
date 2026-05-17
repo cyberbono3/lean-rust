@@ -15,6 +15,18 @@ Thumbs.db
 .env
 .env.local
 
+# local-pq devnet generated state
+crates/pq-devnet-0/config/keys/*.key
+crates/pq-devnet-0/config.yaml
+crates/pq-devnet-0/genesis/config.yaml
+crates/pq-devnet-0/genesis/genesis.json
+crates/pq-devnet-0/genesis/genesis.ssz
+crates/pq-devnet-0/genesis/nodes.yaml
+crates/pq-devnet-0/genesis/validators.yaml
+crates/pq-devnet-0/genesis/validator-config.yaml
+crates/pq-devnet-0/genesis/bootnodes.rust.yaml
+crates/pq-devnet-0/logs/*.log
+
 # Third-party research sources (not part of this project)
 superpowers-main/
 caveman/
