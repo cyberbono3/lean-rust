@@ -1,0 +1,20 @@
+[package]
+name          = "pq-devnet-0"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "pq-devnet-0 compatibility fixtures and contract tests."
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+hex            = { workspace = true }
+libp2p         = { workspace = true }
+protocol       = { path = "../protocol" }
+runtime-duties = { path = "../runtime/duties" }
+ssz            = { path = "../ssz" }
