@@ -1,0 +1,33 @@
+# VCS and local agent state
+.git/
+.claude/
+
+# Build outputs
+target/
+**/target/
+
+# Local editor/OS state
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local environment overrides
+.env
+.env.local
+crates/pq-devnet-0/.env
+
+# pq-devnet generated state
+crates/pq-devnet-0/config/keys/*.key
+crates/pq-devnet-0/config.yaml
+crates/pq-devnet-0/genesis/config.yaml
+crates/pq-devnet-0/genesis/genesis.json
+crates/pq-devnet-0/genesis/genesis.ssz
+crates/pq-devnet-0/genesis/nodes.yaml
+crates/pq-devnet-0/genesis/validators.yaml
+crates/pq-devnet-0/genesis/validator-config.yaml
+crates/pq-devnet-0/genesis/bootnodes.rust.yaml
+crates/pq-devnet-0/logs/*.log
