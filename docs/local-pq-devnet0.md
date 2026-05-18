@@ -1,0 +1,325 @@
+# local-pq Devnet0
+
+This guide covers the Docker-based local-pq devnet that runs one `ream` node
+and one `lean-rust` node from this repo. The devnet lives under
+`crates/pq-devnet-0` and uses generated local-pq keys, genesis state, validator
+registry, and bootnode metadata.
+
+## Prerequisites
+
+- Docker with Compose support.
+- A working Rust toolchain for building `lean-rust:local`.
+- Optional local overrides in `crates/pq-devnet-0/.env`.
+
+Create the local environment file before the first run:
+
+```sh
+cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
+```
+
+The default images are:
+
+| Variable | Default |
+| --- | --- |
+| `REAM_IMAGE` | `ethpandaops/ream:master-0bceaee` |
+| `LEAN_RUST_IMAGE` | `lean-rust:local` |
+| `GENESIS_GEN_IMAGE` | `ethpandaops/eth-beacon-genesis:pk910-leanchain` |
+| `GENESIS_OFFSET_SECS` | `60` |
+
+## Quick Start
+
+```sh
+cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
+make devnet-start
+make devnet-status
+docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
+  --project-directory crates/pq-devnet-0 logs -f
+make devnet-stop
+```
+
+There is no `make devnet-logs` target currently. Use the `docker compose logs`
+command above when following logs.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `make devnet-build` | Build the `LEAN_RUST_IMAGE` Docker image, default `lean-rust:local`. |
+| `make devnet-genesis` | Generate local-pq keys, genesis files, validator registry, node metadata, and the Rust bootnode adapter. |
+| `make devnet-up` | Start the `ream` and `lean-rust` containers with Docker Compose. |
+| `make devnet-start` | Run build, genesis generation, and compose startup in order. |
+| `make devnet-status` | Probe both `/lean/v0/head` compatibility endpoints. |
+| `make devnet-down` | Stop containers and remove Compose orphans while keeping generated state. |
+| `make devnet-stop` | Safe stop alias for `devnet-down`; succeeds when nothing is running. |
+| `make devnet-clean` | Stop Compose, remove volumes and orphans, and delete generated keys, genesis files, adapter files, and logs. |
+| `make devnet-clean-check` | Create generated-state sentinels and verify `make devnet-clean` removes generated files while preserving scaffold files. |
+
+## Topology
+
+Docker Compose file:
+`crates/pq-devnet-0/scripts/core/docker-compose.yml`
+
+| Node | Service | Container | Image | Role | Container IP | Host ports | Head URL |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `ream_0` | `node0` | `ream-node0` | `${REAM_IMAGE:-ethpandaops/ream:master-0bceaee}` | ream validator/node, genesis bootnode source | `172.20.0.10` | UDP `9000`, HTTP `5052`, metrics `8080` | `http://127.0.0.1:5052/lean/v0/head` |
+| `leanrust_1` | `node1` | `lean-rust-node1` | `${LEAN_RUST_IMAGE:-lean-rust:local}` | Rust node using generated local-pq state | `172.20.0.11` | UDP `9001` to container `9000`, HTTP `5053` to container `5052`, metrics `8081` to container `8080` | `http://127.0.0.1:5053/lean/v0/head` |
+
+Both services run on the `pq-devnet` bridge network with subnet
+`172.20.0.0/24`. The ream node reads `/genesis/nodes.yaml` as its bootnodes
+file. The Rust node reads `/genesis/bootnodes.rust.yaml`.
+
+## Generated Artifacts
+
+| Path | Created by | Used by | Removed by `make devnet-clean` |
+| --- | --- | --- | --- |
+| `crates/pq-devnet-0/config.yaml` | `make devnet-genesis` | genesis generator input | yes |
+| `crates/pq-devnet-0/config/keys/node0.key` | `make devnet-genesis` | ream node identity and validator config | yes |
+| `crates/pq-devnet-0/config/keys/node1.key` | `make devnet-genesis` | lean-rust node identity and validator config | yes |
+| `crates/pq-devnet-0/genesis/config.yaml` | genesis generator | both nodes as network config | yes |
+| `crates/pq-devnet-0/genesis/genesis.json` | genesis generator | inspection/debugging | yes |
+| `crates/pq-devnet-0/genesis/genesis.ssz` | genesis generator | lean-rust genesis state | yes |
+| `crates/pq-devnet-0/genesis/nodes.yaml` | genesis generator | ream bootnodes/local-pq node metadata | yes |
+| `crates/pq-devnet-0/genesis/validators.yaml` | genesis generator | both nodes as validator registry | yes |
+| `crates/pq-devnet-0/genesis/validator-config.yaml` | `make devnet-genesis` | genesis generator mass validator input | yes |
+| `crates/pq-devnet-0/genesis/bootnodes.rust.yaml` | `make devnet-genesis` | lean-rust `--bootnodes` input | yes |
+| `crates/pq-devnet-0/logs/*.log` | lean-rust container logging | debugging | yes |
+
+Scaffold files such as `config/keys/.gitkeep`, `genesis/.gitkeep`,
+`logs/.gitkeep`, and `scripts/core/.gitkeep` are preserved by
+`make devnet-clean`.
+
+## Bootnode Compatibility
+
+Rust currently uses the generated
+`crates/pq-devnet-0/genesis/bootnodes.rust.yaml` adapter. The setup script
+derives the ream node peer ID from `config/keys/node0.key` with the Rust image
+and writes a multiaddr bootnode entry:
+
+```text
+/ip4/172.20.0.10/udp/9000/quic-v1/p2p/<peer-id>
+```
+
+This adapter is generated from the same local-pq node identity material used by
+the ream/local-pq genesis flow. Do not treat it as proof that Rust directly
+accepts every ENR shape emitted in `genesis/nodes.yaml`; the adapter is the
+compatibility boundary for this devnet.
+
+## Status
+
+`make devnet-status` probes:
+
+```text
+ream node0:      http://127.0.0.1:5052/lean/v0/head
+lean-rust node1: http://127.0.0.1:5053/lean/v0/head
+```
+
+The status script normalizes common checkpoint fields when `jq` is available.
+If a node is still starting, the probe prints `(unreachable)` and exits
+successfully so it can be reused while waiting for the devnet to settle.
+
+## Logs
+
+Follow both containers:
+
+```sh
+docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
+  --project-directory crates/pq-devnet-0 logs -f
+```
+
+Follow one container:
+
+```sh
+docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
+  --project-directory crates/pq-devnet-0 logs -f node1
+```
+
+The Rust container also writes file logs under `crates/pq-devnet-0/logs`.
+
+## Cleanup
+
+Stop containers while preserving generated state:
+
+```sh
+make devnet-stop
+```
+
+Remove containers, volumes, generated files, and logs:
+
+```sh
+make devnet-clean
+```
+
+If behavior changes around generated state, run:
+
+```sh
+make devnet-clean-check
+```
+
+The check refuses to run when existing generated state is present, creates only
+sentinel generated files, runs `make devnet-clean` with Docker cleanup skipped,
+and verifies scaffold files remain.
+
+## Relationship To Loopback Interop
+
+This Docker devnet is separate from `make interop-devnet0`.
+
+| Flow | Clients | Transport | State source | Main use |
+| --- | --- | --- | --- | --- |
+| `make interop-devnet0` | `lean-go <-> lean-rust` | direct loopback processes | checked-in Go fixture plus generated run artifacts | fast protocol interop checks between Go and Rust |
+| local-pq devnet | `ream <-> lean-rust` | Docker Compose bridge network | generated local-pq genesis under `crates/pq-devnet-0` | operator-like ream/Rust devnet validation |
+
+Use loopback interop when testing Rust/Go networking behavior without Docker.
+Use this devnet when validating the repo-local local-pq flow, ream image
+compatibility, generated genesis, Docker topology, and `/lean/v0/head`
+compatibility route.
+
+## Troubleshooting
+
+### Genesis Decode Failure
+
+Symptoms:
+
+- lean-rust exits during startup after reading `/genesis/genesis.ssz`.
+- `make devnet-status` reaches ream but not lean-rust.
+
+Checks:
+
+```sh
+test -s crates/pq-devnet-0/genesis/genesis.ssz
+docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
+  --project-directory crates/pq-devnet-0 logs node1
+```
+
+Regenerate state with:
+
+```sh
+make devnet-clean
+make devnet-genesis
+```
+
+### secp256k1 Identity Mismatch
+
+Symptoms:
+
+- Rust dials a peer ID that ream does not own.
+- Handshake or peer identity logs disagree with the generated bootnode entry.
+
+Checks:
+
+```sh
+cat crates/pq-devnet-0/config/keys/node0.key
+cat crates/pq-devnet-0/genesis/bootnodes.rust.yaml
+```
+
+Regenerate keys and bootnodes together. Do not edit individual generated files
+by hand:
+
+```sh
+make devnet-clean
+make devnet-genesis
+```
+
+### ENR Parse Or Bootnode Adapter Failure
+
+Symptoms:
+
+- `make devnet-genesis` fails before Compose starts.
+- `bootnodes.rust.yaml` is empty or missing `/p2p/`.
+- Rust reports invalid bootnode input.
+
+Checks:
+
+```sh
+test -s crates/pq-devnet-0/genesis/nodes.yaml
+test -s crates/pq-devnet-0/genesis/bootnodes.rust.yaml
+grep -n "/p2p/" crates/pq-devnet-0/genesis/bootnodes.rust.yaml
+```
+
+Rebuild the Rust image if the `peer-id` helper is missing or stale:
+
+```sh
+FORCE=1 make devnet-build
+make devnet-genesis
+```
+
+### Peers Connected But No Gossip
+
+Symptoms:
+
+- Containers are running and peer connections appear in logs.
+- Blocks or votes do not propagate.
+- Rust logs publish failures or insufficient mesh peers.
+
+Checks:
+
+```sh
+docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
+  --project-directory crates/pq-devnet-0 logs node0 node1
+```
+
+Confirm both nodes use the same generated network config and validator
+registry:
+
+```sh
+test -s crates/pq-devnet-0/genesis/config.yaml
+test -s crates/pq-devnet-0/genesis/validators.yaml
+```
+
+### Rust Proposal Not Imported By ream
+
+Symptoms:
+
+- lean-rust logs proposal production or publication.
+- ream does not advance to the expected head.
+
+Checks:
+
+```sh
+make devnet-status
+docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
+  --project-directory crates/pq-devnet-0 logs node0
+```
+
+Verify the validator registry contains both local-pq node IDs:
+
+```sh
+grep -n "ream_0\\|leanrust_1" crates/pq-devnet-0/genesis/validators.yaml
+```
+
+### Head Divergence
+
+Symptoms:
+
+- Both `/lean/v0/head` endpoints respond.
+- `head`, `finalized`, `latest_justified`, or `safe_target` differ.
+
+Checks:
+
+```sh
+make devnet-status
+curl -s http://127.0.0.1:5052/lean/v0/head
+curl -s http://127.0.0.1:5053/lean/v0/head
+```
+
+Check for recent startup churn first. If divergence persists, inspect both
+logs and regenerate state from a clean devnet:
+
+```sh
+make devnet-clean
+make devnet-start
+```
+
+### Stale Docker Image Or Generated State
+
+Symptoms:
+
+- CLI flags documented in this repo are rejected by the container.
+- Genesis files do not match the current scripts.
+
+Checks and recovery:
+
+```sh
+FORCE=1 make devnet-build
+make devnet-clean
+make devnet-start
+```
