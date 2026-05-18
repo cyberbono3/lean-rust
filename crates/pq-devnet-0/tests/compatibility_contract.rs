@@ -1,22 +1,20 @@
 //! Contract tests for the local pq-devnet0 artifacts consumed by lean-rust.
 
-#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::panic)]
 
-use std::path::{Path, PathBuf};
-
-use libp2p::identity::{secp256k1, Keypair};
+use libp2p::{
+    identity::{secp256k1, Keypair},
+    multiaddr::Protocol,
+    Multiaddr,
+};
+use pq_devnet_0::{
+    fixture_path, LEANRUST_1_PEER_ID, LEANRUST_1_RAW_SECP256K1_KEY_FIXTURE, REAM_0_BOOTNODE_ADDR,
+    REAM_0_PEER_ID, REAM_0_RAW_SECP256K1_KEY_FIXTURE, RUST_BOOTNODES_2NODE_FIXTURE,
+};
 use protocol::{ProtocolConfig, State, ValidatorIndex};
 use runtime_duties::ValidatorAssignments;
 
 const GENESIS_TIME: u64 = 1_778_169_008;
-const EXPECTED_NODE1_PEER_ID: &str = "16Uiu2HAm4fSpFwKLAxCazVAVpsPuzmLGFYZbY8x1JNBWBDcaQ4wZ";
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(name)
-}
 
 fn decode_hex_fixture(name: &str) -> Vec<u8> {
     let hex = std::fs::read_to_string(fixture_path(name)).expect("read hex fixture");
@@ -25,6 +23,27 @@ fn decode_hex_fixture(name: &str) -> Vec<u8> {
 
 fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("u64 field"))
+}
+
+fn derive_peer_id_from_raw_key(name: &str) -> String {
+    let raw_key = std::fs::read_to_string(fixture_path(name)).expect("read secp256k1 key fixture");
+    let mut bytes = hex::decode(raw_key.trim()).expect("fixture must be valid hex");
+    let secret =
+        secp256k1::SecretKey::try_from_bytes(&mut bytes).expect("fixture must be a secp key");
+    Keypair::from(secp256k1::Keypair::from(secret))
+        .public()
+        .to_peer_id()
+        .to_string()
+}
+
+fn parse_bootnode_entry(entry: &str) -> (Multiaddr, String) {
+    let mut addr = entry.parse::<Multiaddr>().expect("adapter multiaddr");
+    let peer_id = match addr.pop() {
+        Some(Protocol::P2p(peer_id)) => peer_id.to_string(),
+        other => panic!("expected terminal /p2p peer id, got {other:?}"),
+    };
+
+    (addr, peer_id)
 }
 
 fn decode_current_local_pq_genesis(bytes: &[u8]) -> State {
@@ -74,18 +93,33 @@ fn genesis_2node_fixture_decodes_to_protocol_state() {
 }
 
 #[test]
-fn raw_secp256k1_node_key_derives_stable_peer_id() {
-    let raw_key = std::fs::read_to_string(fixture_path("node1-secp256k1.key"))
-        .expect("read secp256k1 key fixture");
-    let mut bytes = hex::decode(raw_key.trim()).expect("fixture must be valid hex");
-    let secret =
-        secp256k1::SecretKey::try_from_bytes(&mut bytes).expect("fixture must be a secp key");
-    let peer_id = Keypair::from(secp256k1::Keypair::from(secret))
-        .public()
-        .to_peer_id()
-        .to_string();
+fn raw_secp256k1_node_keys_derive_stable_peer_ids() {
+    for (fixture, expected_peer_id) in [
+        (REAM_0_RAW_SECP256K1_KEY_FIXTURE, REAM_0_PEER_ID),
+        (LEANRUST_1_RAW_SECP256K1_KEY_FIXTURE, LEANRUST_1_PEER_ID),
+    ] {
+        assert_eq!(derive_peer_id_from_raw_key(fixture), expected_peer_id);
+    }
+}
 
-    assert_eq!(peer_id, EXPECTED_NODE1_PEER_ID);
+#[test]
+fn bootnodes_rust_adapter_fixture_is_remote_ream_multiaddr() {
+    let raw = std::fs::read(fixture_path(RUST_BOOTNODES_2NODE_FIXTURE))
+        .expect("read bootnodes adapter fixture");
+    let entries: Vec<String> = serde_yaml::from_slice(&raw).expect("adapter must be YAML list");
+    let [entry] = entries.as_slice() else {
+        panic!("expected exactly one Rust bootnode entry, got {entries:?}");
+    };
+
+    let (addr, peer_id) = parse_bootnode_entry(entry);
+
+    assert_eq!(addr.to_string(), REAM_0_BOOTNODE_ADDR);
+    assert_eq!(peer_id, REAM_0_PEER_ID);
+    assert_eq!(
+        peer_id,
+        derive_peer_id_from_raw_key(REAM_0_RAW_SECP256K1_KEY_FIXTURE)
+    );
+    assert_ne!(peer_id, LEANRUST_1_PEER_ID);
 }
 
 #[test]

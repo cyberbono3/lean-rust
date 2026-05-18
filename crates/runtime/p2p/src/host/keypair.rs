@@ -146,9 +146,8 @@ fn io_err(path: impl Into<PathBuf>, source: std::io::Error) -> HostError {
 mod tests {
     use super::*;
     use crate::{DevnetHost, HostOptions};
+    use pq_devnet_0::{leanrust_1_raw_secp256k1_key_path, LEANRUST_1_PEER_ID};
     use tempfile::{tempdir, TempDir};
-
-    const EXPECTED_NODE1_PEER_ID: &str = "16Uiu2HAm4fSpFwKLAxCazVAVpsPuzmLGFYZbY8x1JNBWBDcaQ4wZ";
 
     fn temp_identity_at(rel: impl AsRef<Path>) -> (TempDir, IdentityPath) {
         let dir = tempdir().unwrap();
@@ -161,8 +160,7 @@ mod tests {
     }
 
     fn raw_fixture_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../pq-devnet-0/tests/fixtures/node1-secp256k1.key")
+        leanrust_1_raw_secp256k1_key_path()
     }
 
     fn raw_fixture_bytes() -> Vec<u8> {
@@ -213,7 +211,7 @@ mod tests {
 
         assert_eq!(
             keypair.public().to_peer_id().to_string(),
-            EXPECTED_NODE1_PEER_ID
+            LEANRUST_1_PEER_ID
         );
     }
 
@@ -279,7 +277,7 @@ mod tests {
 
         let host = DevnetHost::build(options).unwrap();
 
-        assert_eq!(host.peer_id().to_string(), EXPECTED_NODE1_PEER_ID);
+        assert_eq!(host.peer_id().to_string(), LEANRUST_1_PEER_ID);
     }
 
     #[cfg(unix)]

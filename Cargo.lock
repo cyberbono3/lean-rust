@@ -3090,6 +3090,7 @@ dependencies = [
  "libp2p",
  "protocol",
  "runtime-duties",
+ "serde_yaml",
  "ssz",
 ]
 
@@ -3625,6 +3626,7 @@ dependencies = [
  "libp2p",
  "networking",
  "parking_lot",
+ "pq-devnet-0",
  "protocol",
  "runtime-core",
  "serde",

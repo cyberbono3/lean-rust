@@ -35,5 +35,6 @@ futures           = { workspace = true }
 static_assertions = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
-tokio    = { workspace = true, features = ["test-util"] }
+pq-devnet-0 = { path = "../../pq-devnet-0" }
+tempfile    = { workspace = true }
+tokio       = { workspace = true, features = ["test-util"] }
