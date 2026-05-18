@@ -171,10 +171,12 @@ async fn drain_blocks(
                     debug!("block gossip receiver closed");
                     break;
                 };
+                let slot = block.message.slot;
+                let proposer = block.message.proposer_index;
                 match chain.import_block(block).await {
-                    Ok(outcome) => log_block_outcome(&outcome),
+                    Ok(outcome) => log_block_outcome(slot, proposer, &outcome),
                     Err(err) => {
-                        warn!(%err, "gossip block import failed");
+                        warn!(slot = slot.get(), proposer = proposer.get(), %err, "gossip block import failed");
                         state.lock().last_err = Some(format!("block import failed: {err}"));
                     }
                 }
@@ -198,10 +200,12 @@ async fn drain_votes(
                     debug!("vote gossip receiver closed");
                     break;
                 };
+                let slot = vote.message.slot;
+                let validator = vote.validator_id;
                 match chain.import_attestation(vote).await {
-                    Ok(outcome) => log_vote_outcome(&outcome),
+                    Ok(outcome) => log_vote_outcome(slot, validator, &outcome),
                     Err(err) => {
-                        warn!(%err, "gossip vote import failed");
+                        warn!(slot = slot.get(), validator = validator.get(), %err, "gossip vote import failed");
                         state.lock().last_err = Some(format!("vote import failed: {err}"));
                     }
                 }
@@ -210,31 +214,52 @@ async fn drain_votes(
     }
 }
 
-fn log_block_outcome(outcome: &BlockImportResult) {
+fn log_block_outcome(
+    slot: protocol::Slot,
+    proposer: protocol::ValidatorIndex,
+    outcome: &BlockImportResult,
+) {
     match outcome {
         BlockImportResult::Accepted {
             block_root,
             head_root,
             ..
         } => info!(
+            slot = slot.get(),
+            proposer = proposer.get(),
             block_root = %block_root.to_hex(),
             head_root = %head_root.to_hex(),
             "gossip block accepted",
         ),
         BlockImportResult::Rejected { error, .. } => {
-            debug!(%error, "gossip block rejected");
+            debug!(
+                slot = slot.get(),
+                proposer = proposer.get(),
+                %error,
+                "gossip block rejected",
+            );
         }
-        _ => debug!(?outcome, "gossip block import outcome"),
+        _ => debug!(
+            slot = slot.get(),
+            proposer = proposer.get(),
+            ?outcome,
+            "gossip block import outcome",
+        ),
     }
 }
 
-fn log_vote_outcome(outcome: &AttestationImportResult) {
+fn log_vote_outcome(
+    slot: protocol::Slot,
+    validator: protocol::ValidatorIndex,
+    outcome: &AttestationImportResult,
+) {
     match outcome {
         AttestationImportResult::Accepted {
             validator_id,
             head_root,
             ..
         } => debug!(
+            slot = slot.get(),
             validator = validator_id.get(),
             head_root = %head_root.to_hex(),
             "gossip vote accepted",
@@ -243,10 +268,16 @@ fn log_vote_outcome(outcome: &AttestationImportResult) {
             validator_id,
             error,
         } => debug!(
+            slot = slot.get(),
             validator = validator_id.get(),
             %error,
             "gossip vote rejected",
         ),
-        _ => debug!(?outcome, "gossip vote import outcome"),
+        _ => debug!(
+            slot = slot.get(),
+            validator = validator.get(),
+            ?outcome,
+            "gossip vote import outcome",
+        ),
     }
 }

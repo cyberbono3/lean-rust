@@ -20,6 +20,7 @@
 use std::fs;
 
 use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
+use tracing::debug;
 
 use crate::error::{HostError, HostResult};
 use crate::options::BootnodesPath;
@@ -54,6 +55,12 @@ pub fn load(path: &BootnodesPath) -> HostResult<Vec<Bootnode>> {
         path: p.to_path_buf(),
         source,
     })?;
+    debug!(
+        path = %p.display(),
+        bytes = bytes.len(),
+        entries = raw.len(),
+        "read bootnodes YAML",
+    );
     raw.into_iter().map(parse_entry).collect()
 }
 

@@ -8,6 +8,7 @@ use config::Config as ChainConfig;
 use protocol::{Block, BlockBody, BlockHeader, ProtocolConfig, State};
 use runtime_duties::ValidatorAssignments;
 use ssz::HashTreeRoot;
+use tracing::{debug, info, warn};
 
 const DEFAULT_GENESIS_DELAY_SLOTS: u64 = 15;
 
@@ -19,12 +20,35 @@ const DEFAULT_GENESIS_DELAY_SLOTS: u64 = 15;
 /// rejects its contents.
 pub fn load_chain_config(path: Option<&Path>) -> Result<ChainConfig> {
     let Some(path) = path else {
-        return Ok(ChainConfig::default());
+        let config = ChainConfig::default();
+        info!(
+            slot_duration_ms = config.slot_duration_ms,
+            seconds_per_slot = config.seconds_per_slot,
+            validator_registry_limit = config.validator_registry_limit,
+            historical_roots_limit = config.historical_roots_limit,
+            "using default genesis config",
+        );
+        return Ok(config);
     };
     let yaml = std::fs::read_to_string(path)
         .with_context(|| format!("read genesis config YAML {}", path.display()))?;
-    ChainConfig::from_yaml(&yaml)
-        .with_context(|| format!("parse genesis config YAML {}", path.display()))
+    debug!(
+        path = %path.display(),
+        bytes = yaml.len(),
+        "read genesis config YAML",
+    );
+    let config = ChainConfig::from_yaml(&yaml)
+        .inspect_err(|err| warn!(path = %path.display(), %err, "genesis config parse failed"))
+        .with_context(|| format!("parse genesis config YAML {}", path.display()))?;
+    info!(
+        path = %path.display(),
+        slot_duration_ms = config.slot_duration_ms,
+        seconds_per_slot = config.seconds_per_slot,
+        validator_registry_limit = config.validator_registry_limit,
+        historical_roots_limit = config.historical_roots_limit,
+        "loaded genesis config",
+    );
+    Ok(config)
 }
 
 /// Loads an SSZ-encoded genesis state from disk.
@@ -36,8 +60,29 @@ pub fn load_chain_config(path: Option<&Path>) -> Result<ChainConfig> {
 pub fn load_state(path: &Path) -> Result<State> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("read genesis state SSZ {}", path.display()))?;
-    ssz::decode::<State>(&bytes)
-        .with_context(|| format!("decode genesis state SSZ {}", path.display()))
+    debug!(
+        path = %path.display(),
+        bytes = bytes.len(),
+        "read genesis state SSZ",
+    );
+    let state = ssz::decode::<State>(&bytes)
+        .inspect_err(|err| {
+            warn!(
+                path = %path.display(),
+                bytes = bytes.len(),
+                %err,
+                "genesis state SSZ decode failed",
+            );
+        })
+        .with_context(|| format!("decode genesis state SSZ {}", path.display()))?;
+    info!(
+        path = %path.display(),
+        validators = state.config.num_validators,
+        genesis_time = state.config.genesis_time,
+        slot = state.slot.get(),
+        "decoded genesis state SSZ",
+    );
+    Ok(state)
 }
 
 /// Loads a supplied genesis state, or synthesizes a devnet state from the
@@ -56,6 +101,10 @@ pub fn load_or_synthesize_state(
     let state = if let Some(path) = state_path {
         load_state(path)?
     } else {
+        debug!(
+            path = %validators_path.display(),
+            "loading validator assignments for synthesized genesis state",
+        );
         let assignments = ValidatorAssignments::load(validators_path).with_context(|| {
             format!(
                 "load validator assignments for synthesized genesis state from {}",
@@ -63,9 +112,22 @@ pub fn load_or_synthesize_state(
             )
         })?;
         let genesis_time = default_genesis_time(chain_config)?;
-        synthesize_state(assignments.total_validators(), genesis_time)
+        let state = synthesize_state(assignments.total_validators(), genesis_time);
+        info!(
+            validator_registry_path = %validators_path.display(),
+            validators = state.config.num_validators,
+            genesis_time = state.config.genesis_time,
+            "synthesized genesis state",
+        );
+        state
     };
     validate_state_limits(&state, chain_config)?;
+    info!(
+        validators = state.config.num_validators,
+        genesis_time = state.config.genesis_time,
+        slot = state.slot.get(),
+        "loaded genesis state",
+    );
     Ok(state)
 }
 
@@ -94,13 +156,21 @@ pub fn anchor_block_for_state(state: &State) -> Result<Block> {
         header.slot,
     );
 
-    Ok(Block {
+    let block = Block {
         slot: header.slot,
         proposer_index: header.proposer_index,
         parent_root: header.parent_root,
         state_root: state.hash_tree_root().into(),
         body,
-    })
+    };
+    info!(
+        slot = block.slot.get(),
+        proposer = block.proposer_index.get(),
+        state_root = %hex32(block.state_root.0),
+        block_root = %hex32(block.hash_tree_root()),
+        "derived genesis anchor block",
+    );
+    Ok(block)
 }
 
 fn synthesize_state(num_validators: u64, genesis_time: u64) -> State {
@@ -132,6 +202,13 @@ fn validate_state_limits(state: &State, chain_config: &ChainConfig) -> Result<()
         "genesis state contains {historical_roots} historical roots, exceeding genesis config historical_roots_limit {}",
         chain_config.historical_roots_limit,
     );
+    debug!(
+        validators = state.config.num_validators,
+        validator_registry_limit = chain_config.validator_registry_limit,
+        historical_roots,
+        historical_roots_limit = chain_config.historical_roots_limit,
+        "genesis state limits accepted",
+    );
     Ok(())
 }
 
@@ -146,6 +223,16 @@ fn default_genesis_time(chain_config: &ChainConfig) -> Result<u64> {
         .context("default genesis delay overflowed")?;
     now.checked_add(delay)
         .context("default genesis timestamp overflowed")
+}
+
+fn hex32(bytes: [u8; 32]) -> String {
+    let mut out = String::with_capacity(66);
+    out.push_str("0x");
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
 }
 
 #[cfg(test)]

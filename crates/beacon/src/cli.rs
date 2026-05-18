@@ -284,7 +284,6 @@ mod tests {
             "--metrics",
             "--metrics-address=0.0.0.0",
             "--metrics-port=8080",
-            "--debug",
             "--log.dir.path=/var/lean-logs",
         ])
         .expect("parse planned lean-rust compose command");
@@ -318,7 +317,7 @@ mod tests {
         assert!(cli.metrics);
         assert_eq!(cli.metrics_address, Some(unspecified()));
         assert_eq!(cli.metrics_port, Some(8080));
-        assert_eq!(cli.verbosity(), Verbosity::Trace);
+        assert_eq!(cli.verbosity(), Verbosity::Info);
         assert_eq!(cli.log_dir_path, Some(PathBuf::from("/var/lean-logs")));
     }
 

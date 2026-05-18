@@ -29,6 +29,7 @@ async fn main() -> Result<()> {
 
 async fn run(cli: Cli) -> Result<()> {
     let _tracing_guard = init_tracing(&cli)?;
+    log_startup_config(&cli);
 
     match &cli.command {
         Some(Command::GeneratePrivateKey { output_path }) => {
@@ -63,6 +64,41 @@ async fn run(cli: Cli) -> Result<()> {
 
 fn init_tracing(cli: &Cli) -> Result<TracingGuard> {
     runtime_core::init_tracing(cli.verbosity(), file_sink(cli)?).context("initialize tracing")
+}
+
+fn log_startup_config(cli: &Cli) {
+    let rust_log = std::env::var_os("RUST_LOG");
+    let rust_log_present = rust_log.is_some();
+    let rust_log_non_empty = rust_log.as_deref().is_some_and(|value| !value.is_empty());
+
+    info!(
+        effective_verbosity = %cli.verbosity(),
+        rust_log_present,
+        rust_log_non_empty,
+        data_dir = ?cli.data_dir,
+        genesis_config = ?cli.genesis_config,
+        genesis_state = ?cli.genesis_state,
+        validator_registry_path = ?cli.validator_registry_path,
+        node_id = ?cli.node_id,
+        private_key_path = ?cli.private_key_path,
+        devnet_bootnodes = ?cli.devnet_bootnodes,
+        devnet_listen_addresses = ?cli.devnet_listen_addresses,
+        http_address = ?cli.http_address,
+        http_port = ?cli.http_port,
+        http_allow_origin = ?cli.http_allow_origin,
+        metrics_enabled = cli.metrics,
+        metrics_address = ?cli.metrics_address,
+        metrics_port = ?cli.metrics_port,
+        log_dir_path = ?cli.log_dir_path,
+        log_dir_prefix = ?selected_log_prefix(cli),
+        "startup configuration",
+    );
+}
+
+fn selected_log_prefix(cli: &Cli) -> Option<&str> {
+    cli.log_dir_path
+        .as_ref()
+        .map(|_| cli.log_dir_prefix.as_deref().unwrap_or(DEFAULT_LOG_PREFIX))
 }
 
 fn file_sink(cli: &Cli) -> Result<Option<FileSink<'_>>> {

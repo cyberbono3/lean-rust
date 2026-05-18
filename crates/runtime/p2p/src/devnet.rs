@@ -52,6 +52,7 @@ impl DevnetHost {
         options: HostOptions,
         provider: Arc<dyn RpcProvider>,
     ) -> HostResult<P2pService> {
+        let identity_path = options.identity_path().as_path().to_path_buf();
         let keypair = keypair::load_or_generate(options.identity_path())?;
         let peer_id = keypair.public().to_peer_id();
 
@@ -60,7 +61,21 @@ impl DevnetHost {
             .map(bootnodes::load)
             .transpose()?
             .unwrap_or_default();
-        debug!(count = bootnodes.len(), "loaded bootnodes");
+        let bootnodes_path = options
+            .bootnodes_path()
+            .map(|path| path.as_path().display().to_string());
+        info!(
+            path = ?bootnodes_path,
+            count = bootnodes.len(),
+            "loaded bootnodes",
+        );
+        for bootnode in &bootnodes {
+            debug!(
+                peer = %bootnode.peer_id,
+                addr = %bootnode.addr,
+                "loaded bootnode",
+            );
+        }
 
         let behaviour = DevnetBehaviour::build(&keypair, options.agent_version())?;
         let transport = transport::build(&keypair);
@@ -74,7 +89,13 @@ impl DevnetHost {
             SwarmConfig::with_tokio_executor(),
         );
 
-        info!(%peer_id, "constructed libp2p host");
+        info!(
+            peer_id = %peer_id,
+            identity_path = %identity_path.display(),
+            listen_addr = %options.listen_addr(),
+            agent_version = %options.agent_version(),
+            "constructed libp2p host",
+        );
         Ok(P2pService::new(
             options, peer_id, swarm, bootnodes, provider,
         ))

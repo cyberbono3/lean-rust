@@ -51,6 +51,8 @@ services:
     image: ${LEAN_RUST_IMAGE:-lean-rust:local}
     container_name: lean-rust-node1
     pull_policy: never
+    environment:
+      RUST_LOG: ${LEAN_RUST_RUST_LOG:-info,lean_beacon=debug,node=debug,engine=debug,runtime_core=debug,runtime_p2p=debug,runtime_chain=debug,runtime_duties=debug,runtime_api=debug,networking=debug,libp2p_swarm=info,discv5=info}
     command:
       - --data-dir=/data
       - --network=/genesis/config.yaml
@@ -66,7 +68,6 @@ services:
       - --metrics
       - --metrics-address=0.0.0.0
       - --metrics-port=8080
-      - --debug
       - --log.dir.path=/var/lean-logs
       - --log.dir.prefix=lean-rust
     ports:
