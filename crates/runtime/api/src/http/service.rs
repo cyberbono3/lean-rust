@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::{routing::get, Router};
+use axum::Router;
 use runtime_core::Service;
 use storage::Store;
 use tokio_util::sync::CancellationToken;
@@ -20,7 +20,7 @@ use tracing::instrument;
 use super::head;
 use crate::server::EndpointServer;
 
-/// HTTP service serving the runtime's `/eth/v1/...` head endpoints.
+/// HTTP service serving the runtime's head endpoints.
 ///
 /// Constructed with an `Arc<dyn storage::Store>` and a listen address;
 /// `start` resolves the OS-assigned port (when `:0` is requested) and
@@ -52,9 +52,7 @@ impl HttpService {
     }
 
     fn build_router(&self) -> Router {
-        Router::new()
-            .route(head::PATH, get(head::get_head))
-            .with_state(Arc::clone(&self.store))
+        head::router().with_state(Arc::clone(&self.store))
     }
 }
 

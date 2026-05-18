@@ -1,4 +1,4 @@
-//! `GET /eth/v1/head` handler.
+//! `GET /eth/v1/head` and `GET /lean/v0/head` handler.
 //!
 //! Reads the current canonical view from [`storage::Store::load_head`]
 //! and returns it as a [`HeadInfoDto`]. `Ok(None)` from the store
@@ -8,18 +8,15 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, Json};
+use axum::{extract::State, routing::get, Json, Router};
 use storage::Store;
 
 use super::error::HttpError;
 use super::store_snapshot::HeadInfoDto;
+use super::HEAD_PATHS;
 
-/// Canonical mount path for [`get_head`]. Shared between
-/// [`crate::http::service::HttpService`]'s router build and the
-/// integration tests so the route stays in one place.
-pub(crate) const PATH: &str = "/eth/v1/head";
-
-/// `GET /eth/v1/head` axum handler.
+/// Head endpoint axum handler for [`super::ETH_V1_HEAD_PATH`] and
+/// [`super::LEAN_V0_HEAD_PATH`].
 ///
 /// The route is wired up in [`crate::HttpService::start`]; the handler
 /// is `pub(crate)` so the service builds the router from this module.
@@ -33,6 +30,12 @@ pub(crate) async fn get_head(
         .ok_or(HttpError::HeadNotSet)
 }
 
+pub(crate) fn router() -> Router<Arc<dyn Store>> {
+    HEAD_PATHS.into_iter().fold(Router::new(), |router, path| {
+        router.route(path, get(get_head))
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -41,7 +44,6 @@ mod tests {
         body::{to_bytes, Body},
         http::{Request, StatusCode},
         response::Response,
-        routing::get,
         Router,
     };
     use protocol::{Checkpoint, Slot};
@@ -49,13 +51,13 @@ mod tests {
     use tower::ServiceExt;
     use types::Bytes32;
 
-    fn router(store: Arc<dyn Store>) -> Router {
-        Router::new().route(PATH, get(get_head)).with_state(store)
+    fn router_with_store(store: Arc<dyn Store>) -> Router {
+        router().with_state(store)
     }
 
-    async fn get_head_response(store: Arc<dyn Store>) -> Response {
-        router(store)
-            .oneshot(Request::builder().uri(PATH).body(Body::empty()).unwrap())
+    async fn get_head_response(store: Arc<dyn Store>, path: &str) -> Response {
+        router_with_store(store)
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
             .await
             .unwrap()
     }
@@ -72,22 +74,27 @@ mod tests {
             Checkpoint::new(Bytes32::new([0x22; 32]), Slot::new(2)),
         );
 
-        let store = Arc::new(MemoryStore::default());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
         store.save_head(info).unwrap();
 
-        let response = get_head_response(store).await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = body_string(response).await;
         let expected = serde_json::to_string(&HeadInfoDto::from(info)).unwrap();
-        assert_eq!(body, expected);
+        for path in HEAD_PATHS {
+            let response = get_head_response(Arc::clone(&store), path).await;
+            assert_eq!(response.status(), StatusCode::OK, "path {path}");
+
+            let body = body_string(response).await;
+            assert_eq!(body, expected, "path {path}");
+        }
     }
 
     #[tokio::test]
     async fn empty_store_returns_404() {
-        let response = get_head_response(Arc::new(MemoryStore::default())).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let body = body_string(response).await;
-        assert_eq!(body, r#"{"error":"head not yet set"}"#);
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+        for path in HEAD_PATHS {
+            let response = get_head_response(Arc::clone(&store), path).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
+            let body = body_string(response).await;
+            assert_eq!(body, r#"{"error":"head not yet set"}"#, "path {path}");
+        }
     }
 }

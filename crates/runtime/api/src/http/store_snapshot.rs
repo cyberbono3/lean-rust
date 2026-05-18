@@ -1,4 +1,4 @@
-//! JSON wire shapes for the `/eth/v1/...` head endpoints.
+//! JSON wire shapes for the runtime head endpoints.
 //!
 //! Domain types (`storage::HeadInfo`, `protocol::Checkpoint`,
 //! `types::Bytes32`) stay serde-free per the workspace architecture
@@ -19,7 +19,7 @@ pub(crate) struct CheckpointDto {
     slot: u64,
 }
 
-/// JSON view of [`storage::HeadInfo`] returned by `GET /eth/v1/head`.
+/// JSON view of [`storage::HeadInfo`] returned by the head endpoints.
 #[derive(Serialize)]
 pub(crate) struct HeadInfoDto {
     head: CheckpointDto,

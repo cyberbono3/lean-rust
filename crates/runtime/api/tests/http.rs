@@ -13,10 +13,10 @@
     clippy::unwrap_used
 )]
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use protocol::{Checkpoint, Slot};
-use runtime_api::HttpService;
+use runtime_api::{http::HEAD_PATHS, HttpService};
 use runtime_core::Service;
 use storage::{HeadInfo, MemoryStore, Store};
 use tokio_util::sync::CancellationToken;
@@ -24,10 +24,39 @@ use types::Bytes32;
 
 mod support;
 
-use support::{http_get, loopback};
+use support::{http_get, loopback, HttpResponse};
+
+fn assert_json_response(response: &HttpResponse) {
+    assert!(
+        response.has_header_value_prefix("content-type", "application/json"),
+        "expected JSON content type, got {:?}",
+        response.headers
+    );
+}
+
+async fn head_responses(addr: SocketAddr) -> Vec<(&'static str, HttpResponse)> {
+    let mut responses = Vec::with_capacity(HEAD_PATHS.len());
+    for path in HEAD_PATHS {
+        responses.push((path, http_get(addr, path).await));
+    }
+    responses
+}
+
+fn assert_head_responses(
+    responses: &[(&'static str, HttpResponse)],
+    expected_status: u16,
+    expected_body: &str,
+) {
+    assert_eq!(responses.len(), HEAD_PATHS.len());
+    for (path, response) in responses {
+        assert_eq!(response.status, expected_status, "path {path}");
+        assert_json_response(response);
+        assert_eq!(response.body, expected_body, "path {path}");
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn head_endpoint_returns_populated_info() {
+async fn http_head_endpoint_returns_populated_info() {
     let store = Arc::new(MemoryStore::default());
     store
         .save_head(HeadInfo::new(
@@ -40,13 +69,6 @@ async fn head_endpoint_returns_populated_info() {
     service.start().await.unwrap();
     let addr = service.bound_addr().expect("service must be running");
 
-    let response = http_get(addr, "/eth/v1/head").await;
-    assert_eq!(response.status, 200);
-    assert!(
-        response.has_header_value_prefix("content-type", "application/json"),
-        "expected JSON content type, got {:?}",
-        response.headers
-    );
     let expected = concat!(
         r#"{"head":{"root":"0x"#,
         "1111111111111111111111111111111111111111111111111111111111111111",
@@ -54,27 +76,22 @@ async fn head_endpoint_returns_populated_info() {
         "2222222222222222222222222222222222222222222222222222222222222222",
         r#"","slot":2}}"#,
     );
-    assert_eq!(response.body, expected);
+    let responses = head_responses(addr).await;
+    assert_head_responses(&responses, 200, expected);
 
     service.stop(CancellationToken::new()).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn head_endpoint_returns_404_when_unset() {
+async fn http_head_endpoint_returns_404_when_unset() {
     let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
     let service = HttpService::new(store, loopback());
 
     service.start().await.unwrap();
     let addr = service.bound_addr().expect("service must be running");
 
-    let response = http_get(addr, "/eth/v1/head").await;
-    assert_eq!(response.status, 404);
-    assert!(
-        response.has_header_value_prefix("content-type", "application/json"),
-        "expected JSON content type, got {:?}",
-        response.headers
-    );
-    assert_eq!(response.body, r#"{"error":"head not yet set"}"#);
+    let responses = head_responses(addr).await;
+    assert_head_responses(&responses, 404, r#"{"error":"head not yet set"}"#);
 
     service.stop(CancellationToken::new()).await.unwrap();
 }
