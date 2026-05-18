@@ -25,6 +25,7 @@ parking_lot       = { workspace = true }
 thiserror         = { workspace = true }
 anyhow            = { workspace = true }
 libp2p            = { workspace = true }
+hex               = { workspace = true }
 snap              = { workspace = true }
 serde             = { workspace = true }
 serde_yaml        = { workspace = true }

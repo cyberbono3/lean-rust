@@ -1,9 +1,9 @@
-//! Persistent libp2p identity (protobuf-encoded Ed25519 keypair).
+//! Persistent libp2p identity.
 //!
 //! Missing file → generate, persist (mode `0600` on POSIX), return.
-//! Present file → decode, return. Corrupt bytes are never silently
-//! overwritten — surfaced as [`HostError::InvalidIdentity`] so the
-//! caller (operator) decides whether to remove and regenerate.
+//! Present file → decode as protobuf or local-pq raw secp256k1 hex,
+//! return. Corrupt bytes are never silently overwritten so the caller
+//! decides whether to remove and regenerate.
 
 use std::{
     fs,
@@ -11,39 +11,79 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use libp2p::identity::Keypair;
+use libp2p::identity::{secp256k1, Keypair};
 use tracing::{debug, info};
 
 use crate::error::{HostError, HostResult};
 use crate::options::IdentityPath;
+
+const RAW_SECP256K1_PRIVATE_KEY_LEN: usize = 32;
 
 /// Loads the keypair from disk, generating + persisting a fresh
 /// Ed25519 keypair if the file does not exist.
 ///
 /// # Errors
 /// - [`HostError::IdentityIo`] on file read / write / chmod failure.
-/// - [`HostError::InvalidIdentity`] when an existing file is present
-///   but its bytes do not decode as a libp2p protobuf-encoded keypair.
+/// - [`HostError::InvalidRawIdentityHex`] when an existing file is not
+///   valid raw secp256k1 hex.
+/// - [`HostError::InvalidRawIdentityLength`] when raw hex does not decode
+///   to a 32-byte secp256k1 private key.
+/// - [`HostError::InvalidRawIdentityKeyMaterial`] when raw bytes are not
+///   valid secp256k1 secret-key material.
 pub fn load_or_generate(path: &IdentityPath) -> HostResult<Keypair> {
     let p = path.as_path();
     match fs::read(p) {
-        Ok(bytes) => {
-            let keypair = Keypair::from_protobuf_encoding(&bytes).map_err(|source| {
-                HostError::InvalidIdentity {
-                    path: p.to_path_buf(),
-                    source,
-                }
-            })?;
-            debug!(
-                path = %p.display(),
-                peer_id = %keypair.public().to_peer_id(),
-                "loaded existing host identity",
-            );
-            Ok(keypair)
-        }
+        Ok(bytes) => load_existing(p, &bytes),
         Err(err) if err.kind() == ErrorKind::NotFound => generate_and_persist(path),
         Err(source) => Err(io_err(p, source)),
     }
+}
+
+fn load_existing(path: &Path, bytes: &[u8]) -> HostResult<Keypair> {
+    let keypair = if let Ok(keypair) = Keypair::from_protobuf_encoding(bytes) {
+        debug!(
+            path = %path.display(),
+            peer_id = %keypair.public().to_peer_id(),
+            "loaded existing protobuf host identity",
+        );
+        keypair
+    } else {
+        let keypair = decode_raw_secp256k1_hex(path, bytes)?;
+        debug!(
+            path = %path.display(),
+            peer_id = %keypair.public().to_peer_id(),
+            "loaded existing raw secp256k1 host identity",
+        );
+        keypair
+    };
+    Ok(keypair)
+}
+
+fn decode_raw_secp256k1_hex(path: &Path, bytes: &[u8]) -> HostResult<Keypair> {
+    let raw = std::str::from_utf8(bytes).map_err(|source| HostError::InvalidRawIdentityHex {
+        path: path.to_path_buf(),
+        reason: source.to_string(),
+    })?;
+    let mut secret_bytes =
+        hex::decode(raw.trim()).map_err(|source| HostError::InvalidRawIdentityHex {
+            path: path.to_path_buf(),
+            reason: source.to_string(),
+        })?;
+    if secret_bytes.len() != RAW_SECP256K1_PRIVATE_KEY_LEN {
+        return Err(HostError::InvalidRawIdentityLength {
+            path: path.to_path_buf(),
+            actual: secret_bytes.len(),
+            expected: RAW_SECP256K1_PRIVATE_KEY_LEN,
+        });
+    }
+
+    let secret = secp256k1::SecretKey::try_from_bytes(&mut secret_bytes).map_err(|source| {
+        HostError::InvalidRawIdentityKeyMaterial {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    Ok(Keypair::from(secp256k1::Keypair::from(secret)))
 }
 
 fn generate_and_persist(path: &IdentityPath) -> HostResult<Keypair> {
@@ -105,7 +145,10 @@ fn io_err(path: impl Into<PathBuf>, source: std::io::Error) -> HostError {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::{DevnetHost, HostOptions};
     use tempfile::{tempdir, TempDir};
+
+    const EXPECTED_NODE1_PEER_ID: &str = "16Uiu2HAm4fSpFwKLAxCazVAVpsPuzmLGFYZbY8x1JNBWBDcaQ4wZ";
 
     fn temp_identity_at(rel: impl AsRef<Path>) -> (TempDir, IdentityPath) {
         let dir = tempdir().unwrap();
@@ -115,6 +158,15 @@ mod tests {
 
     fn temp_identity_path() -> (TempDir, IdentityPath) {
         temp_identity_at("p2p_priv_key")
+    }
+
+    fn raw_fixture_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../pq-devnet-0/tests/fixtures/node1-secp256k1.key")
+    }
+
+    fn raw_fixture_bytes() -> Vec<u8> {
+        fs::read(raw_fixture_path()).expect("read raw secp256k1 fixture")
     }
 
     #[test]
@@ -133,22 +185,101 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_bytes_surface_invalid_identity_without_overwrite() {
+    fn invalid_hex_surfaces_explicit_error_without_overwrite() {
         let (_dir, path) = temp_identity_path();
         let corrupt = b"not-a-protobuf-keypair";
         fs::write(path.as_path(), corrupt).unwrap();
 
         let err = load_or_generate(&path).unwrap_err();
-        assert!(
-            matches!(err, HostError::InvalidIdentity { .. }),
-            "got {err:?}",
-        );
+        match err {
+            HostError::InvalidRawIdentityHex { path: err_path, .. } => {
+                assert_eq!(err_path, path.as_path());
+            }
+            other => panic!("expected invalid raw hex, got {other:?}"),
+        }
 
         let on_disk = fs::read(path.as_path()).unwrap();
         assert_eq!(
             on_disk, corrupt,
             "corrupt identity file must never be silently overwritten",
         );
+    }
+
+    #[test]
+    fn raw_secp256k1_hex_fixture_loads_stable_peer_id() {
+        let path = IdentityPath::new(raw_fixture_path()).unwrap();
+
+        let keypair = load_or_generate(&path).unwrap();
+
+        assert_eq!(
+            keypair.public().to_peer_id().to_string(),
+            EXPECTED_NODE1_PEER_ID
+        );
+    }
+
+    #[test]
+    fn raw_secp256k1_hex_file_is_not_rewritten() {
+        let (_dir, path) = temp_identity_at("node1.key");
+        let raw = raw_fixture_bytes();
+        fs::write(path.as_path(), &raw).unwrap();
+
+        load_or_generate(&path).unwrap();
+
+        let on_disk = fs::read(path.as_path()).unwrap();
+        assert_eq!(on_disk, raw);
+    }
+
+    #[test]
+    fn raw_secp256k1_hex_wrong_length_is_explicit() {
+        let (_dir, path) = temp_identity_path();
+        fs::write(path.as_path(), b"aa").unwrap();
+
+        let err = load_or_generate(&path).unwrap_err();
+
+        match err {
+            HostError::InvalidRawIdentityLength {
+                path: err_path,
+                actual,
+                expected,
+            } => {
+                assert_eq!(err_path, path.as_path());
+                assert_eq!(actual, 1);
+                assert_eq!(expected, RAW_SECP256K1_PRIVATE_KEY_LEN);
+            }
+            other => panic!("expected raw key length error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn raw_secp256k1_invalid_key_material_is_explicit() {
+        let (_dir, path) = temp_identity_path();
+        fs::write(path.as_path(), "00".repeat(RAW_SECP256K1_PRIVATE_KEY_LEN)).unwrap();
+
+        let err = load_or_generate(&path).unwrap_err();
+
+        match err {
+            HostError::InvalidRawIdentityKeyMaterial { path: err_path, .. } => {
+                assert_eq!(err_path, path.as_path());
+            }
+            other => panic!("expected raw key material error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_build_loads_raw_secp256k1_identity_path() {
+        let (_dir, path) = temp_identity_at("node1.key");
+        fs::write(path.as_path(), raw_fixture_bytes()).unwrap();
+        let options = HostOptions::try_new(
+            "/ip4/127.0.0.1/udp/0/quic-v1",
+            "test/0.1.0",
+            path.as_path(),
+            None,
+        )
+        .unwrap();
+
+        let host = DevnetHost::build(options).unwrap();
+
+        assert_eq!(host.peer_id().to_string(), EXPECTED_NODE1_PEER_ID);
     }
 
     #[cfg(unix)]

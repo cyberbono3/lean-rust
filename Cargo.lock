@@ -3621,6 +3621,7 @@ dependencies = [
  "async-trait",
  "config",
  "futures",
+ "hex",
  "libp2p",
  "networking",
  "parking_lot",

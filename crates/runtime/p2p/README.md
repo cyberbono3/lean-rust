@@ -165,9 +165,11 @@ Lifecycle tests use [`DevnetHost::build`], which wires a
 
 ## Identity persistence
 
-`<identity_path>` holds the libp2p protobuf-encoded keypair. Missing
-file → generate Ed25519, persist, chmod `0600` (POSIX). Corrupt file
-→ [`HostError::InvalidIdentity`] — never silently overwritten.
+`<identity_path>` holds either a libp2p protobuf-encoded keypair or a
+local-pq raw hex secp256k1 private key. Missing file → generate
+Ed25519, persist protobuf, chmod `0600` (POSIX). Existing files are
+loaded without mutation; invalid raw hex, wrong-length raw keys, and
+invalid secp256k1 key material surface typed [`HostError`] variants.
 
 ## Bootnodes
 

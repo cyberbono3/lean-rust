@@ -38,9 +38,9 @@ impl DevnetHost {
     /// task.
     ///
     /// # Errors
-    /// - [`crate::HostError::IdentityIo`] /
-    ///   [`crate::HostError::InvalidIdentity`] on identity-file
-    ///   failures.
+    /// - [`crate::HostError::IdentityIo`],
+    ///   [`crate::HostError::InvalidIdentity`], or raw-identity
+    ///   validation variants on identity-file failures.
     /// - [`crate::HostError::BootnodesRead`] /
     ///   [`crate::HostError::BootnodesParse`] /
     ///   [`crate::HostError::InvalidBootnode`] on bootnode load
