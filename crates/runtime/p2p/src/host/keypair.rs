@@ -11,7 +11,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use libp2p::identity::{secp256k1, Keypair};
+use libp2p::{
+    identity::{secp256k1, Keypair},
+    PeerId,
+};
 use tracing::{debug, info};
 
 use crate::error::{HostError, HostResult};
@@ -33,13 +36,34 @@ const RAW_SECP256K1_PRIVATE_KEY_LEN: usize = 32;
 pub fn load_or_generate(path: &IdentityPath) -> HostResult<Keypair> {
     let p = path.as_path();
     match fs::read(p) {
-        Ok(bytes) => load_existing(p, &bytes),
+        Ok(bytes) => decode_existing(p, &bytes),
         Err(err) if err.kind() == ErrorKind::NotFound => generate_and_persist(path),
         Err(source) => Err(io_err(p, source)),
     }
 }
 
-fn load_existing(path: &Path, bytes: &[u8]) -> HostResult<Keypair> {
+/// Loads the peer ID from an existing identity file without generating a
+/// replacement.
+///
+/// # Errors
+/// - [`HostError::IdentityIo`] when the file cannot be read.
+/// - [`HostError::InvalidRawIdentityHex`] when the file is neither
+///   protobuf nor valid raw secp256k1 hex.
+/// - [`HostError::InvalidRawIdentityLength`] when raw hex does not decode
+///   to a 32-byte secp256k1 private key.
+/// - [`HostError::InvalidRawIdentityKeyMaterial`] when raw secp256k1 bytes
+///   are not valid secret-key material.
+pub fn load_existing_peer_id(path: &IdentityPath) -> HostResult<PeerId> {
+    load_existing(path).map(|keypair| keypair.public().to_peer_id())
+}
+
+fn load_existing(path: &IdentityPath) -> HostResult<Keypair> {
+    let p = path.as_path();
+    let bytes = fs::read(p).map_err(|source| io_err(p, source))?;
+    decode_existing(p, &bytes)
+}
+
+fn decode_existing(path: &Path, bytes: &[u8]) -> HostResult<Keypair> {
     let keypair = if let Ok(keypair) = Keypair::from_protobuf_encoding(bytes) {
         debug!(
             path = %path.display(),
@@ -165,6 +189,16 @@ mod tests {
 
     fn raw_fixture_bytes() -> Vec<u8> {
         fs::read(raw_fixture_path()).expect("read raw secp256k1 fixture")
+    }
+
+    #[test]
+    fn load_existing_missing_file_does_not_generate() {
+        let (dir, path) = temp_identity_path();
+
+        let err = load_existing(&path).unwrap_err();
+
+        assert!(matches!(err, HostError::IdentityIo { .. }), "got {err:?}");
+        assert!(!dir.path().join("p2p_priv_key").exists());
     }
 
     #[test]

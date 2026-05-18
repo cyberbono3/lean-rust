@@ -6,6 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use libp2p::{identity::Keypair, PeerId};
+use runtime_p2p::{load_existing_peer_id, IdentityPath};
 
 /// Generates a new Ed25519 libp2p keypair and writes it to `output_path`.
 ///
@@ -26,6 +27,21 @@ pub fn generate_and_write(output_path: &Path) -> Result<PeerId> {
 
     write_key_bytes(output_path, &bytes)?;
     Ok(peer_id)
+}
+
+/// Loads an existing libp2p identity file and returns its peer ID.
+///
+/// The file may contain either libp2p protobuf-encoded key material or
+/// local-pq raw hex secp256k1 key material.
+///
+/// # Errors
+///
+/// Returns an error if the path is invalid, the file cannot be read, or
+/// the key material cannot be decoded.
+pub fn peer_id_from_file(path: &Path) -> Result<PeerId> {
+    let identity_path = IdentityPath::new(path).context("validate identity path")?;
+    load_existing_peer_id(&identity_path)
+        .with_context(|| format!("load identity file {}", path.display()))
 }
 
 fn write_key_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -97,6 +113,25 @@ mod tests {
 
         assert_eq!(peer_id, reloaded.public().to_peer_id());
         assert_ne!(fs::metadata(path).expect("read key metadata").len(), 0);
+    }
+
+    #[test]
+    fn peer_id_from_file_loads_generated_key() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("node.pb");
+
+        let generated = generate_and_write(&path).expect("generate key");
+        let loaded = peer_id_from_file(&path).expect("load peer id");
+
+        assert_eq!(loaded, generated);
+    }
+
+    #[test]
+    fn peer_id_from_file_loads_local_pq_raw_secp256k1_key() {
+        let peer_id =
+            peer_id_from_file(&pq_devnet_0::ream_0_raw_secp256k1_key_path()).expect("load peer id");
+
+        assert_eq!(peer_id.to_string(), pq_devnet_0::REAM_0_PEER_ID);
     }
 
     #[cfg(unix)]

@@ -30,10 +30,19 @@ async fn main() -> Result<()> {
 async fn run(cli: Cli) -> Result<()> {
     let _tracing_guard = init_tracing(&cli)?;
 
-    if let Some(Command::GeneratePrivateKey { output_path }) = &cli.command {
-        let peer_id = keygen::generate_and_write(output_path).context("generate private key")?;
-        info!(%peer_id, path = %output_path.display(), "generated libp2p private key");
-        return Ok(());
+    match &cli.command {
+        Some(Command::GeneratePrivateKey { output_path }) => {
+            let peer_id =
+                keygen::generate_and_write(output_path).context("generate private key")?;
+            info!(%peer_id, path = %output_path.display(), "generated libp2p private key");
+            return Ok(());
+        }
+        Some(Command::PeerId { private_key_path }) => {
+            let peer_id = keygen::peer_id_from_file(private_key_path).context("derive peer id")?;
+            println!("{peer_id}");
+            return Ok(());
+        }
+        None => {}
     }
 
     let config = build_devnet_config(&cli).context("build devnet config")?;
