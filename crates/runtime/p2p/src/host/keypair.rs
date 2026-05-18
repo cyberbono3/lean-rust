@@ -1,4 +1,4 @@
-//! Persistent libp2p identity.
+//! Persistent libp2p keypairs.
 //!
 //! Missing file → generate, persist (mode `0600` on POSIX), return.
 //! Present file → decode as protobuf or local-pq raw secp256k1 hex,
