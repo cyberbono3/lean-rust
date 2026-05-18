@@ -175,4 +175,18 @@ mod tests {
             config.genesis_state.hash_tree_root().into()
         );
     }
+
+    #[test]
+    fn file_sink_rejects_prefix_without_path() {
+        let cli = Cli::try_parse_from(["lean-beacon", "--log.dir.prefix", "lean"])
+            .expect("parse log prefix");
+
+        let err = file_sink(&cli).expect_err("log prefix without log path must fail");
+
+        assert!(
+            err.to_string()
+                .contains("--log.dir.prefix requires --log.dir.path"),
+            "got {err}"
+        );
+    }
 }
