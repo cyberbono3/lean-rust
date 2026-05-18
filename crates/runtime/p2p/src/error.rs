@@ -57,13 +57,45 @@ pub enum HostError {
     },
 
     /// The identity file existed but did not decode as a libp2p
-    /// protobuf-encoded keypair. Never silently overwritten — the caller
-    /// must explicitly remove the file before regeneration.
+    /// protobuf-encoded keypair.
     #[error("identity file {path:?} corrupt: {source}")]
     InvalidIdentity {
         /// Resolved absolute path of the corrupt file.
         path: PathBuf,
         /// Underlying libp2p keypair decode error.
+        #[source]
+        source: DecodingError,
+    },
+
+    /// The identity file existed but was neither protobuf nor valid raw
+    /// secp256k1 hex.
+    #[error("identity file {path:?} invalid raw secp256k1 hex: {reason}")]
+    InvalidRawIdentityHex {
+        /// Resolved absolute path of the invalid file.
+        path: PathBuf,
+        /// Human-readable rejection reason.
+        reason: String,
+    },
+
+    /// The identity file decoded from hex but was not a 32-byte secp256k1
+    /// private key.
+    #[error("identity file {path:?} raw secp256k1 key has {actual} bytes, expected {expected}")]
+    InvalidRawIdentityLength {
+        /// Resolved absolute path of the invalid file.
+        path: PathBuf,
+        /// Decoded byte length.
+        actual: usize,
+        /// Required byte length.
+        expected: usize,
+    },
+
+    /// The identity file decoded to 32 bytes but the bytes are not valid
+    /// secp256k1 secret-key material.
+    #[error("identity file {path:?} invalid raw secp256k1 key material: {source}")]
+    InvalidRawIdentityKeyMaterial {
+        /// Resolved absolute path of the invalid file.
+        path: PathBuf,
+        /// Underlying libp2p secp256k1 decode error.
         #[source]
         source: DecodingError,
     },

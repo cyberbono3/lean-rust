@@ -12,7 +12,7 @@ use libp2p::{swarm::Config as SwarmConfig, Swarm};
 use tracing::{debug, info};
 
 use crate::error::HostResult;
-use crate::host::{behaviour::DevnetBehaviour, bootnodes, identity, transport};
+use crate::host::{behaviour::DevnetBehaviour, bootnodes, keypair, transport};
 use crate::options::HostOptions;
 use crate::rpc::{NoOpRpcProvider, RpcProvider};
 use crate::service::P2pService;
@@ -38,9 +38,9 @@ impl DevnetHost {
     /// task.
     ///
     /// # Errors
-    /// - [`crate::HostError::IdentityIo`] /
-    ///   [`crate::HostError::InvalidIdentity`] on identity-file
-    ///   failures.
+    /// - [`crate::HostError::IdentityIo`],
+    ///   [`crate::HostError::InvalidIdentity`], or raw-identity
+    ///   validation variants on identity-file failures.
     /// - [`crate::HostError::BootnodesRead`] /
     ///   [`crate::HostError::BootnodesParse`] /
     ///   [`crate::HostError::InvalidBootnode`] on bootnode load
@@ -52,7 +52,7 @@ impl DevnetHost {
         options: HostOptions,
         provider: Arc<dyn RpcProvider>,
     ) -> HostResult<P2pService> {
-        let keypair = identity::load_or_generate(options.identity_path())?;
+        let keypair = keypair::load_or_generate(options.identity_path())?;
         let peer_id = keypair.public().to_peer_id();
 
         let bootnodes = options
