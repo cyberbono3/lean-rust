@@ -8,6 +8,11 @@
 //! - /ip4/192.0.2.11/udp/9000/quic-v1/p2p/12D3KooW...
 //! ```
 //!
+//! The local-pq devnet currently generates ENR `nodes.yaml` for ream
+//! consumers and a temporary `bootnodes.rust.yaml` adapter in this same
+//! flat multiaddr shape for Rust. Native ENR parsing can replace that
+//! adapter later without broadening this loader's wire contract.
+//!
 //! Each entry parses into a `(Multiaddr, PeerId)` pair: the swarm dials
 //! the multiaddr; the peer id is required for outbound identification
 //! before the libp2p handshake completes.
@@ -98,6 +103,8 @@ fn invalid_entry(entry: String, reason: impl Into<String>) -> HostError {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::{DevnetHost, HostOptions};
+    use pq_devnet_0::{rust_bootnodes_2node_path, REAM_0_BOOTNODE_ADDR, REAM_0_PEER_ID};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -135,6 +142,34 @@ mod tests {
         // The pop'd peer id round-trips through the formatter.
         let recomposed = format!("{}/p2p/{}", nodes[0].addr, nodes[0].peer_id);
         assert_eq!(recomposed, entry);
+    }
+
+    #[test]
+    fn loads_local_pq_rust_bootnodes_adapter_fixture() {
+        let path = BootnodesPath::new(rust_bootnodes_2node_path()).unwrap();
+
+        let nodes = load(&path).unwrap();
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].addr.to_string(), REAM_0_BOOTNODE_ADDR);
+        assert_eq!(nodes[0].peer_id.to_string(), REAM_0_PEER_ID);
+    }
+
+    #[test]
+    fn host_build_accepts_local_pq_rust_bootnodes_adapter_path() {
+        let identity_dir = tempfile::tempdir().unwrap();
+        let adapter_path = rust_bootnodes_2node_path();
+        let options = HostOptions::try_new(
+            "/ip4/127.0.0.1/udp/0/quic-v1",
+            "test/0.1.0",
+            &identity_dir.path().join("identity.pb"),
+            Some(&adapter_path),
+        )
+        .unwrap();
+
+        let host = DevnetHost::build(options).unwrap();
+
+        assert_ne!(host.peer_id().to_string(), REAM_0_PEER_ID);
     }
 
     #[test]

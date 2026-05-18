@@ -186,6 +186,12 @@ the multiaddr; the peer id is required for outbound identification
 before the libp2p handshake completes. Malformed entries surface as
 [`HostError::InvalidBootnode`] carrying the offending raw string.
 
+For local-pq devnet0, ream still consumes generated ENR `nodes.yaml`.
+Rust consumes a temporary `bootnodes.rust.yaml` adapter in this flat
+multiaddr shape. The adapter should include remote bootnodes only; the
+2-node `leanrust_1` file contains `ream_0` and avoids self-dialing by
+construction.
+
 ## Bind fail-fast
 
 `Service::start` calls `Swarm::listen_on` and races the swarm's

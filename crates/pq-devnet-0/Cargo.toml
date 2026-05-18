@@ -17,4 +17,5 @@ hex            = { workspace = true }
 libp2p         = { workspace = true }
 protocol       = { path = "../protocol" }
 runtime-duties = { path = "../runtime/duties" }
+serde_yaml     = { workspace = true }
 ssz            = { path = "../ssz" }
