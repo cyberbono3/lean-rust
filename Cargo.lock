@@ -535,6 +535,7 @@ dependencies = [
  "config",
  "libp2p",
  "node",
+ "pq-devnet-0",
  "protocol",
  "runtime-core",
  "runtime-duties",

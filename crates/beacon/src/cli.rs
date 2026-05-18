@@ -99,6 +99,12 @@ pub enum Command {
         #[arg(long)]
         output_path: PathBuf,
     },
+    /// Print the libp2p peer ID for an existing private key file.
+    PeerId {
+        /// Path to protobuf or local-pq raw secp256k1 key bytes.
+        #[arg(long)]
+        private_key_path: PathBuf,
+    },
 }
 
 impl Cli {
@@ -146,6 +152,24 @@ mod tests {
             cli.command,
             Some(Command::GeneratePrivateKey {
                 output_path: PathBuf::from("/tmp/key.pb")
+            })
+        );
+    }
+
+    #[test]
+    fn parses_peer_id_subcommand() {
+        let cli = Cli::try_parse_from([
+            "lean-beacon",
+            "peer-id",
+            "--private-key-path",
+            "/tmp/node.key",
+        ])
+        .expect("parse peer-id subcommand");
+
+        assert_eq!(
+            cli.command,
+            Some(Command::PeerId {
+                private_key_path: PathBuf::from("/tmp/node.key")
             })
         );
     }
