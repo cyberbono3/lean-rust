@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use axum::{extract::State, routing::get, Json, Router};
 use storage::Store;
+use tracing::{debug, info};
 
 use super::error::HttpError;
 use super::store_snapshot::HeadInfoDto;
@@ -23,11 +24,19 @@ use super::HEAD_PATHS;
 pub(crate) async fn get_head(
     State(store): State<Arc<dyn Store>>,
 ) -> Result<Json<HeadInfoDto>, HttpError> {
-    store
-        .load_head()?
-        .map(HeadInfoDto::from)
-        .map(Json)
-        .ok_or(HttpError::HeadNotSet)
+    if let Some(head) = store.load_head()? {
+        info!(
+            head_slot = head.head.slot.get(),
+            head_root = %head.head.root.to_hex(),
+            finalized_slot = head.finalized.slot.get(),
+            finalized_root = %head.finalized.root.to_hex(),
+            "served head endpoint",
+        );
+        Ok(Json(HeadInfoDto::from(head)))
+    } else {
+        debug!("head not yet set");
+        Err(HttpError::HeadNotSet)
+    }
 }
 
 pub(crate) fn router() -> Router<Arc<dyn Store>> {

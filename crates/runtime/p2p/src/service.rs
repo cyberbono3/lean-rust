@@ -252,6 +252,11 @@ impl Service for P2pService {
         let (options, mut swarm, bootnodes) = self.take_idle()?;
         let listen_addr = options.listen_addr().as_multiaddr().clone();
 
+        info!(
+            configured_addr = %listen_addr,
+            peer_id = %self.peer_id,
+            "starting p2p listener",
+        );
         let bound_addr = match prepare(&mut swarm, listen_addr.clone()).await {
             Ok(addr) => addr,
             Err(err) => {
@@ -259,7 +264,7 @@ impl Service for P2pService {
                 return Err(err.into());
             }
         };
-        info!(%bound_addr, "host listener up");
+        info!(configured_addr = %listen_addr, %bound_addr, "host listener up");
         dial_bootnodes(&mut swarm, &bootnodes);
 
         let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
@@ -399,13 +404,20 @@ fn bind_err(addr: Multiaddr, reason: impl std::fmt::Display) -> HostError {
 fn dial_bootnodes(swarm: &mut Swarm<DevnetBehaviour>, bootnodes: &[Bootnode]) {
     for bootnode in bootnodes {
         swarm.add_peer_address(bootnode.peer_id, bootnode.addr.clone());
-        if let Err(err) = swarm.dial(bootnode.addr.clone()) {
-            warn!(
+        match swarm.dial(bootnode.addr.clone()) {
+            Ok(()) => info!(
                 peer = %bootnode.peer_id,
                 addr = %bootnode.addr,
-                %err,
-                "bootnode dial dispatch failed",
-            );
+                "bootnode dial dispatched",
+            ),
+            Err(err) => {
+                warn!(
+                    peer = %bootnode.peer_id,
+                    addr = %bootnode.addr,
+                    %err,
+                    "bootnode dial dispatch failed",
+                );
+            }
         }
     }
 }
@@ -547,6 +559,7 @@ fn handle_swarm_event(
         }
         SwarmEvent::Behaviour(inner) => debug!(?inner, "behaviour event"),
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            info!(peer = %peer_id, "connection established");
             initiate_status_handshake(peer_id, swarm, provider);
         }
         SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -574,7 +587,7 @@ fn initiate_status_handshake(
     swarm: &mut Swarm<DevnetBehaviour>,
     provider: &dyn RpcProvider,
 ) {
-    debug!(peer = %peer_id, "connection established; initiating status handshake");
+    debug!(peer = %peer_id, "initiating status handshake");
     let local = provider.local_status();
     let _ = swarm
         .behaviour_mut()

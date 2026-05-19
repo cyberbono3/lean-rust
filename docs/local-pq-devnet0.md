@@ -25,6 +25,7 @@ The default images are:
 | `LEAN_RUST_IMAGE` | `lean-rust:local` |
 | `GENESIS_GEN_IMAGE` | `ethpandaops/eth-beacon-genesis:pk910-leanchain` |
 | `GENESIS_OFFSET_SECS` | `60` |
+| `LEAN_RUST_RUST_LOG` | `info,lean_beacon=debug,node=debug,engine=debug,runtime_core=debug,runtime_p2p=debug,runtime_chain=debug,runtime_duties=debug,runtime_api=debug,networking=debug,libp2p_swarm=info,discv5=info` |
 
 ## Quick Start
 
@@ -32,13 +33,9 @@ The default images are:
 cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
 make devnet-start
 make devnet-status
-docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
-  --project-directory crates/pq-devnet-0 logs -f
+make devnet-logs
 make devnet-stop
 ```
-
-There is no `make devnet-logs` target currently. Use the `docker compose logs`
-command above when following logs.
 
 ## Commands
 
@@ -53,6 +50,11 @@ command above when following logs.
 | `make devnet-stop` | Safe stop alias for `devnet-down`; succeeds when nothing is running. |
 | `make devnet-clean` | Stop Compose, remove volumes and orphans, and delete generated keys, genesis files, adapter files, and logs. |
 | `make devnet-clean-check` | Create generated-state sentinels and verify `make devnet-clean` removes generated files while preserving scaffold files. |
+| `make devnet-logs` | Follow both devnet containers. |
+| `make devnet-logs-ream` | Follow only the ream node logs. |
+| `make devnet-logs-lean` | Follow only the lean-rust node logs. |
+| `make devnet-debug-summary` | Print high-signal log markers from Compose and Rust file logs. |
+| `make devnet-smoke-head-sample` | Sample ream/Rust `/lean/v0/head` compatibility. |
 
 ## Topology
 
@@ -119,21 +121,67 @@ successfully so it can be reused while waiting for the devnet to settle.
 
 ## Logs
 
+The Rust node receives this default filter through `RUST_LOG`:
+
+```text
+info,lean_beacon=debug,node=debug,engine=debug,runtime_core=debug,runtime_p2p=debug,runtime_chain=debug,runtime_duties=debug,runtime_api=debug,networking=debug,libp2p_swarm=info,discv5=info
+```
+
+`RUST_LOG` is the highest-precedence tracing input for `lean-beacon`. When
+`LEAN_RUST_RUST_LOG` is non-empty, it overrides `--log-level` and `--debug`.
+Use `--log-level` only for direct local runs where `RUST_LOG` is unset.
+
+Raise all Rust logs temporarily:
+
+```sh
+LEAN_RUST_RUST_LOG=trace make devnet-up
+```
+
+Raise p2p/networking diagnostics:
+
+```sh
+LEAN_RUST_RUST_LOG=lean_beacon=debug,runtime_p2p=trace,networking=trace make devnet-up
+```
+
+Raise chain/duties diagnostics:
+
+```sh
+LEAN_RUST_RUST_LOG=lean_beacon=debug,engine=debug,runtime_chain=debug,runtime_duties=debug,node=debug make devnet-up
+```
+
+Raise API/storage diagnostics:
+
+```sh
+LEAN_RUST_RUST_LOG=runtime_api=trace,storage=debug make devnet-up
+```
+
 Follow both containers:
 
 ```sh
-docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
-  --project-directory crates/pq-devnet-0 logs -f
+make devnet-logs
 ```
 
-Follow one container:
+Compare Ream and Rust logs in separate terminals:
 
 ```sh
-docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
-  --project-directory crates/pq-devnet-0 logs -f node1
+make devnet-logs-ream
+make devnet-logs-lean
 ```
 
-The Rust container also writes file logs under `crates/pq-devnet-0/logs`.
+Print a compact marker summary:
+
+```sh
+make devnet-debug-summary
+```
+
+The Rust container also writes file logs under:
+
+```text
+crates/pq-devnet-0/logs/lean-rust-<utc>.log
+```
+
+Logs include configured identity paths and peer IDs, but not raw private key
+bytes.
 
 ## Cleanup
 
@@ -186,8 +234,7 @@ Checks:
 
 ```sh
 test -s crates/pq-devnet-0/genesis/genesis.ssz
-docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
-  --project-directory crates/pq-devnet-0 logs node1
+make devnet-debug-summary
 ```
 
 Regenerate state with:
@@ -253,8 +300,7 @@ Symptoms:
 Checks:
 
 ```sh
-docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
-  --project-directory crates/pq-devnet-0 logs node0 node1
+make devnet-debug-summary
 ```
 
 Confirm both nodes use the same generated network config and validator
