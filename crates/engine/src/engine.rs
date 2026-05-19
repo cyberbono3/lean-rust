@@ -22,7 +22,7 @@ use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
 use parking_lot::{Mutex, MutexGuard};
 use protocol::{Block, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, warn};
 use types::Bytes32;
 
 use crate::error::EngineError;
@@ -41,8 +41,8 @@ impl Engine {
     ///
     /// # Errors
     /// Forwards every variant raised by [`Store::from_anchor`].
-    #[instrument(level = "info", skip_all, fields(slot = anchor_block.slot.get()))]
     pub fn from_anchor(state: State, anchor_block: Block) -> Result<Self, ForkchoiceError> {
+        let slot = anchor_block.slot;
         let validators = state.config.num_validators;
         let genesis_time = state.config.genesis_time;
         let anchor_root: Bytes32 = anchor_block.hash_tree_root().into();
@@ -51,6 +51,7 @@ impl Engine {
         match Store::from_anchor(state, anchor_block) {
             Ok(store) => {
                 info!(
+                    slot = slot.get(),
                     validators,
                     genesis_time,
                     anchor_root = %anchor_root.to_hex(),
@@ -63,6 +64,7 @@ impl Engine {
             }
             Err(err) => {
                 warn!(
+                    slot = slot.get(),
                     validators,
                     genesis_time,
                     anchor_root = %anchor_root.to_hex(),
