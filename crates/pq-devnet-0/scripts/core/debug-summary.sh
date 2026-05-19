@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEVNET_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 LOG_DIR="$DEVNET_ROOT/logs"
+REAM_CONTAINER_LOG_FILE="${REAM_CONTAINER_LOG_FILE:-}"
+LEAN_RUST_CONTAINER_LOG_FILE="${LEAN_RUST_CONTAINER_LOG_FILE:-}"
 
 PATTERNS=(
   "startup configuration"
@@ -33,6 +35,18 @@ count_pattern() {
   local pattern="$2"
 
   grep -E -i -c "$pattern" "$source" 2>/dev/null || true
+}
+
+capture_container_logs() {
+  local container="$1"
+  local output="$2"
+  local override_file="$3"
+
+  if [[ -n "$override_file" ]]; then
+    cp "$override_file" "$output"
+  else
+    docker logs "$container" >"$output" 2>&1
+  fi
 }
 
 classify_logs() {
@@ -91,8 +105,8 @@ fi
 
 REAM_CONTAINER_LOGS="$TMP_DIR/ream-container.log"
 LEAN_RUST_CONTAINER_LOGS="$TMP_DIR/lean-rust-container.log"
-if docker logs ream-node0 >"$REAM_CONTAINER_LOGS" 2>/dev/null \
-  && docker logs lean-rust-node1 >"$LEAN_RUST_CONTAINER_LOGS" 2>/dev/null; then
+if capture_container_logs ream-node0 "$REAM_CONTAINER_LOGS" "$REAM_CONTAINER_LOG_FILE" \
+  && capture_container_logs lean-rust-node1 "$LEAN_RUST_CONTAINER_LOGS" "$LEAN_RUST_CONTAINER_LOG_FILE"; then
   classify_logs "$REAM_CONTAINER_LOGS" "$LEAN_RUST_CONTAINER_LOGS"
 else
   printf '\n== smoke classification ==\n'

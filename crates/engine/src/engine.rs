@@ -10,7 +10,8 @@
 //!   (in [`crate::importer`]).
 //! - production: [`Engine::produce_block`] / [`Engine::produce_attestation_vote`].
 //! - read-through: [`Engine::head`] / [`Engine::has_block`] /
-//!   [`Engine::safe_target`] / [`Engine::with_store`].
+//!   [`Engine::safe_target`] / [`Engine::latest_finalized`] /
+//!   [`Engine::with_store`].
 //!
 //! Issue-spec callers (`runtime-chain` per #28) hold the only writer handle
 //! into `import_*`; read-only subsystems (`runtime-api`, `runtime-p2p`) clone
@@ -20,7 +21,7 @@ use std::sync::Arc;
 
 use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
 use parking_lot::{Mutex, MutexGuard};
-use protocol::{Block, Slot, State, ValidatorIndex};
+use protocol::{Block, Checkpoint, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
 use types::Bytes32;
@@ -104,6 +105,12 @@ impl Engine {
     #[must_use]
     pub fn safe_target(&self) -> Bytes32 {
         self.lock().safe_target()
+    }
+
+    /// Snapshots the latest finalized checkpoint.
+    #[must_use]
+    pub fn latest_finalized(&self) -> Checkpoint {
+        self.lock().latest_finalized()
     }
 
     /// Reports whether `root` is tracked by the store.
@@ -249,6 +256,10 @@ mod tests {
         let engine = Engine::from_anchor(state, block).unwrap();
         assert_eq!(engine.head(), anchor_root);
         assert_eq!(engine.safe_target(), anchor_root);
+        assert_eq!(
+            engine.latest_finalized(),
+            Checkpoint::new(anchor_root, Slot::ZERO)
+        );
         assert!(engine.has_block(&anchor_root));
     }
 

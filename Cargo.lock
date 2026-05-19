@@ -3096,6 +3096,7 @@ dependencies = [
  "runtime-duties",
  "serde_yaml",
  "ssz",
+ "tempfile",
 ]
 
 [[package]]
