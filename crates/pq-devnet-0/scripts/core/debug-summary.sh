@@ -28,6 +28,47 @@ print_matches() {
   fi
 }
 
+count_pattern() {
+  local source="$1"
+  local pattern="$2"
+
+  grep -E -i -c "$pattern" "$source" 2>/dev/null || true
+}
+
+classify_logs() {
+  local ream_logs="$1"
+  local lean_logs="$2"
+  local ream_warn ream_error ream_duplicate
+  local lean_warn lean_error lean_rejected status_timeouts
+  local classification="pass"
+
+  ream_warn="$(count_pattern "$ream_logs" '(^|[[:space:]])WARN[[:space:]].*ream_')"
+  ream_error="$(count_pattern "$ream_logs" '(^|[[:space:]])ERROR[[:space:]].*ream_')"
+  ream_duplicate="$(count_pattern "$ream_logs" 'Publish (block|vote) failed.*Duplicate')"
+  lean_warn="$(count_pattern "$lean_logs" '(^|[[:space:]])WARN[[:space:]]')"
+  lean_error="$(count_pattern "$lean_logs" '(^|[[:space:]])ERROR[[:space:]]')"
+  lean_rejected="$(count_pattern "$lean_logs" 'gossip .*rejected|rejected (block|vote|attestation)')"
+  status_timeouts="$(count_pattern "$lean_logs" 'status rpc outbound timeout')"
+
+  if [[ "$lean_warn" -gt 0 || "$lean_error" -gt 0 || "$lean_rejected" -gt 0 || "$ream_error" -gt 0 ]]; then
+    classification="fail"
+  elif [[ "$ream_warn" -gt 0 || "$ream_duplicate" -gt 0 || "$status_timeouts" -gt 0 ]]; then
+    classification="pass-with-known-reference-noise"
+  fi
+
+  printf '\n== smoke classification ==\n'
+  printf 'classification=%s\n' "$classification"
+  printf 'ream_warn=%s ream_error=%s ream_duplicate_publish=%s\n' \
+    "$ream_warn" \
+    "$ream_error" \
+    "$ream_duplicate"
+  printf 'lean_warn=%s lean_error=%s lean_rejected=%s status_timeouts=%s\n' \
+    "$lean_warn" \
+    "$lean_error" \
+    "$lean_rejected" \
+    "$status_timeouts"
+}
+
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -46,4 +87,15 @@ else
   MERGED_FILE_LOGS="$TMP_DIR/file.log"
   cat "${FILE_LOGS[@]}" >"$MERGED_FILE_LOGS"
   print_matches "file logs" "$MERGED_FILE_LOGS"
+fi
+
+REAM_CONTAINER_LOGS="$TMP_DIR/ream-container.log"
+LEAN_RUST_CONTAINER_LOGS="$TMP_DIR/lean-rust-container.log"
+if docker logs ream-node0 >"$REAM_CONTAINER_LOGS" 2>/dev/null \
+  && docker logs lean-rust-node1 >"$LEAN_RUST_CONTAINER_LOGS" 2>/dev/null; then
+  classify_logs "$REAM_CONTAINER_LOGS" "$LEAN_RUST_CONTAINER_LOGS"
+else
+  printf '\n== smoke classification ==\n'
+  printf 'classification=unknown\n'
+  printf 'container logs unavailable\n'
 fi

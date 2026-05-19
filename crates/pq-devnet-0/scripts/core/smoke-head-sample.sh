@@ -183,7 +183,7 @@ for ((ATTEMPT = 1; ATTEMPT <= MAX_ATTEMPTS; ATTEMPT++)); do
     if [[ "$CONSECUTIVE_FINALIZED_COMPARISONS" -eq "$CONSECUTIVE_MATCHES" ]]; then
       printf '\nobserved %s consecutive matching head/finalized samples\n' "$CONSECUTIVE_MATCHES"
     else
-      printf '\nobserved %s consecutive matching head samples; finalized roots were not compared because Ream did not report finalized fields\n' "$CONSECUTIVE_MATCHES"
+      printf '\nobserved %s consecutive matching head samples; finalized roots were not compared because one or both clients did not report finalized fields\n' "$CONSECUTIVE_MATCHES"
     fi
     exit 0
   fi

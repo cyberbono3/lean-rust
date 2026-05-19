@@ -2,7 +2,8 @@
 	devnet-build devnet-genesis devnet-up devnet-down devnet-stop \
 	devnet-clean devnet-clean-check devnet-status devnet-start \
 	devnet-logs devnet-logs-lean devnet-logs-ream \
-	devnet-debug-summary devnet-smoke-head-sample
+	devnet-debug-summary devnet-smoke-head-sample \
+	devnet-smoke-vote-checkpoints
 
 CARGO ?= cargo
 WORKSPACE_FLAGS := --workspace --all-targets
@@ -39,6 +40,7 @@ help:
 	@echo "  make devnet-logs-ream - follow only ream node logs"
 	@echo "  make devnet-debug-summary - print high-signal devnet log markers"
 	@echo "  make devnet-smoke-head-sample - sample ream/Rust head compatibility"
+	@echo "  make devnet-smoke-vote-checkpoints - compare Ream/Rust vote source-target checkpoints"
 	@echo "  make devnet-start   - build + genesis + up"
 
 verify: fmt-check lint test
@@ -100,6 +102,9 @@ devnet-debug-summary:
 
 devnet-smoke-head-sample:
 	@REAM_HEAD_URL="$(REAM_HEAD_URL)" LEAN_RUST_HEAD_URL="$(LEAN_RUST_HEAD_URL)" $(PQ_DEVNET_CORE)/smoke-head-sample.sh
+
+devnet-smoke-vote-checkpoints:
+	@$(PQ_DEVNET_CORE)/compare-vote-checkpoints.sh
 
 devnet-start:
 	$(MAKE) devnet-build

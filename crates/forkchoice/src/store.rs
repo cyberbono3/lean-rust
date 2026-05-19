@@ -469,7 +469,9 @@ impl Store {
 
     /// Stores a `(block, post_state)` pair after validating
     /// `block.state_root` against `hash_tree_root(post_state)` and
-    /// confirming the parent root is tracked.
+    /// confirming the parent root is tracked. Newly learned justified /
+    /// finalized checkpoints from the post-state are adopted when their
+    /// roots are already tracked by the store.
     ///
     /// Returns `true` when the pair was newly tracked, `false` when the
     /// block root is already present (idempotent). The store performs no
@@ -502,7 +504,10 @@ impl Store {
                 root: block.parent_root,
             });
         }
+        let latest_justified = post_state.latest_justified;
+        let latest_finalized = post_state.latest_finalized;
         self.insert_block(root, block, post_state);
+        self.adopt_post_state_checkpoints(latest_justified, latest_finalized);
         Ok(true)
     }
 
@@ -573,11 +578,35 @@ impl Store {
     }
 
     /// Test-only setter for the justified-checkpoint descent origin.
-    /// Production code mutates `latest_justified` only through block
-    /// import; that path is out of scope for this issue.
+    /// Production code mutates `latest_justified` only by adopting
+    /// checkpoints from tracked post-states.
     #[cfg(test)]
     pub(crate) fn set_latest_justified_for_test(&mut self, checkpoint: Checkpoint) {
         self.latest_justified = checkpoint;
+    }
+
+    /// Adopts newer checkpoints observed in a tracked block's post-state.
+    ///
+    /// State transition is the source of truth for justification/finality;
+    /// forkchoice uses these cached checkpoints as the LMD-GHOST descent
+    /// origins for head, safe-target, and attestation production. Ignore
+    /// checkpoints whose roots are not tracked so synthetic/default states
+    /// cannot move the store to an unresolvable origin.
+    fn adopt_post_state_checkpoints(
+        &mut self,
+        latest_justified: Checkpoint,
+        latest_finalized: Checkpoint,
+    ) {
+        if self.should_adopt_checkpoint(latest_justified, self.latest_justified) {
+            self.latest_justified = latest_justified;
+        }
+        if self.should_adopt_checkpoint(latest_finalized, self.latest_finalized) {
+            self.latest_finalized = latest_finalized;
+        }
+    }
+
+    fn should_adopt_checkpoint(&self, candidate: Checkpoint, current: Checkpoint) -> bool {
+        candidate.slot > current.slot && self.blocks.contains_key(&candidate.root)
     }
 }
 
@@ -1398,7 +1427,7 @@ mod store_extensions_tests {
     use super::*;
     use protocol::{BlockBody, Slot, ValidatorIndex};
 
-    use crate::test_fixtures::{genesis_store, pinned_chain, signed_vote_at};
+    use crate::test_fixtures::{genesis_store, linear_chain, pinned_chain, signed_vote_at};
 
     // -- track_block ----------------------------------------------------
 
@@ -1461,6 +1490,50 @@ mod store_extensions_tests {
         assert!(store.track_block(block, state).unwrap());
         assert!(store.has_block(&new_root));
         assert_eq!(store.block_order().last(), Some(&new_root));
+    }
+
+    #[test]
+    fn track_block_adopts_newer_known_post_state_checkpoints() {
+        let (mut store, roots, states) = linear_chain(2, 2);
+        let justified = Checkpoint::new(roots[1], Slot::ONE);
+        let finalized = Checkpoint::new(roots[1], Slot::ONE);
+        let mut post_state = states[0].clone();
+        post_state.latest_justified = justified;
+        post_state.latest_finalized = finalized;
+
+        let block = Block {
+            slot: Slot::new(2),
+            proposer_index: ValidatorIndex::new(0),
+            parent_root: roots[1],
+            state_root: post_state.hash_tree_root().into(),
+            body: BlockBody::default(),
+        };
+
+        assert!(store.track_block(block, post_state).unwrap());
+        assert_eq!(store.latest_justified(), justified);
+        assert_eq!(store.latest_finalized(), finalized);
+
+        let produced = store.produce_attestation_vote(Slot::new(2)).unwrap();
+        assert_eq!(produced.source, justified);
+    }
+
+    #[test]
+    fn track_block_ignores_newer_unknown_post_state_checkpoint() {
+        let (mut store, anchor_root) = genesis_store(2);
+        let original_justified = store.latest_justified();
+        let mut post_state = crate::test_fixtures::genesis_anchor(2).0;
+        post_state.latest_justified = Checkpoint::new(Bytes32::new([0x99; 32]), Slot::new(1));
+
+        let block = Block {
+            slot: Slot::new(1),
+            proposer_index: ValidatorIndex::new(1),
+            parent_root: anchor_root,
+            state_root: post_state.hash_tree_root().into(),
+            body: BlockBody::default(),
+        };
+
+        assert!(store.track_block(block, post_state).unwrap());
+        assert_eq!(store.latest_justified(), original_justified);
     }
 
     // -- get_proposal_head ----------------------------------------------
