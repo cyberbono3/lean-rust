@@ -626,7 +626,7 @@ fn handle_status_rr_event(
             },
         },
         request_response::Event::OutboundFailure { peer, error, .. } => {
-            log_rpc_failure(peer, &error, "status", "outbound");
+            log_status_outbound_failure(peer, &error);
         }
         request_response::Event::InboundFailure { peer, error, .. } => {
             log_rpc_failure(peer, &error, "status", "inbound");
@@ -693,6 +693,23 @@ fn handle_blocks_rr_event(
 /// the peer via the unconsumed `ResponseChannel`.
 fn log_wrong_variant(peer: PeerId, on_protocol: &'static str, got: &'static str) {
     warn!(peer = %peer, "unexpected {got} on {on_protocol} protocol");
+}
+
+/// Logs an outbound status failure. Ream `master-0bceaee` interoperates
+/// through gossip but does not answer this optional fire-and-validate request
+/// in the local-pq two-node smoke, so a timeout is diagnostic noise rather
+/// than a degraded node condition. Other status failures remain warnings.
+fn log_status_outbound_failure(peer: PeerId, error: &request_response::OutboundFailure) {
+    match error {
+        request_response::OutboundFailure::Timeout => {
+            debug!(
+                peer = %peer,
+                %error,
+                "status rpc outbound timeout; peer did not answer optional status request",
+            );
+        }
+        _ => log_rpc_failure(peer, error, "status", "outbound"),
+    }
 }
 
 /// Logs a `request_response` outbound / inbound failure with a uniform

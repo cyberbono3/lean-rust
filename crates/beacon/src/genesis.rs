@@ -68,7 +68,7 @@ pub fn load_state(path: &Path) -> Result<State> {
     let state = match ssz::decode::<State>(&bytes) {
         Ok(state) => state,
         Err(native_err) => {
-            warn!(
+            debug!(
                 path = %path.display(),
                 bytes = bytes.len(),
                 err = %native_err,

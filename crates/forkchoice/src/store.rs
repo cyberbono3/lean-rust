@@ -344,9 +344,10 @@ impl Store {
     /// Forwards any error from [`Self::validate_attestation`].
     pub fn process_attestation(
         &mut self,
-        signed_vote: SignedVote,
+        mut signed_vote: SignedVote,
         is_from_block: bool,
     ) -> Result<bool, ForkchoiceError> {
+        self.normalize_genesis_zero_source(&mut signed_vote);
         self.validate_attestation(&signed_vote)?;
 
         let validator = signed_vote.validator_id;
@@ -373,6 +374,26 @@ impl Store {
     #[must_use]
     pub(crate) const fn current_vote_slot(&self) -> Slot {
         Slot::new(self.time.slot())
+    }
+
+    /// Ream local-pq slot-0 gossip votes use a zero source checkpoint root
+    /// while targeting the genesis anchor. lean-rust stores the slot-0
+    /// justified checkpoint at the anchor root, so normalize exactly that
+    /// genesis shape before validation/storage. Non-genesis zero roots still
+    /// fail normal source lookup.
+    fn normalize_genesis_zero_source(&self, signed_vote: &mut SignedVote) {
+        let vote = &mut signed_vote.message;
+        if vote.source == Checkpoint::default()
+            && vote.target.slot.is_zero()
+            && vote.target.root == self.latest_justified.root
+            && self.latest_justified.slot.is_zero()
+            && self
+                .blocks
+                .get(&self.latest_justified.root)
+                .is_some_and(|block| block.slot.is_zero())
+        {
+            vote.source.root = self.latest_justified.root;
+        }
     }
 
     /// Resolves a tracked block by root, raising the caller-supplied error
@@ -1042,6 +1063,47 @@ mod attestation_tests {
         let (mut store, roots) = store_with_chain_at_slot_3();
         let vote = self_referential_vote(0, &roots, 3, 4);
         assert!(store.process_attestation(vote, false).unwrap());
+    }
+
+    #[test]
+    fn gossip_normalizes_ream_genesis_zero_source_vote() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let anchor = Checkpoint::new(roots[0], Slot::ZERO);
+        let vote = signed_vote(
+            ValidatorIndex::new(0),
+            anchor,
+            anchor,
+            Checkpoint::default(),
+            Slot::ZERO,
+        );
+
+        assert!(store.process_attestation(vote, false).unwrap());
+        let stored = store
+            .latest_new_votes()
+            .get(&ValidatorIndex::new(0))
+            .expect("normalized vote should enter pending pool");
+        assert_eq!(stored.message.source, anchor);
+    }
+
+    #[test]
+    fn gossip_rejects_non_genesis_zero_source_vote() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let target = Checkpoint::new(roots[1], Slot::ONE);
+        let vote = signed_vote(
+            ValidatorIndex::new(0),
+            target,
+            target,
+            Checkpoint::default(),
+            Slot::ONE,
+        );
+
+        let err = store.process_attestation(vote, false).unwrap_err();
+        assert_eq!(
+            err,
+            ForkchoiceError::UnknownSourceBlock {
+                root: Bytes32::zero()
+            }
+        );
     }
 
     // -- lookup_block --------------------------------------------------

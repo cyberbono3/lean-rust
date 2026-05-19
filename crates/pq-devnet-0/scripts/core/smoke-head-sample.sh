@@ -108,6 +108,21 @@ is_match() {
     }
 }
 
+finalized_match_label() {
+  if [[ -z "$REAM_FINALIZED_ROOT" ]] || [[ -z "$LEAN_RUST_FINALIZED_ROOT" ]]; then
+    printf 'not-compared'
+  elif [[ "$REAM_FINALIZED_ROOT" == "$LEAN_RUST_FINALIZED_ROOT" ]] \
+    && {
+      [[ -z "$REAM_FINALIZED_SLOT" ]] \
+        || [[ -z "$LEAN_RUST_FINALIZED_SLOT" ]] \
+        || [[ "$REAM_FINALIZED_SLOT" == "$LEAN_RUST_FINALIZED_SLOT" ]];
+    }; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
+}
+
 require_command curl
 require_command jq
 require_positive_integer PQ_DEVNET_SMOKE_MATCHES "$TARGET_MATCHES"
@@ -115,10 +130,11 @@ require_positive_integer PQ_DEVNET_SMOKE_MAX_ATTEMPTS "$MAX_ATTEMPTS"
 require_non_negative_integer PQ_DEVNET_SMOKE_INTERVAL_SECONDS "$INTERVAL_SECONDS"
 require_positive_integer PQ_DEVNET_SMOKE_CURL_MAX_TIME_SECONDS "$CURL_MAX_TIME_SECONDS"
 
-printf '| sample | time_utc | ream_head_slot | rust_head_slot | ream_head.root | rust_head.root | ream_finalized.root | rust_finalized.root | match | consecutive |\n'
-printf '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
+printf '| sample | time_utc | ream_head_slot | rust_head_slot | ream_head.root | rust_head.root | ream_finalized.root | rust_finalized.root | finalized_match | match | consecutive |\n'
+printf '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
 
 CONSECUTIVE_MATCHES=0
+CONSECUTIVE_FINALIZED_COMPARISONS=0
 
 for ((ATTEMPT = 1; ATTEMPT <= MAX_ATTEMPTS; ATTEMPT++)); do
   TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -136,15 +152,21 @@ for ((ATTEMPT = 1; ATTEMPT <= MAX_ATTEMPTS; ATTEMPT++)); do
     LEAN_RUST_FINALIZED_SLOT \
     LEAN_RUST_FINALIZED_ROOT
 
+  FINALIZED_MATCH="$(finalized_match_label)"
+
   MATCH="no"
   if is_match; then
     MATCH="yes"
     CONSECUTIVE_MATCHES=$((CONSECUTIVE_MATCHES + 1))
+    if [[ "$FINALIZED_MATCH" != "not-compared" ]]; then
+      CONSECUTIVE_FINALIZED_COMPARISONS=$((CONSECUTIVE_FINALIZED_COMPARISONS + 1))
+    fi
   else
     CONSECUTIVE_MATCHES=0
+    CONSECUTIVE_FINALIZED_COMPARISONS=0
   fi
 
-  printf '| %s | %s | %s | %s | `%s` | `%s` | `%s` | `%s` | %s | %s |\n' \
+  printf '| %s | %s | %s | %s | `%s` | `%s` | `%s` | `%s` | %s | %s | %s |\n' \
     "$ATTEMPT" \
     "$TIMESTAMP" \
     "$REAM_HEAD_SLOT" \
@@ -153,11 +175,16 @@ for ((ATTEMPT = 1; ATTEMPT <= MAX_ATTEMPTS; ATTEMPT++)); do
     "$LEAN_RUST_HEAD_ROOT" \
     "$REAM_FINALIZED_ROOT" \
     "$LEAN_RUST_FINALIZED_ROOT" \
+    "$FINALIZED_MATCH" \
     "$MATCH" \
     "$CONSECUTIVE_MATCHES"
 
   if [[ "$CONSECUTIVE_MATCHES" -ge "$TARGET_MATCHES" ]]; then
-    printf '\nobserved %s consecutive matching head/finalized samples\n' "$CONSECUTIVE_MATCHES"
+    if [[ "$CONSECUTIVE_FINALIZED_COMPARISONS" -eq "$CONSECUTIVE_MATCHES" ]]; then
+      printf '\nobserved %s consecutive matching head/finalized samples\n' "$CONSECUTIVE_MATCHES"
+    else
+      printf '\nobserved %s consecutive matching head samples; finalized roots were not compared because Ream did not report finalized fields\n' "$CONSECUTIVE_MATCHES"
+    fi
     exit 0
   fi
 
