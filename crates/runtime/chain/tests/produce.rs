@@ -42,9 +42,8 @@ async fn produce_block_persists_and_refreshes_snapshot() {
     let root: Bytes32 = signed.message.hash_tree_root().into();
     assert_eq!(signed.message.parent_root, pre.head_root);
 
-    // Block + post-state persisted at produced root; head info written
-    // (head itself stays at genesis until attestations move forkchoice —
-    // mirrors lean-go `persistHeadLocked` reading the live engine head).
+    // Block + post-state persisted at produced root; head info written from
+    // the live engine head after the produced block expands forkchoice.
     let saved_block = store.load_block(&root).unwrap().unwrap();
     assert_eq!(saved_block.message.slot, Slot::ONE);
     assert!(store.load_state(&root).unwrap().is_some());
@@ -52,7 +51,7 @@ async fn produce_block_persists_and_refreshes_snapshot() {
 
     // Snapshot was re-captured; reachable through the lock.
     let post = *service.snapshot().read();
-    assert_eq!(post.head_root, pre.head_root);
+    assert_eq!(post.head_root, root);
 }
 
 #[tokio::test]
@@ -87,23 +86,16 @@ async fn produce_attestation_carries_validator_id_and_refreshes_snapshot() {
     assert_eq!(signed.validator_id, ValidatorIndex::new(0));
     assert_eq!(signed.message.slot, Slot::ONE);
 
-    // Snapshot was re-captured (reachable through the lock).
+    // Snapshot was re-captured after the own vote was imported.
     let post = *service.snapshot().read();
     assert_eq!(post.head_root, pre.head_root);
 }
 
 #[tokio::test]
-async fn produce_attestation_does_not_crash_when_own_reimport_rejected() {
-    // On a fresh engine the produced vote's `source.root` is the zero
-    // sentinel (the `latest_justified` default), so the engine's local
-    // re-import path rejects the vote. lean-go's equivalent
-    // (`runtime/chain/service.go`, PR105 Phase 8 own-vote feed) accepts
-    // this rejection and warn-logs; the Rust mirror must do the same and
-    // surface the produced vote to the caller without erroring.
-    //
-    // Full-flow validation that the re-import *succeeds* once a justified
-    // checkpoint exists lives in the duties integration tests
-    // (`tests/duties_scheduler.rs`).
+async fn produce_attestation_reimports_early_vote_with_anchor_source() {
+    // A fresh engine normalizes the genesis justified checkpoint to the
+    // tracked anchor root, so early own votes should be importable instead
+    // of failing with UnknownSourceBlock on the zero root.
     let (service, _store, engine) = fresh_service();
 
     let producer = engine_at_genesis(ENGINE_VALIDATORS);
@@ -117,14 +109,11 @@ async fn produce_attestation_does_not_crash_when_own_reimport_rejected() {
     assert_eq!(own.validator_id, ValidatorIndex::new(0));
     assert_eq!(own.message.slot, Slot::ONE);
 
-    // Either the re-import was rejected (pool empty) or it landed
-    // (pool populated). Both are acceptable; this test guards the
-    // caller-visible contract — `produce_attestation` returns
-    // `Ok(SignedVote)` regardless of the re-import outcome.
-    let _ = engine.with_store(|s| {
+    let (in_pending, in_known) = engine.with_store(|s| {
         (
             s.latest_new_votes().contains_key(&ValidatorIndex::new(0)),
             s.latest_known_votes().contains_key(&ValidatorIndex::new(0)),
         )
     });
+    assert!(in_pending || in_known);
 }

@@ -10,6 +10,7 @@ use runtime_core::{Node, NodeConfig};
 use runtime_p2p::{DevnetHost, HostOptions, RpcProvider};
 use storage::{MemoryStore, Store};
 
+use crate::gossip_ingest::GossipIngestService;
 use crate::publisher_adapter::PublisherAdapter;
 use crate::rpc_provider::RpcProviderAdapter;
 
@@ -43,9 +44,10 @@ pub struct Config {
 /// Builds a devnet [`Node`] with concrete runtime services.
 ///
 /// The current p2p surface does not yet expose the clean peer-event and
-/// status-request hooks required by `runtime-sync`, so sync is left
-/// unwired here. The remaining concrete services are wired in lifecycle
-/// order by [`runtime_core::Node`].
+/// status-request hooks required by `runtime-sync`, so peer backfill sync
+/// is left unwired here. Gossip ingestion still runs in the sync lifecycle
+/// slot so p2p-delivered blocks and votes reach the chain before duties
+/// begin producing local messages.
 ///
 /// # Errors
 ///
@@ -71,6 +73,10 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         Arc::clone(&store),
     ));
     let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider)?);
+    let gossip_ingest = Arc::new(GossipIngestService::new(
+        Arc::clone(&p2p),
+        Arc::clone(&chain),
+    ));
 
     let duties = Arc::new(runtime_duties::Service::new(
         duties,
@@ -84,6 +90,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     Ok(Node::new(node)
         .with_chain(chain)
         .with_p2p(p2p)
+        .with_sync(gossip_ingest)
         .with_duties(duties)
         .with_http(http)
         .with_metrics(metrics))

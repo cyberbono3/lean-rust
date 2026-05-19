@@ -49,7 +49,7 @@ fn parity_linear_chain_no_votes_picks_deepest() {
         (b, block(2, a, 2)),
     ]);
     let votes = HashMap::new();
-    assert_eq!(get_fork_choice_head(&blocks, g, &votes, 0).unwrap(), g);
+    assert_eq!(get_fork_choice_head(&blocks, g, &votes, 0).unwrap(), b);
     // Sanity: with one vote pointing at `b`, the descent reaches `b`.
     let votes = HashMap::from([(ValidatorIndex::new(0), Checkpoint::new(b, Slot::new(2)))]);
     assert_eq!(get_fork_choice_head(&blocks, g, &votes, 0).unwrap(), b);

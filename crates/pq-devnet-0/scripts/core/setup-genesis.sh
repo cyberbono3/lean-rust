@@ -16,7 +16,7 @@ fi
 REAM_IMAGE="${REAM_IMAGE:-ethpandaops/ream:master-0bceaee}"
 LEAN_RUST_IMAGE="${LEAN_RUST_IMAGE:-lean-rust:local}"
 GENESIS_GEN_IMAGE="${GENESIS_GEN_IMAGE:-ethpandaops/eth-beacon-genesis:pk910-leanchain}"
-GENESIS_OFFSET_SECS="${GENESIS_OFFSET_SECS:-60}"
+GENESIS_OFFSET_SECS="${GENESIS_OFFSET_SECS:-180}"
 
 REAM_NODE_ID="ream_0"
 LEAN_RUST_NODE_ID="leanrust_1"
@@ -34,6 +34,7 @@ NODE1_KEY_FILE="$KEYS_DIR/node1.key"
 GENESIS_STATE_FILE="$GENESIS_DIR/genesis.ssz"
 GENESIS_JSON_FILE="$GENESIS_DIR/genesis.json"
 GENESIS_CONFIG_FILE="$GENESIS_DIR/config.yaml"
+LEAN_RUST_CONFIG_FILE="$GENESIS_DIR/lean-rust-devnet0.yaml"
 NODES_FILE="$GENESIS_DIR/nodes.yaml"
 VALIDATORS_FILE="$GENESIS_DIR/validators.yaml"
 
@@ -79,6 +80,17 @@ docker_run_devnet_readonly() {
   docker run --rm -v "$DEVNET_ROOT:$CONTAINER_DEVNET_ROOT:ro" "$@"
 }
 
+ensure_image_available() {
+  local image="$1"
+
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "Pulling missing image $image..."
+  docker pull "$image" >/dev/null
+}
+
 print_genesis_time() {
   local genesis_time="$1"
   local formatted
@@ -111,6 +123,11 @@ ensure_peer_id_helper() {
     || die "$LEAN_RUST_IMAGE does not support 'peer-id'; rerun with FORCE=1 to rebuild it"
 }
 
+ensure_devnet_config_helper() {
+  docker run --rm "$LEAN_RUST_IMAGE" devnet-config --help >/dev/null 2>&1 \
+    || die "$LEAN_RUST_IMAGE does not support 'devnet-config'; rerun with FORCE=1 to rebuild it"
+}
+
 if [[ ! "$GENESIS_OFFSET_SECS" =~ ^[0-9]+$ ]]; then
   die "GENESIS_OFFSET_SECS must be a non-negative integer, got $GENESIS_OFFSET_SECS"
 fi
@@ -122,6 +139,9 @@ echo "GENESIS_OFFSET_SECS=$GENESIS_OFFSET_SECS"
 
 "$SCRIPT_DIR/build-lean-rust.sh"
 ensure_peer_id_helper
+ensure_devnet_config_helper
+ensure_image_available "$REAM_IMAGE"
+ensure_image_available "$GENESIS_GEN_IMAGE"
 
 mkdir -p "$KEYS_DIR" "$GENESIS_DIR"
 
@@ -166,6 +186,12 @@ GENESIS_TIME: $GENESIS_TIME
 VALIDATOR_COUNT: 0
 EOF
 
+echo "Writing lean-rust devnet config..."
+docker_run_devnet_readonly \
+  "$LEAN_RUST_IMAGE" \
+  devnet-config >"$LEAN_RUST_CONFIG_FILE"
+require_file "$LEAN_RUST_CONFIG_FILE"
+
 echo "Running eth-beacon-genesis (leanchain)..."
 docker_run_devnet \
   "$GENESIS_GEN_IMAGE" \
@@ -184,6 +210,8 @@ cat >"$RUST_BOOTNODES" <<EOF
 EOF
 
 require_file "$GENESIS_STATE_FILE"
+require_file "$GENESIS_CONFIG_FILE"
+require_file "$LEAN_RUST_CONFIG_FILE"
 require_file "$NODES_FILE"
 require_file "$VALIDATORS_FILE"
 require_file "$RUST_BOOTNODES"
@@ -197,6 +225,8 @@ BOOTNODE_COUNT="$(yaml_entry_count "$RUST_BOOTNODES")"
 assert_contains "$REAM_NODE_ID" "$VALIDATORS_FILE"
 assert_contains "$LEAN_RUST_NODE_ID" "$VALIDATORS_FILE"
 assert_contains "/p2p/" "$RUST_BOOTNODES"
+assert_contains "GENESIS_TIME" "$GENESIS_CONFIG_FILE"
+assert_contains "slot_duration_ms:" "$LEAN_RUST_CONFIG_FILE"
 
 echo
 echo "Genesis ready."

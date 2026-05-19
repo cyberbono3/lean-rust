@@ -11,18 +11,15 @@ use pq_devnet_0::{
     fixture_path, LEANRUST_1_PEER_ID, LEANRUST_1_RAW_SECP256K1_KEY_FIXTURE, REAM_0_BOOTNODE_ADDR,
     REAM_0_PEER_ID, REAM_0_RAW_SECP256K1_KEY_FIXTURE, RUST_BOOTNODES_2NODE_FIXTURE,
 };
-use protocol::{ProtocolConfig, State, ValidatorIndex};
+use protocol::{State, ValidatorIndex};
 use runtime_duties::ValidatorAssignments;
+use ssz::HashTreeRoot;
 
 const GENESIS_TIME: u64 = 1_778_169_008;
 
 fn decode_hex_fixture(name: &str) -> Vec<u8> {
     let hex = std::fs::read_to_string(fixture_path(name)).expect("read hex fixture");
     hex::decode(hex.split_whitespace().collect::<String>()).expect("fixture must be valid hex")
-}
-
-fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("u64 field"))
 }
 
 fn derive_peer_id_from_raw_key(name: &str) -> String {
@@ -47,23 +44,16 @@ fn parse_bootnode_entry(entry: &str) -> (Multiaddr, String) {
 }
 
 fn decode_current_local_pq_genesis(bytes: &[u8]) -> State {
-    // Current eth-beacon-genesis local-pq output is still the legacy 145-byte
-    // state shape. Production support belongs in a later compatibility issue;
-    // Issue #1 only pins the artifact contract and proves the fixture can be
-    // mapped into the Rust domain state used by later tests.
+    // Current eth-beacon-genesis local-pq output is the compact 145-byte Ream
+    // leanchain state shape. Production startup supports this through the
+    // protocol adapter used here.
     assert_eq!(
         bytes.len(),
         145,
         "unexpected local-pq genesis fixture length"
     );
 
-    State {
-        config: ProtocolConfig {
-            num_validators: read_u64_le(bytes, 0),
-            genesis_time: read_u64_le(bytes, 8),
-        },
-        ..State::default()
-    }
+    State::from_ream_legacy_ssz_bytes(bytes).expect("fixture must decode")
 }
 
 #[test]
@@ -90,6 +80,12 @@ fn genesis_2node_fixture_decodes_to_protocol_state() {
     assert_eq!(state.config.num_validators, 2);
     assert_eq!(state.config.genesis_time, GENESIS_TIME);
     assert_eq!(state.slot.get(), 0);
+    assert!(state.historical_block_hashes.is_empty());
+    assert!(state.justified_slots.is_empty());
+    assert_eq!(
+        hex::encode(state.hash_tree_root()),
+        "8d30f4011dddd48e95d246ba5438c131864e1c8184b30844687a30728fc2461e"
+    );
 }
 
 #[test]

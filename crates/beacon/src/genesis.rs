@@ -65,16 +65,30 @@ pub fn load_state(path: &Path) -> Result<State> {
         bytes = bytes.len(),
         "read genesis state SSZ",
     );
-    let state = ssz::decode::<State>(&bytes)
-        .inspect_err(|err| {
+    let state = match ssz::decode::<State>(&bytes) {
+        Ok(state) => state,
+        Err(native_err) => {
             warn!(
                 path = %path.display(),
                 bytes = bytes.len(),
-                %err,
-                "genesis state SSZ decode failed",
+                err = %native_err,
+                "genesis state native SSZ decode failed; trying Ream leanchain compatibility decode",
             );
-        })
-        .with_context(|| format!("decode genesis state SSZ {}", path.display()))?;
+            State::from_ream_legacy_ssz_bytes(&bytes)
+                .map_err(|legacy_err| {
+                    warn!(
+                        path = %path.display(),
+                        bytes = bytes.len(),
+                        err = ?legacy_err,
+                        "genesis state Ream leanchain compatibility decode failed",
+                    );
+                    anyhow::anyhow!(
+                        "decode genesis state SSZ {} as native or Ream leanchain state: native={native_err}; ream_legacy={legacy_err:?}",
+                        path.display(),
+                    )
+                })?
+        }
+    };
     info!(
         path = %path.display(),
         validators = state.config.num_validators,
@@ -241,6 +255,12 @@ mod tests {
     use super::*;
     use ssz::encode;
 
+    fn decode_hex_fixture(name: &str) -> Vec<u8> {
+        let hex =
+            std::fs::read_to_string(pq_devnet_0::fixture_path(name)).expect("read hex fixture");
+        hex::decode(hex.split_whitespace().collect::<String>()).expect("fixture must be valid hex")
+    }
+
     #[test]
     fn loads_chain_config_from_yaml() {
         let dir = tempfile::tempdir().expect("create temp dir");
@@ -266,6 +286,35 @@ mod tests {
         let loaded = load_state(&path).expect("load state");
 
         assert_eq!(loaded, state);
+    }
+
+    #[test]
+    fn loads_ream_legacy_local_pq_state_from_ssz() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("genesis.ssz");
+        std::fs::write(&path, decode_hex_fixture("genesis-2node.ssz.hex"))
+            .expect("write legacy state");
+
+        let loaded = load_state(&path).expect("load legacy state");
+        let block = anchor_block_for_state(&loaded).expect("derive anchor block");
+
+        assert_eq!(loaded.config.num_validators, 2);
+        assert_eq!(loaded.config.genesis_time, 1_778_169_008);
+        assert!(loaded.historical_block_hashes.is_empty());
+        assert!(loaded.justified_slots.is_empty());
+        assert_eq!(
+            loaded.latest_block_header.body_root,
+            block.body.hash_tree_root().into()
+        );
+        assert_eq!(block.state_root, loaded.hash_tree_root().into());
+        assert_eq!(
+            hex::encode(loaded.hash_tree_root()),
+            "8d30f4011dddd48e95d246ba5438c131864e1c8184b30844687a30728fc2461e"
+        );
+        assert_eq!(
+            hex::encode(block.hash_tree_root()),
+            "b9efc3aae32f6c0c56731a5c758d102e1b6fddb14f2e6abf8d4b054730dd6a78"
+        );
     }
 
     #[test]

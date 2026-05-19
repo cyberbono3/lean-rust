@@ -32,6 +32,15 @@ async fn run(cli: Cli) -> Result<()> {
     log_startup_config(&cli);
 
     match &cli.command {
+        Some(Command::DevnetConfig) => {
+            print!(
+                "{}",
+                config::DEVNET_CONFIG
+                    .to_yaml()
+                    .context("serialize devnet config")?
+            );
+            return Ok(());
+        }
         Some(Command::GeneratePrivateKey { output_path }) => {
             let peer_id =
                 keygen::generate_and_write(output_path).context("generate private key")?;

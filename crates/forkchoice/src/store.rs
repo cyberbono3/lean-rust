@@ -71,7 +71,9 @@ impl Store {
     /// anchor's clock value is `anchor_block.slot * INTERVALS_PER_SLOT`. On
     /// success `state` and `anchor_block` are moved into the store; the
     /// `block_order` vector is seeded with the single anchor root, and both
-    /// `head` and `safe_target` point at the anchor.
+    /// `head` and `safe_target` point at the anchor. A zero genesis
+    /// justified/finalized checkpoint is normalized to the anchor root so
+    /// locally produced early attestations reference a tracked source block.
     ///
     /// # Errors
     /// - [`ForkchoiceError::AnchorStateRootMismatch`] when
@@ -106,13 +108,17 @@ impl Store {
         //    values. `state.config` / `latest_justified` / `latest_finalized`
         //    are `Copy`, so they are read inline before `state` moves into
         //    `insert_block`.
+        let latest_justified =
+            normalize_genesis_checkpoint(state.latest_justified, anchor_block.slot, anchor_root);
+        let latest_finalized =
+            normalize_genesis_checkpoint(state.latest_finalized, anchor_block.slot, anchor_root);
         let mut store = Self {
             time,
             config: state.config,
             head: anchor_root,
             safe_target: anchor_root,
-            latest_justified: state.latest_justified,
-            latest_finalized: state.latest_finalized,
+            latest_justified,
+            latest_finalized,
             ..Default::default()
         };
         store.insert_block(anchor_root, anchor_block, state);
@@ -592,6 +598,18 @@ fn vote_head_checkpoints(
     votes.iter().map(|(v, sv)| (*v, sv.message.head)).collect()
 }
 
+fn normalize_genesis_checkpoint(
+    checkpoint: Checkpoint,
+    anchor_slot: Slot,
+    anchor_root: Bytes32,
+) -> Checkpoint {
+    if anchor_slot.is_zero() && checkpoint == Checkpoint::default() {
+        Checkpoint::new(anchor_root, Slot::ZERO)
+    } else {
+        checkpoint
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -688,10 +706,23 @@ mod tests {
     // -- Construction: checkpoint inheritance ------------------------------
 
     #[test]
-    fn from_anchor_inherits_justified_finalized_from_state() {
+    fn from_anchor_normalizes_default_genesis_checkpoints_to_anchor() {
         let (state, block) = anchor_pair(4);
-        let want_justified = state.latest_justified;
-        let want_finalized = state.latest_finalized;
+        let anchor_root: Bytes32 = block.hash_tree_root().into();
+        let store = Store::from_anchor(state, block).unwrap();
+        let anchor_checkpoint = Checkpoint::new(anchor_root, Slot::ZERO);
+        assert_eq!(store.latest_justified(), anchor_checkpoint);
+        assert_eq!(store.latest_finalized(), anchor_checkpoint);
+    }
+
+    #[test]
+    fn from_anchor_inherits_non_default_justified_finalized_from_state() {
+        let (mut state, mut block) = anchor_pair(4);
+        let want_justified = Checkpoint::new(Bytes32::new([0x44; 32]), Slot::new(2));
+        let want_finalized = Checkpoint::new(Bytes32::new([0x55; 32]), Slot::ONE);
+        state.latest_justified = want_justified;
+        state.latest_finalized = want_finalized;
+        block.state_root = state.hash_tree_root().into();
         let store = Store::from_anchor(state, block).unwrap();
         assert_eq!(store.latest_justified(), want_justified);
         assert_eq!(store.latest_finalized(), want_finalized);
@@ -1286,11 +1317,12 @@ mod update_safe_target_tests {
 
     #[test]
     fn accept_new_votes_on_empty_pending_still_refreshes_head() {
-        // No pending votes, no known votes → update_head walks from genesis
-        // with empty vote set and returns the origin unchanged.
+        // No pending votes, no known votes: min-score-zero head selection
+        // still walks the block tree and applies the canonical
+        // zero-weight tie-break.
         let (mut store, roots) = chain_pinned_to_genesis(3, 4);
         store.accept_new_votes().unwrap();
-        assert_eq!(store.head(), roots[0]);
+        assert_eq!(store.head(), roots[2]);
     }
 }
 

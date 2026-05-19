@@ -26,6 +26,8 @@ normalize_status() {
           else
             "\($name): \($value | tojson)"
           end
+        elif ($name == "head" or $name == "finalized") and ($value | type) == "string" then
+          "\($name).root: \($value)"
         else
           "\($name): \($value)"
         end

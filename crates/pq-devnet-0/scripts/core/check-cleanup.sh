@@ -11,6 +11,7 @@ source "$SCRIPT_DIR/devnet-paths.sh"
 SENTINEL_PATHS=(
   "$DEVNET_ROOT/config.yaml"
   "$DEVNET_ROOT/genesis/config.yaml"
+  "$DEVNET_ROOT/genesis/lean-rust-devnet0.yaml"
   "$DEVNET_ROOT/genesis/genesis.json"
   "$DEVNET_ROOT/genesis/genesis.ssz"
   "$DEVNET_ROOT/genesis/nodes.yaml"

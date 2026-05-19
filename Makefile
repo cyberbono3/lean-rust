@@ -68,6 +68,7 @@ devnet-genesis:
 	$(PQ_DEVNET_CORE)/setup-genesis.sh
 
 devnet-up:
+	bash $(PQ_DEVNET_CORE)/check-genesis-time.sh
 	$(PQ_DEVNET_COMPOSE) up -d
 
 devnet-down:
