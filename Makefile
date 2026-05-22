@@ -1,6 +1,7 @@
 .PHONY: verify build test lint fmt fmt-check clean help \
 	devnet-build devnet-genesis devnet-up devnet-down devnet-stop \
 	devnet-clean devnet-clean-check devnet-status devnet-start \
+	devnet-quick-start \
 	devnet-logs devnet-logs-lean devnet-logs-ream \
 	devnet-debug-summary devnet-smoke-head-sample \
 	devnet-smoke-vote-checkpoints
@@ -42,6 +43,7 @@ help:
 	@echo "  make devnet-smoke-head-sample - sample ream/Rust head compatibility"
 	@echo "  make devnet-smoke-vote-checkpoints - compare Ream/Rust vote source-target checkpoints"
 	@echo "  make devnet-start   - build + genesis + up"
+	@echo "  make devnet-quick-start - .env + start + status + logs (Ctrl+C stops)"
 
 verify: fmt-check lint test
 
@@ -110,3 +112,6 @@ devnet-start:
 	$(MAKE) devnet-build
 	$(MAKE) devnet-genesis
 	$(MAKE) devnet-up
+
+devnet-quick-start:
+	$(PQ_DEVNET_CORE)/quick-start.sh $(DEVNET_QUICK_START_ARGS)
