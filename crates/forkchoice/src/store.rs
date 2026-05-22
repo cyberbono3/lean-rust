@@ -71,7 +71,9 @@ impl Store {
     /// anchor's clock value is `anchor_block.slot * INTERVALS_PER_SLOT`. On
     /// success `state` and `anchor_block` are moved into the store; the
     /// `block_order` vector is seeded with the single anchor root, and both
-    /// `head` and `safe_target` point at the anchor.
+    /// `head` and `safe_target` point at the anchor. A zero genesis
+    /// justified/finalized checkpoint is normalized to the anchor root so
+    /// locally produced early attestations reference a tracked source block.
     ///
     /// # Errors
     /// - [`ForkchoiceError::AnchorStateRootMismatch`] when
@@ -106,13 +108,17 @@ impl Store {
         //    values. `state.config` / `latest_justified` / `latest_finalized`
         //    are `Copy`, so they are read inline before `state` moves into
         //    `insert_block`.
+        let latest_justified =
+            normalize_genesis_checkpoint(state.latest_justified, anchor_block.slot, anchor_root);
+        let latest_finalized =
+            normalize_genesis_checkpoint(state.latest_finalized, anchor_block.slot, anchor_root);
         let mut store = Self {
             time,
             config: state.config,
             head: anchor_root,
             safe_target: anchor_root,
-            latest_justified: state.latest_justified,
-            latest_finalized: state.latest_finalized,
+            latest_justified,
+            latest_finalized,
             ..Default::default()
         };
         store.insert_block(anchor_root, anchor_block, state);
@@ -338,9 +344,10 @@ impl Store {
     /// Forwards any error from [`Self::validate_attestation`].
     pub fn process_attestation(
         &mut self,
-        signed_vote: SignedVote,
+        mut signed_vote: SignedVote,
         is_from_block: bool,
     ) -> Result<bool, ForkchoiceError> {
+        self.normalize_genesis_zero_source(&mut signed_vote);
         self.validate_attestation(&signed_vote)?;
 
         let validator = signed_vote.validator_id;
@@ -367,6 +374,26 @@ impl Store {
     #[must_use]
     pub(crate) const fn current_vote_slot(&self) -> Slot {
         Slot::new(self.time.slot())
+    }
+
+    /// Ream local-pq slot-0 gossip votes use a zero source checkpoint root
+    /// while targeting the genesis anchor. lean-rust stores the slot-0
+    /// justified checkpoint at the anchor root, so normalize exactly that
+    /// genesis shape before validation/storage. Non-genesis zero roots still
+    /// fail normal source lookup.
+    fn normalize_genesis_zero_source(&self, signed_vote: &mut SignedVote) {
+        let vote = &mut signed_vote.message;
+        if vote.source == Checkpoint::default()
+            && vote.target.slot.is_zero()
+            && vote.target.root == self.latest_justified.root
+            && self.latest_justified.slot.is_zero()
+            && self
+                .blocks
+                .get(&self.latest_justified.root)
+                .is_some_and(|block| block.slot.is_zero())
+        {
+            vote.source.root = self.latest_justified.root;
+        }
     }
 
     /// Resolves a tracked block by root, raising the caller-supplied error
@@ -442,7 +469,9 @@ impl Store {
 
     /// Stores a `(block, post_state)` pair after validating
     /// `block.state_root` against `hash_tree_root(post_state)` and
-    /// confirming the parent root is tracked.
+    /// confirming the parent root is tracked. Newly learned justified /
+    /// finalized checkpoints from the post-state are adopted when their
+    /// roots are already tracked by the store.
     ///
     /// Returns `true` when the pair was newly tracked, `false` when the
     /// block root is already present (idempotent). The store performs no
@@ -475,7 +504,10 @@ impl Store {
                 root: block.parent_root,
             });
         }
+        let latest_justified = post_state.latest_justified;
+        let latest_finalized = post_state.latest_finalized;
         self.insert_block(root, block, post_state);
+        self.adopt_post_state_checkpoints(latest_justified, latest_finalized);
         Ok(true)
     }
 
@@ -546,11 +578,35 @@ impl Store {
     }
 
     /// Test-only setter for the justified-checkpoint descent origin.
-    /// Production code mutates `latest_justified` only through block
-    /// import; that path is out of scope for this issue.
+    /// Production code mutates `latest_justified` only by adopting
+    /// checkpoints from tracked post-states.
     #[cfg(test)]
     pub(crate) fn set_latest_justified_for_test(&mut self, checkpoint: Checkpoint) {
         self.latest_justified = checkpoint;
+    }
+
+    /// Adopts newer checkpoints observed in a tracked block's post-state.
+    ///
+    /// State transition is the source of truth for justification/finality;
+    /// forkchoice uses these cached checkpoints as the LMD-GHOST descent
+    /// origins for head, safe-target, and attestation production. Ignore
+    /// checkpoints whose roots are not tracked so synthetic/default states
+    /// cannot move the store to an unresolvable origin.
+    fn adopt_post_state_checkpoints(
+        &mut self,
+        latest_justified: Checkpoint,
+        latest_finalized: Checkpoint,
+    ) {
+        if self.should_adopt_checkpoint(latest_justified, self.latest_justified) {
+            self.latest_justified = latest_justified;
+        }
+        if self.should_adopt_checkpoint(latest_finalized, self.latest_finalized) {
+            self.latest_finalized = latest_finalized;
+        }
+    }
+
+    fn should_adopt_checkpoint(&self, candidate: Checkpoint, current: Checkpoint) -> bool {
+        candidate.slot > current.slot && self.blocks.contains_key(&candidate.root)
     }
 }
 
@@ -590,6 +646,18 @@ fn vote_head_checkpoints(
     votes: &HashMap<ValidatorIndex, SignedVote>,
 ) -> HashMap<ValidatorIndex, Checkpoint> {
     votes.iter().map(|(v, sv)| (*v, sv.message.head)).collect()
+}
+
+fn normalize_genesis_checkpoint(
+    checkpoint: Checkpoint,
+    anchor_slot: Slot,
+    anchor_root: Bytes32,
+) -> Checkpoint {
+    if anchor_slot.is_zero() && checkpoint == Checkpoint::default() {
+        Checkpoint::new(anchor_root, Slot::ZERO)
+    } else {
+        checkpoint
+    }
 }
 
 #[cfg(test)]
@@ -688,10 +756,23 @@ mod tests {
     // -- Construction: checkpoint inheritance ------------------------------
 
     #[test]
-    fn from_anchor_inherits_justified_finalized_from_state() {
+    fn from_anchor_normalizes_default_genesis_checkpoints_to_anchor() {
         let (state, block) = anchor_pair(4);
-        let want_justified = state.latest_justified;
-        let want_finalized = state.latest_finalized;
+        let anchor_root: Bytes32 = block.hash_tree_root().into();
+        let store = Store::from_anchor(state, block).unwrap();
+        let anchor_checkpoint = Checkpoint::new(anchor_root, Slot::ZERO);
+        assert_eq!(store.latest_justified(), anchor_checkpoint);
+        assert_eq!(store.latest_finalized(), anchor_checkpoint);
+    }
+
+    #[test]
+    fn from_anchor_inherits_non_default_justified_finalized_from_state() {
+        let (mut state, mut block) = anchor_pair(4);
+        let want_justified = Checkpoint::new(Bytes32::new([0x44; 32]), Slot::new(2));
+        let want_finalized = Checkpoint::new(Bytes32::new([0x55; 32]), Slot::ONE);
+        state.latest_justified = want_justified;
+        state.latest_finalized = want_finalized;
+        block.state_root = state.hash_tree_root().into();
         let store = Store::from_anchor(state, block).unwrap();
         assert_eq!(store.latest_justified(), want_justified);
         assert_eq!(store.latest_finalized(), want_finalized);
@@ -1013,6 +1094,47 @@ mod attestation_tests {
         assert!(store.process_attestation(vote, false).unwrap());
     }
 
+    #[test]
+    fn gossip_normalizes_ream_genesis_zero_source_vote() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let anchor = Checkpoint::new(roots[0], Slot::ZERO);
+        let vote = signed_vote(
+            ValidatorIndex::new(0),
+            anchor,
+            anchor,
+            Checkpoint::default(),
+            Slot::ZERO,
+        );
+
+        assert!(store.process_attestation(vote, false).unwrap());
+        let stored = store
+            .latest_new_votes()
+            .get(&ValidatorIndex::new(0))
+            .expect("normalized vote should enter pending pool");
+        assert_eq!(stored.message.source, anchor);
+    }
+
+    #[test]
+    fn gossip_rejects_non_genesis_zero_source_vote() {
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let target = Checkpoint::new(roots[1], Slot::ONE);
+        let vote = signed_vote(
+            ValidatorIndex::new(0),
+            target,
+            target,
+            Checkpoint::default(),
+            Slot::ONE,
+        );
+
+        let err = store.process_attestation(vote, false).unwrap_err();
+        assert_eq!(
+            err,
+            ForkchoiceError::UnknownSourceBlock {
+                root: Bytes32::zero()
+            }
+        );
+    }
+
     // -- lookup_block --------------------------------------------------
 
     #[test]
@@ -1286,11 +1408,12 @@ mod update_safe_target_tests {
 
     #[test]
     fn accept_new_votes_on_empty_pending_still_refreshes_head() {
-        // No pending votes, no known votes → update_head walks from genesis
-        // with empty vote set and returns the origin unchanged.
+        // No pending votes, no known votes: min-score-zero head selection
+        // still walks the block tree and applies the canonical
+        // zero-weight tie-break.
         let (mut store, roots) = chain_pinned_to_genesis(3, 4);
         store.accept_new_votes().unwrap();
-        assert_eq!(store.head(), roots[0]);
+        assert_eq!(store.head(), roots[2]);
     }
 }
 
@@ -1304,7 +1427,7 @@ mod store_extensions_tests {
     use super::*;
     use protocol::{BlockBody, Slot, ValidatorIndex};
 
-    use crate::test_fixtures::{genesis_store, pinned_chain, signed_vote_at};
+    use crate::test_fixtures::{genesis_store, linear_chain, pinned_chain, signed_vote_at};
 
     // -- track_block ----------------------------------------------------
 
@@ -1367,6 +1490,50 @@ mod store_extensions_tests {
         assert!(store.track_block(block, state).unwrap());
         assert!(store.has_block(&new_root));
         assert_eq!(store.block_order().last(), Some(&new_root));
+    }
+
+    #[test]
+    fn track_block_adopts_newer_known_post_state_checkpoints() {
+        let (mut store, roots, states) = linear_chain(2, 2);
+        let justified = Checkpoint::new(roots[1], Slot::ONE);
+        let finalized = Checkpoint::new(roots[1], Slot::ONE);
+        let mut post_state = states[0].clone();
+        post_state.latest_justified = justified;
+        post_state.latest_finalized = finalized;
+
+        let block = Block {
+            slot: Slot::new(2),
+            proposer_index: ValidatorIndex::new(0),
+            parent_root: roots[1],
+            state_root: post_state.hash_tree_root().into(),
+            body: BlockBody::default(),
+        };
+
+        assert!(store.track_block(block, post_state).unwrap());
+        assert_eq!(store.latest_justified(), justified);
+        assert_eq!(store.latest_finalized(), finalized);
+
+        let produced = store.produce_attestation_vote(Slot::new(2)).unwrap();
+        assert_eq!(produced.source, justified);
+    }
+
+    #[test]
+    fn track_block_ignores_newer_unknown_post_state_checkpoint() {
+        let (mut store, anchor_root) = genesis_store(2);
+        let original_justified = store.latest_justified();
+        let mut post_state = crate::test_fixtures::genesis_anchor(2).0;
+        post_state.latest_justified = Checkpoint::new(Bytes32::new([0x99; 32]), Slot::new(1));
+
+        let block = Block {
+            slot: Slot::new(1),
+            proposer_index: ValidatorIndex::new(1),
+            parent_root: anchor_root,
+            state_root: post_state.hash_tree_root().into(),
+            body: BlockBody::default(),
+        };
+
+        assert!(store.track_block(block, post_state).unwrap());
+        assert_eq!(store.latest_justified(), original_justified);
     }
 
     // -- get_proposal_head ----------------------------------------------

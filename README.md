@@ -11,13 +11,12 @@ one `lean-rust` node against generated local-pq genesis state.
 cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
 make devnet-start
 make devnet-status
-docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
-  --project-directory crates/pq-devnet-0 logs -f
+make devnet-logs
 make devnet-stop
 ```
 
-There is no `make devnet-logs` target currently; use the `docker compose logs`
-command above to follow container logs.
+Use `make devnet-logs-lean` or `make devnet-logs-ream` to follow a single
+node, and `make devnet-debug-summary` to print high-signal log markers.
 
 Use `make devnet-clean` when generated keys, genesis artifacts, logs,
 containers, and Docker volumes should be removed. See

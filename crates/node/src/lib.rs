@@ -10,6 +10,7 @@
 pub mod devnet;
 pub mod publisher_adapter;
 
+mod gossip_ingest;
 mod rpc_provider;
 
 pub use devnet::{new_devnet, Config, Result};

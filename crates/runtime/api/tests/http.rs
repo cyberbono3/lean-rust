@@ -16,7 +16,10 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use protocol::{Checkpoint, Slot};
-use runtime_api::{http::HEAD_PATHS, HttpService};
+use runtime_api::{
+    http::{ETH_V1_HEAD_PATH, FULL_HEAD_PATHS, HEAD_PATHS, LEAN_V0_HEAD_PATH},
+    HttpService,
+};
 use runtime_core::Service;
 use storage::{HeadInfo, MemoryStore, Store};
 use tokio_util::sync::CancellationToken;
@@ -45,12 +48,14 @@ async fn head_responses(addr: SocketAddr) -> Vec<(&'static str, HttpResponse)> {
 fn assert_head_responses(
     responses: &[(&'static str, HttpResponse)],
     expected_status: u16,
-    expected_body: &str,
+    expected_body_for_path: impl Fn(&str) -> &'static str,
 ) {
     assert_eq!(responses.len(), HEAD_PATHS.len());
     for (path, response) in responses {
+        let path = *path;
         assert_eq!(response.status, expected_status, "path {path}");
         assert_json_response(response);
+        let expected_body = expected_body_for_path(path);
         assert_eq!(response.body, expected_body, "path {path}");
     }
 }
@@ -69,15 +74,27 @@ async fn http_head_endpoint_returns_populated_info() {
     service.start().await.unwrap();
     let addr = service.bound_addr().expect("service must be running");
 
-    let expected = concat!(
+    let expected_full = concat!(
         r#"{"head":{"root":"0x"#,
         "1111111111111111111111111111111111111111111111111111111111111111",
         r#"","slot":5},"finalized":{"root":"0x"#,
         "2222222222222222222222222222222222222222222222222222222222222222",
         r#"","slot":2}}"#,
     );
+    let expected_ream = concat!(
+        r#"{"head":"0x"#,
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        r#""}"#,
+    );
     let responses = head_responses(addr).await;
-    assert_head_responses(&responses, 200, expected);
+    assert_head_responses(&responses, 200, |path| {
+        if path == LEAN_V0_HEAD_PATH {
+            expected_ream
+        } else {
+            assert!(FULL_HEAD_PATHS.contains(&path), "unexpected path {path}");
+            expected_full
+        }
+    });
 
     service.stop(CancellationToken::new()).await.unwrap();
 }
@@ -91,7 +108,13 @@ async fn http_head_endpoint_returns_404_when_unset() {
     let addr = service.bound_addr().expect("service must be running");
 
     let responses = head_responses(addr).await;
-    assert_head_responses(&responses, 404, r#"{"error":"head not yet set"}"#);
+    assert_head_responses(&responses, 404, |_| r#"{"error":"head not yet set"}"#);
 
     service.stop(CancellationToken::new()).await.unwrap();
+}
+
+#[test]
+fn lean_head_path_is_ream_compatible_endpoint() {
+    assert_eq!(LEAN_V0_HEAD_PATH, "/lean/v0/head");
+    assert_eq!(ETH_V1_HEAD_PATH, "/eth/v1/head");
 }

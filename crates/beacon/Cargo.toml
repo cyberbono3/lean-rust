@@ -31,3 +31,4 @@ tracing        = { workspace = true }
 [dev-dependencies]
 pq-devnet-0 = { path = "../pq-devnet-0" }
 tempfile    = { workspace = true }
+hex         = { workspace = true }

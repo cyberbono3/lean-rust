@@ -93,6 +93,8 @@ pub struct Cli {
 /// `lean-beacon` subcommands.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum Command {
+    /// Print the canonical lean-rust devnet0 chain config YAML.
+    DevnetConfig,
     /// Generate a libp2p node private key and write it to disk.
     GeneratePrivateKey {
         /// Output path for protobuf-encoded libp2p key bytes.
@@ -154,6 +156,14 @@ mod tests {
                 output_path: PathBuf::from("/tmp/key.pb")
             })
         );
+    }
+
+    #[test]
+    fn parses_devnet_config_subcommand() {
+        let cli = Cli::try_parse_from(["lean-beacon", "devnet-config"])
+            .expect("parse devnet-config subcommand");
+
+        assert_eq!(cli.command, Some(Command::DevnetConfig));
     }
 
     #[test]

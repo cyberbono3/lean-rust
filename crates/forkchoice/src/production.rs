@@ -141,7 +141,8 @@ impl Store {
     }
 
     /// Builds the final block from the stabilized `(attestations,
-    /// post_state)` pair and tracks the result in the store.
+    /// post_state)` pair, tracks the result in the store, and refreshes
+    /// forkchoice head against the expanded block tree.
     fn finalize_produced_block(
         &mut self,
         head_root: Bytes32,
@@ -160,6 +161,7 @@ impl Store {
         };
         let root: Bytes32 = block.hash_tree_root().into();
         self.track_block(block.clone(), post_state.clone())?;
+        self.accept_new_votes()?;
         Ok(ProducedBlock {
             block,
             root,
@@ -321,6 +323,7 @@ mod tests {
         assert_eq!(result.block.slot, Slot::new(1));
         assert_eq!(result.block.proposer_index, ValidatorIndex::new(1));
         assert!(result.block.body.attestations.is_empty());
+        assert_eq!(store.head(), result.root);
     }
 
     #[test]
@@ -410,8 +413,10 @@ mod tests {
         assert_eq!(result.vote.head.slot, Slot::ZERO);
         // No imported blocks → safe_target is also the anchor.
         assert_eq!(result.safe_target, anchor_root);
-        // source mirrors the store's latest_justified.
+        // source mirrors the store's latest_justified, normalized to the
+        // tracked genesis anchor.
         assert_eq!(result.source, store.latest_justified());
+        assert_eq!(result.source.root, anchor_root);
     }
 
     #[test]

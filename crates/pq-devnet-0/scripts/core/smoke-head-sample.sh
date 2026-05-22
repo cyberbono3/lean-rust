@@ -45,14 +45,22 @@ fetch_status() {
 status_fields() {
   jq -r '
     (.data? // .) as $status |
-    def checkpoint($name):
-      if ($status[$name]? | type) == "object" then $status[$name] else {} end;
+    def slot($name):
+      if ($status[$name]? | type) == "object" then ($status[$name].slot // "") else "" end;
+    def root($name):
+      if ($status[$name]? | type) == "object" then
+        ($status[$name].root // "")
+      elif ($status[$name]? | type) == "string" then
+        $status[$name]
+      else
+        ""
+      end;
     [
-      (checkpoint("head").slot // ""),
-      (checkpoint("head").root // ""),
-      (checkpoint("finalized").slot // ""),
-      (checkpoint("finalized").root // "")
-    ] | @tsv
+      ["head_slot", slot("head")],
+      ["head_root", root("head")],
+      ["finalized_slot", slot("finalized")],
+      ["finalized_root", root("finalized")]
+    ][] | @tsv
   '
 }
 
@@ -62,10 +70,16 @@ read_fields() {
   local __head_root_var="$3"
   local __finalized_slot_var="$4"
   local __finalized_root_var="$5"
-  local fields slot head_root finalized_slot finalized_root
+  local key value slot="" head_root="" finalized_slot="" finalized_root=""
 
-  fields="$(printf '%s' "$response" | status_fields)"
-  IFS=$'\t' read -r slot head_root finalized_slot finalized_root <<<"$fields"
+  while IFS=$'\t' read -r key value; do
+    case "$key" in
+      head_slot) slot="$value" ;;
+      head_root) head_root="$value" ;;
+      finalized_slot) finalized_slot="$value" ;;
+      finalized_root) finalized_root="$value" ;;
+    esac
+  done < <(printf '%s' "$response" | status_fields)
 
   printf -v "$__slot_var" '%s' "$slot"
   printf -v "$__head_root_var" '%s' "$head_root"
@@ -74,13 +88,39 @@ read_fields() {
 }
 
 is_match() {
-  [[ -n "$REAM_HEAD_SLOT" ]] \
-    && [[ -n "$REAM_HEAD_ROOT" ]] \
-    && [[ -n "$REAM_FINALIZED_ROOT" ]] \
-    && [[ "$REAM_HEAD_SLOT" == "$LEAN_RUST_HEAD_SLOT" ]] \
-    && [[ "$REAM_FINALIZED_SLOT" == "$LEAN_RUST_FINALIZED_SLOT" ]] \
+  [[ -n "$REAM_HEAD_ROOT" ]] \
+    && [[ -n "$LEAN_RUST_HEAD_ROOT" ]] \
     && [[ "$REAM_HEAD_ROOT" == "$LEAN_RUST_HEAD_ROOT" ]] \
-    && [[ "$REAM_FINALIZED_ROOT" == "$LEAN_RUST_FINALIZED_ROOT" ]]
+    && {
+      [[ -z "$REAM_HEAD_SLOT" ]] \
+        || [[ -z "$LEAN_RUST_HEAD_SLOT" ]] \
+        || [[ "$REAM_HEAD_SLOT" == "$LEAN_RUST_HEAD_SLOT" ]];
+    } \
+    && {
+      [[ -z "$REAM_FINALIZED_SLOT" ]] \
+        || [[ -z "$LEAN_RUST_FINALIZED_SLOT" ]] \
+        || [[ "$REAM_FINALIZED_SLOT" == "$LEAN_RUST_FINALIZED_SLOT" ]];
+    } \
+    && {
+      [[ -z "$REAM_FINALIZED_ROOT" ]] \
+        || [[ -z "$LEAN_RUST_FINALIZED_ROOT" ]] \
+        || [[ "$REAM_FINALIZED_ROOT" == "$LEAN_RUST_FINALIZED_ROOT" ]];
+    }
+}
+
+finalized_match_label() {
+  if [[ -z "$REAM_FINALIZED_ROOT" ]] || [[ -z "$LEAN_RUST_FINALIZED_ROOT" ]]; then
+    printf 'not-compared'
+  elif [[ "$REAM_FINALIZED_ROOT" == "$LEAN_RUST_FINALIZED_ROOT" ]] \
+    && {
+      [[ -z "$REAM_FINALIZED_SLOT" ]] \
+        || [[ -z "$LEAN_RUST_FINALIZED_SLOT" ]] \
+        || [[ "$REAM_FINALIZED_SLOT" == "$LEAN_RUST_FINALIZED_SLOT" ]];
+    }; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
 }
 
 require_command curl
@@ -90,10 +130,11 @@ require_positive_integer PQ_DEVNET_SMOKE_MAX_ATTEMPTS "$MAX_ATTEMPTS"
 require_non_negative_integer PQ_DEVNET_SMOKE_INTERVAL_SECONDS "$INTERVAL_SECONDS"
 require_positive_integer PQ_DEVNET_SMOKE_CURL_MAX_TIME_SECONDS "$CURL_MAX_TIME_SECONDS"
 
-printf '| sample | time_utc | ream_head_slot | rust_head_slot | head.root | finalized.root | match | consecutive |\n'
-printf '| --- | --- | --- | --- | --- | --- | --- | --- |\n'
+printf '| sample | time_utc | ream_head_slot | rust_head_slot | ream_head.root | rust_head.root | ream_finalized.root | rust_finalized.root | finalized_match | match | consecutive |\n'
+printf '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
 
 CONSECUTIVE_MATCHES=0
+CONSECUTIVE_FINALIZED_COMPARISONS=0
 
 for ((ATTEMPT = 1; ATTEMPT <= MAX_ATTEMPTS; ATTEMPT++)); do
   TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -111,26 +152,39 @@ for ((ATTEMPT = 1; ATTEMPT <= MAX_ATTEMPTS; ATTEMPT++)); do
     LEAN_RUST_FINALIZED_SLOT \
     LEAN_RUST_FINALIZED_ROOT
 
+  FINALIZED_MATCH="$(finalized_match_label)"
+
   MATCH="no"
   if is_match; then
     MATCH="yes"
     CONSECUTIVE_MATCHES=$((CONSECUTIVE_MATCHES + 1))
+    if [[ "$FINALIZED_MATCH" != "not-compared" ]]; then
+      CONSECUTIVE_FINALIZED_COMPARISONS=$((CONSECUTIVE_FINALIZED_COMPARISONS + 1))
+    fi
   else
     CONSECUTIVE_MATCHES=0
+    CONSECUTIVE_FINALIZED_COMPARISONS=0
   fi
 
-  printf '| %s | %s | %s | %s | `%s` | `%s` | %s | %s |\n' \
+  printf '| %s | %s | %s | %s | `%s` | `%s` | `%s` | `%s` | %s | %s | %s |\n' \
     "$ATTEMPT" \
     "$TIMESTAMP" \
     "$REAM_HEAD_SLOT" \
     "$LEAN_RUST_HEAD_SLOT" \
     "$REAM_HEAD_ROOT" \
+    "$LEAN_RUST_HEAD_ROOT" \
     "$REAM_FINALIZED_ROOT" \
+    "$LEAN_RUST_FINALIZED_ROOT" \
+    "$FINALIZED_MATCH" \
     "$MATCH" \
     "$CONSECUTIVE_MATCHES"
 
   if [[ "$CONSECUTIVE_MATCHES" -ge "$TARGET_MATCHES" ]]; then
-    printf '\nobserved %s consecutive matching head/finalized samples\n' "$CONSECUTIVE_MATCHES"
+    if [[ "$CONSECUTIVE_FINALIZED_COMPARISONS" -eq "$CONSECUTIVE_MATCHES" ]]; then
+      printf '\nobserved %s consecutive matching head/finalized samples\n' "$CONSECUTIVE_MATCHES"
+    else
+      printf '\nobserved %s consecutive matching head samples; finalized roots were not compared because one or both clients did not report finalized fields\n' "$CONSECUTIVE_MATCHES"
+    fi
     exit 0
   fi
 

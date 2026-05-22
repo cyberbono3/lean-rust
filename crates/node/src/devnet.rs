@@ -3,13 +3,16 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use protocol::{Block, State};
+use anyhow::Context;
+use protocol::{Block, Checkpoint, SignedBlock, Slot, State};
 use runtime_api::{HttpService, MetricsService, Recorder};
 use runtime_chain::Service as ChainService;
 use runtime_core::{Node, NodeConfig};
 use runtime_p2p::{DevnetHost, HostOptions, RpcProvider};
-use storage::{MemoryStore, Store};
+use storage::{HeadInfo, MemoryStore, Store};
+use types::{Bytes32, Bytes4000};
 
+use crate::gossip_ingest::GossipIngestService;
 use crate::publisher_adapter::PublisherAdapter;
 use crate::rpc_provider::RpcProviderAdapter;
 
@@ -43,9 +46,10 @@ pub struct Config {
 /// Builds a devnet [`Node`] with concrete runtime services.
 ///
 /// The current p2p surface does not yet expose the clean peer-event and
-/// status-request hooks required by `runtime-sync`, so sync is left
-/// unwired here. The remaining concrete services are wired in lifecycle
-/// order by [`runtime_core::Node`].
+/// status-request hooks required by `runtime-sync`, so peer backfill sync
+/// is left unwired here. Gossip ingestion still runs in the sync lifecycle
+/// slot so p2p-delivered blocks and votes reach the chain before duties
+/// begin producing local messages.
 ///
 /// # Errors
 ///
@@ -63,7 +67,23 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     } = config;
 
     let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+    let anchor_slot = genesis_block.slot;
+    let anchor_state = genesis_state.clone();
+    let signed_anchor = SignedBlock {
+        message: genesis_block.clone(),
+        signature: Bytes4000::default(),
+    };
     let engine = engine::Engine::from_anchor(genesis_state, genesis_block)?;
+    let anchor_root = engine.head();
+    let finalized = engine.latest_finalized();
+    persist_anchor(
+        store.as_ref(),
+        anchor_root,
+        anchor_slot,
+        finalized,
+        signed_anchor,
+        anchor_state,
+    )?;
     let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
 
     let rpc_provider: Arc<dyn RpcProvider> = Arc::new(RpcProviderAdapter::new(
@@ -71,6 +91,10 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         Arc::clone(&store),
     ));
     let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider)?);
+    let gossip_ingest = Arc::new(GossipIngestService::new(
+        Arc::clone(&p2p),
+        Arc::clone(&chain),
+    ));
 
     let duties = Arc::new(runtime_duties::Service::new(
         duties,
@@ -84,9 +108,33 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     Ok(Node::new(node)
         .with_chain(chain)
         .with_p2p(p2p)
+        .with_sync(gossip_ingest)
         .with_duties(duties)
         .with_http(http)
         .with_metrics(metrics))
+}
+
+fn persist_anchor(
+    store: &dyn Store,
+    anchor_root: Bytes32,
+    anchor_slot: Slot,
+    finalized: Checkpoint,
+    signed_anchor: SignedBlock,
+    anchor_state: State,
+) -> Result<()> {
+    store
+        .save_block(anchor_root, signed_anchor)
+        .context("persist genesis anchor block")?;
+    store
+        .save_state(anchor_root, anchor_state)
+        .context("persist genesis anchor state")?;
+    store
+        .save_head(HeadInfo::new(
+            Checkpoint::new(anchor_root, anchor_slot),
+            finalized,
+        ))
+        .context("persist genesis anchor head")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -149,5 +197,28 @@ mod tests {
         node.start().await.unwrap();
         node.status().await.unwrap();
         node.stop().await.unwrap();
+    }
+
+    #[test]
+    fn persist_anchor_seeds_head_block_and_state() {
+        let store = MemoryStore::default();
+        let (state, block) = engine::test_fixtures::anchor_pair(4);
+        let slot = block.slot;
+        let engine = engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+        let root = engine.head();
+        let finalized = engine.latest_finalized();
+        let signed = SignedBlock {
+            message: block,
+            signature: Bytes4000::default(),
+        };
+
+        persist_anchor(&store, root, slot, finalized, signed.clone(), state).unwrap();
+
+        assert_eq!(store.load_block(&root).unwrap(), Some(signed));
+        assert!(store.load_state(&root).unwrap().is_some());
+        assert_eq!(
+            store.load_head().unwrap(),
+            Some(HeadInfo::new(Checkpoint::new(root, slot), finalized))
+        );
     }
 }

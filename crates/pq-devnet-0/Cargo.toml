@@ -19,3 +19,4 @@ protocol       = { path = "../protocol" }
 runtime-duties = { path = "../runtime/duties" }
 serde_yaml     = { workspace = true }
 ssz            = { path = "../ssz" }
+tempfile       = { workspace = true }

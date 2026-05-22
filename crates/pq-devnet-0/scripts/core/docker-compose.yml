@@ -55,7 +55,7 @@ services:
       RUST_LOG: ${LEAN_RUST_RUST_LOG:-info,lean_beacon=debug,node=debug,engine=debug,runtime_core=debug,runtime_p2p=debug,runtime_chain=debug,runtime_duties=debug,runtime_api=debug,networking=debug,libp2p_swarm=info,discv5=info}
     command:
       - --data-dir=/data
-      - --network=/genesis/config.yaml
+      - --network=/genesis/lean-rust-devnet0.yaml
       - --genesis-state=/genesis/genesis.ssz
       - --validator-registry-path=/genesis/validators.yaml
       - --node-id=leanrust_1

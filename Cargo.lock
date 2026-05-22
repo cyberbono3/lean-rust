@@ -533,6 +533,7 @@ dependencies = [
  "anyhow",
  "clap",
  "config",
+ "hex",
  "libp2p",
  "node",
  "pq-devnet-0",
@@ -2800,6 +2801,7 @@ dependencies = [
  "async-trait",
  "engine",
  "networking",
+ "parking_lot",
  "protocol",
  "runtime-api",
  "runtime-chain",
@@ -3094,6 +3096,7 @@ dependencies = [
  "runtime-duties",
  "serde_yaml",
  "ssz",
+ "tempfile",
 ]
 
 [[package]]

@@ -11,9 +11,12 @@ Current head endpoints:
 
 - `GET /eth/v1/head`
 - `GET /lean/v0/head`
+- `GET /lean/v0/head/full`
 
-Both head routes return the same storage-backed JSON body with `head`
-and `finalized` checkpoints.
+`GET /lean/v0/head` is the Ream-compatible endpoint and returns
+`{"head":"0x..."}`. The `/eth/v1/head` and `/lean/v0/head/full`
+routes return lean-rust's richer diagnostic JSON body with `head` and
+`finalized` checkpoints.
 
 ## Planned scope
 

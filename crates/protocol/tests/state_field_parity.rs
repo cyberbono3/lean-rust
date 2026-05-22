@@ -1,15 +1,15 @@
 //! Field-by-field parity check for the consensus [`State`] container.
 //!
 //! Records the ordered field set, declared SSZ shape, and contribution to
-//! the fixed portion. The test asserts every property the wire format and
-//! merkleization depend on:
+//! the fixed portion. The test asserts every property the native wire format
+//! and Ream-compatible merkleization depend on:
 //!
 //! - Field order and count match the canonical declaration.
 //! - Fixed fields contribute their declared SSZ width to the fixed portion.
 //! - Variable fields contribute exactly one 4-byte offset to the fixed
 //!   portion.
 //! - The total fixed-portion length equals [`STATE_FIXED_PART_LEN`].
-//! - The merkleization width is `next_pow2(field_count)`.
+//! - The consensus merkleization width is `next_pow2(root_field_count)`.
 //! - Field-level limits ([`HISTORICAL_ROOTS_LIMIT`],
 //!   [`JUSTIFICATIONS_VALIDATORS_LIMIT`]) match the chain config caps.
 
@@ -77,15 +77,46 @@ const FIELDS: &[Field] = &[
     },
 ];
 
+const ROOT_FIELDS: &[&str] = &[
+    "config",
+    "slot",
+    "latest_block_header",
+    "latest_justified",
+    "latest_finalized",
+    "historical_block_hashes",
+    "justified_slots",
+    "justifications_roots",
+    "justifications_validators",
+];
+
 const BYTES_PER_LENGTH_OFFSET: usize = 4;
 
 #[test]
-fn field_set_has_nine_fields_in_declaration_order() {
+fn native_wire_field_set_has_nine_fields_in_declaration_order() {
     assert_eq!(FIELDS.len(), 9, "State has 9 fields");
     let names: Vec<&str> = FIELDS.iter().map(|f| f.name).collect();
     assert_eq!(
         names,
         vec![
+            "config",
+            "slot",
+            "latest_block_header",
+            "latest_justified",
+            "latest_finalized",
+            "historical_block_hashes",
+            "justified_slots",
+            "justifications_roots",
+            "justifications_validators",
+        ]
+    );
+}
+
+#[test]
+fn ream_root_field_set_has_nine_fields_in_declaration_order() {
+    assert_eq!(ROOT_FIELDS.len(), 9, "Ream State root has 9 fields");
+    assert_eq!(
+        ROOT_FIELDS,
+        &[
             "config",
             "slot",
             "latest_block_header",
@@ -136,8 +167,8 @@ fn fixed_field_widths_sum_to_two_sixteen() {
 
 #[test]
 fn merkleization_width_is_next_power_of_two() {
-    // 9 fields → next power of two is 16.
-    let next_pow2 = FIELDS.len().next_power_of_two();
+    // 9 Ream root fields → next power of two is 16.
+    let next_pow2 = ROOT_FIELDS.len().next_power_of_two();
     assert_eq!(next_pow2, 16);
 }
 

@@ -58,7 +58,10 @@ mod tests {
         let status = adapter.local_status();
 
         assert_eq!(status.head.slot, Slot::ZERO);
-        assert_eq!(status.finalized, Checkpoint::default());
+        assert_eq!(
+            status.finalized,
+            Checkpoint::new(status.head.root, Slot::ZERO)
+        );
     }
 
     #[test]
