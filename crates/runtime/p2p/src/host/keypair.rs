@@ -170,7 +170,7 @@ fn io_err(path: impl Into<PathBuf>, source: std::io::Error) -> HostError {
 mod tests {
     use super::*;
     use crate::{DevnetHost, HostOptions};
-    use pq_devnet_0::{leanrust_1_raw_secp256k1_key_path, LEANRUST_1_PEER_ID};
+    use fixtures::{leanrust_1_raw_secp256k1_key_path, LEANRUST_1_PEER_ID};
     use tempfile::{tempdir, TempDir};
 
     fn temp_identity_at(rel: impl AsRef<Path>) -> (TempDir, IdentityPath) {

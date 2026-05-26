@@ -18,7 +18,7 @@ members = [
     "crates/runtime/api",
     "crates/node",
     "crates/beacon",
-    "crates/pq-devnet-0",
+    "crates/fixtures",
 ]
 
 [workspace.package]

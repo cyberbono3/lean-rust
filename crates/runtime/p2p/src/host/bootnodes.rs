@@ -111,7 +111,7 @@ fn invalid_entry(entry: String, reason: impl Into<String>) -> HostError {
 mod tests {
     use super::*;
     use crate::{DevnetHost, HostOptions};
-    use pq_devnet_0::{rust_bootnodes_2node_path, REAM_0_BOOTNODE_ADDR, REAM_0_PEER_ID};
+    use fixtures::{rust_bootnodes_2node_path, REAM_0_BOOTNODE_ADDR, REAM_0_PEER_ID};
     use std::io::Write;
     use tempfile::NamedTempFile;
 

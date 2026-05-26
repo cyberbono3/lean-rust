@@ -533,10 +533,10 @@ dependencies = [
  "anyhow",
  "clap",
  "config",
+ "fixtures",
  "hex",
  "libp2p",
  "node",
- "pq-devnet-0",
  "protocol",
  "runtime-core",
  "runtime-duties",
@@ -1305,6 +1305,19 @@ dependencies = [
  "rand 0.8.6",
  "rustc-hex",
  "static_assertions",
+]
+
+[[package]]
+name = "fixtures"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "libp2p",
+ "protocol",
+ "runtime-duties",
+ "serde_yaml",
+ "ssz",
+ "tempfile",
 ]
 
 [[package]]
@@ -3087,19 +3100,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pq-devnet-0"
-version = "0.1.0"
-dependencies = [
- "hex",
- "libp2p",
- "protocol",
- "runtime-duties",
- "serde_yaml",
- "ssz",
- "tempfile",
-]
-
-[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3626,12 +3626,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "config",
+ "fixtures",
  "futures",
  "hex",
  "libp2p",
  "networking",
  "parking_lot",
- "pq-devnet-0",
  "protocol",
  "runtime-core",
  "serde",

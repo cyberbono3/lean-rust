@@ -256,8 +256,7 @@ mod tests {
     use ssz::encode;
 
     fn decode_hex_fixture(name: &str) -> Vec<u8> {
-        let hex =
-            std::fs::read_to_string(pq_devnet_0::fixture_path(name)).expect("read hex fixture");
+        let hex = std::fs::read_to_string(fixtures::fixture_path(name)).expect("read hex fixture");
         hex::decode(hex.split_whitespace().collect::<String>()).expect("fixture must be valid hex")
     }
 

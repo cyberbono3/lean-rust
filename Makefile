@@ -8,7 +8,7 @@
 
 CARGO ?= cargo
 WORKSPACE_FLAGS := --workspace --all-targets
-PQ_DEVNET_ROOT := crates/pq-devnet-0
+PQ_DEVNET_ROOT := crates/fixtures
 PQ_DEVNET_CORE := $(PQ_DEVNET_ROOT)/scripts/core
 PQ_DEVNET_COMPOSE_FILE := $(PQ_DEVNET_CORE)/docker-compose.yml
 PQ_DEVNET_COMPOSE := docker compose -f $(PQ_DEVNET_COMPOSE_FILE) --project-directory $(PQ_DEVNET_ROOT)

@@ -1,0 +1,17 @@
+shuffle: roundrobin
+validators:
+  - name: "ream_0"
+    privkey: "f6edd2bff1560e4fe776ae2267590d417fd9101b82c9477373e2b23fb0cb89d7"
+    enrFields:
+      ip: "172.20.0.10"
+      quic: 9000
+      seq: 1
+    count: 1
+
+  - name: "leanrust_1"
+    privkey: "d1183b531d6aa2893d871d029fcbe9e881e318932106bca5120454b500706497"
+    enrFields:
+      ip: "172.20.0.11"
+      quic: 9000
+      seq: 1
+    count: 1

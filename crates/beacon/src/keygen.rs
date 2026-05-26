@@ -129,9 +129,9 @@ mod tests {
     #[test]
     fn peer_id_from_file_loads_local_pq_raw_secp256k1_key() {
         let peer_id =
-            peer_id_from_file(&pq_devnet_0::ream_0_raw_secp256k1_key_path()).expect("load peer id");
+            peer_id_from_file(&fixtures::ream_0_raw_secp256k1_key_path()).expect("load peer id");
 
-        assert_eq!(peer_id.to_string(), pq_devnet_0::REAM_0_PEER_ID);
+        assert_eq!(peer_id.to_string(), fixtures::REAM_0_PEER_ID);
     }
 
     #[cfg(unix)]
