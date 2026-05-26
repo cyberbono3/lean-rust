@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use engine::BlockImportResult;
 use lean_chain::{ChainError, Service as ChainService};
-use networking::Status;
+use lean_wire::Status;
 use protocol::SignedBlock;
 use types::Bytes32;
 

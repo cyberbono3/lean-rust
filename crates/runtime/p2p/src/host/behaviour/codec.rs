@@ -2,8 +2,8 @@
 //! `BlocksByRoot` protocols.
 //!
 //! Wire shape per message: `uvarint(ssz_len) || snappy_framed(ssz_bytes)`
-//! ([`networking::write_req_resp_frame`] /
-//! [`networking::read_req_resp_frame`]).
+//! ([`lean_wire::write_req_resp_frame`] /
+//! [`lean_wire::read_req_resp_frame`]).
 //! The substream half-closes after the sender finishes, so each codec
 //! method reads to EOF and decodes the resulting buffer in one shot.
 //!
@@ -16,11 +16,11 @@ use std::io::{self, Cursor};
 
 use async_trait::async_trait;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use libp2p::{request_response, StreamProtocol};
-use networking::{
+use lean_wire::{
     read_req_resp_frame, write_req_resp_frame, BlocksByRootRequest, BlocksByRootResponse, Status,
     BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
+use libp2p::{request_response, StreamProtocol};
 use protocol::SignedBlock;
 
 /// Outbound or inbound request payload on one of the devnet0 req/resp
@@ -31,7 +31,7 @@ pub enum RpcRequest {
     /// checkpoints.
     Status(Status),
     /// Request a list of blocks by their tree roots; bounded at
-    /// [`networking::MAX_REQUEST_BLOCKS`] at decode time.
+    /// [`lean_wire::MAX_REQUEST_BLOCKS`] at decode time.
     BlocksByRoot(BlocksByRootRequest),
 }
 
@@ -192,7 +192,7 @@ fn decode_frames<T: ssz::Decode>(buf: &[u8]) -> io::Result<Vec<T>> {
     Ok(frames)
 }
 
-fn networking_err(err: networking::NetworkingError) -> io::Error {
+fn networking_err(err: lean_wire::NetworkingError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err)
 }
 
@@ -219,8 +219,8 @@ fn protocol_mismatch(name: &str, kind: &'static str) -> io::Error {
 mod tests {
     use super::*;
     use futures::io::Cursor;
+    use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
     use libp2p::request_response::Codec;
-    use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
     use protocol::SignedBlock;
 
     fn status_proto() -> StreamProtocol {

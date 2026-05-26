@@ -20,7 +20,7 @@
 
 use async_trait::async_trait;
 use engine::BlockImportResult;
-use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
+use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use protocol::SignedBlock;
 use tokio::sync::mpsc;
 use types::Bytes32;

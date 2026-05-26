@@ -24,7 +24,7 @@
 use std::fmt::Debug;
 use std::io::Cursor;
 
-use networking::{
+use lean_wire::{
     decode_req_resp, decode_req_resp_wire, encode_req_resp, encode_req_resp_wire,
     read_req_resp_frame, write_req_resp_frame, NetworkingError, Status,
 };

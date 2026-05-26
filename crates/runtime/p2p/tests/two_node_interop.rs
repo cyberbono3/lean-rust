@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lean_core::Service;
+use lean_wire::{BlocksByRootRequest, Status};
 use libp2p::{Multiaddr, PeerId};
-use networking::{BlocksByRootRequest, Status};
 use protocol::{Block, BlockBody, Checkpoint, SignedBlock, Slot, ValidatorIndex};
 use runtime_p2p::{
     DevnetHost, Host, HostOptions, NoOpRpcProvider, P2pService, PublishError, RpcProvider,

@@ -1,7 +1,7 @@
 //! Publish path: typed [`Host`] methods that dispatch
 //! [`HostCommand::Publish`] to the swarm-poll task and await the result.
 //!
-//! Each publish builds the wire payload via [`networking::encode_gossip`]
+//! Each publish builds the wire payload via [`lean_wire::encode_gossip`]
 //! (SSZ + Snappy block compression), hands it to the swarm task with the
 //! topic + a oneshot reply channel, and surfaces the libp2p
 //! [`gossipsub::PublishError`] as a typed [`PublishError`] for callers.
@@ -43,7 +43,7 @@ impl Host {
     /// - [`PublishError::Gossipsub`] for any libp2p-surfaced publish
     ///   failure (most often `InsufficientPeers` until the mesh forms).
     pub async fn publish_block(&self, block: &SignedBlock) -> Result<MessageId, PublishError> {
-        self.publish_raw(Topic::Block, networking::encode_gossip(block))
+        self.publish_raw(Topic::Block, lean_wire::encode_gossip(block))
             .await
     }
 
@@ -53,7 +53,7 @@ impl Host {
     /// # Errors
     /// Same shape as [`Self::publish_block`].
     pub async fn publish_vote(&self, vote: &SignedVote) -> Result<MessageId, PublishError> {
-        self.publish_raw(Topic::Vote, networking::encode_gossip(vote))
+        self.publish_raw(Topic::Vote, lean_wire::encode_gossip(vote))
             .await
     }
 

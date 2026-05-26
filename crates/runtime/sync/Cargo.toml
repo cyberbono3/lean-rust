@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 lean-core  = { path = "../core" }
 lean-chain = { path = "../chain" }
-networking    = { path = "../../networking" }
+lean-wire       = { path = "../../networking" }
 engine        = { path = "../../engine" }
 protocol      = { path = "../../protocol" }
 types         = { path = "../../types" }

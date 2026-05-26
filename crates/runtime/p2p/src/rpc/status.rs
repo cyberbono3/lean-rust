@@ -5,8 +5,8 @@
 //! either responds (inbound path) or accepts the response (outbound
 //! path); on mismatch the peer is disconnected.
 
+use lean_wire::Status;
 use libp2p::{request_response::ResponseChannel, PeerId, Swarm};
-use networking::Status;
 use tracing::{info, warn};
 
 use super::{RpcProvider, RpcResponse};

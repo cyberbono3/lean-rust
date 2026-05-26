@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use lean_core::Service;
-use networking::{BlocksByRootRequest, Status};
+use lean_wire::{BlocksByRootRequest, Status};
 use protocol::{Checkpoint, SignedBlock, Slot};
 use runtime_p2p::{DevnetHost, HostOptions, NoOpRpcProvider, P2pService, RpcError, RpcProvider};
 use tempfile::tempdir;

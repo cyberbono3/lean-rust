@@ -17,7 +17,7 @@ use engine::BlockImportResult;
 use lean_chain::ChainError;
 use lean_core::Service as _;
 use lean_sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
-use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
+use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use parking_lot::Mutex;
 use protocol::SignedBlock;
 use static_assertions::assert_impl_all;

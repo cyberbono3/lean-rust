@@ -2188,7 +2188,7 @@ dependencies = [
  "engine",
  "forkchoice",
  "lean-core",
- "networking",
+ "lean-wire",
  "parking_lot",
  "protocol",
  "ssz",
@@ -2251,7 +2251,7 @@ dependencies = [
  "engine",
  "lean-chain",
  "lean-core",
- "networking",
+ "lean-wire",
  "parking_lot",
  "protocol",
  "ssz",
@@ -2261,6 +2261,23 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "types",
+]
+
+[[package]]
+name = "lean-wire"
+version = "0.1.0"
+dependencies = [
+ "crc32c",
+ "hex",
+ "protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "snap",
+ "ssz",
+ "static_assertions",
+ "thiserror 2.0.18",
  "types",
 ]
 
@@ -2889,23 +2906,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "networking"
-version = "0.1.0"
-dependencies = [
- "crc32c",
- "hex",
- "protocol",
- "serde",
- "serde_json",
- "sha2",
- "snap",
- "ssz",
- "static_assertions",
- "thiserror 2.0.18",
- "types",
-]
-
-[[package]]
 name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2928,7 +2928,7 @@ dependencies = [
  "lean-chain",
  "lean-core",
  "lean-duties",
- "networking",
+ "lean-wire",
  "parking_lot",
  "protocol",
  "runtime-p2p",
@@ -3655,8 +3655,8 @@ dependencies = [
  "futures",
  "hex",
  "lean-core",
+ "lean-wire",
  "libp2p",
- "networking",
  "parking_lot",
  "protocol",
  "serde",

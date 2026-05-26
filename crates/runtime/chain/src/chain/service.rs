@@ -13,7 +13,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use engine::{AttestationImportResult, BlockImportResult, Engine};
-use networking::Status;
+use lean_wire::Status;
 use parking_lot::{Mutex, RwLock};
 use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
 use storage::HeadInfo;

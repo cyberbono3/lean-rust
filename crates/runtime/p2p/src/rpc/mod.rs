@@ -22,7 +22,7 @@ pub(crate) mod status;
 
 use std::sync::Arc;
 
-use networking::Status;
+use lean_wire::Status;
 use protocol::SignedBlock;
 use types::Bytes32;
 

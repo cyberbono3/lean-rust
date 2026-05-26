@@ -17,7 +17,7 @@ lean-duties = { path = "../runtime/duties" }
 runtime-p2p    = { path = "../runtime/p2p" }
 lean-api    = { path = "../runtime/api" }
 engine         = { path = "../engine" }
-networking     = { path = "../networking" }
+lean-wire        = { path = "../networking" }
 protocol       = { path = "../protocol" }
 storage        = { path = "../storage" }
 types          = { path = "../types" }

@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use networking::{BlocksByRootRequest, Status};
+use lean_wire::{BlocksByRootRequest, Status};
 use parking_lot::Mutex;
 use protocol::SignedBlock;
 use tokio::sync::mpsc;
