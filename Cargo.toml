@@ -18,6 +18,7 @@ members = [
     "crates/runtime/api",
     "crates/node",
     "crates/beacon",
+    "crates/beacon-cli",
     "crates/fixtures",
 ]
 

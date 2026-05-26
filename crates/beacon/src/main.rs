@@ -10,11 +10,8 @@ use lean_observability::{FileSink, TracingGuard};
 use lean_p2p_host::HostOptions;
 use tracing::{info, warn};
 
-use crate::cli::{Cli, Command};
-
-mod cli;
-mod genesis;
-mod keygen;
+use beacon_cli::cli::{Cli, Command};
+use beacon_cli::{genesis, keygen};
 
 const AGENT_VERSION: &str = concat!("lean-beacon/", env!("CARGO_PKG_VERSION"));
 const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:5052";

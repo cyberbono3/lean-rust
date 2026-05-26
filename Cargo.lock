@@ -531,20 +531,37 @@ name = "beacon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "beacon-cli",
  "clap",
  "config",
  "fixtures",
- "hex",
  "lean-core",
  "lean-duties",
  "lean-observability",
  "lean-p2p-host",
- "libp2p",
  "node",
- "protocol",
  "ssz",
  "tempfile",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "beacon-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "config",
+ "fixtures",
+ "hex",
+ "lean-duties",
+ "lean-observability",
+ "lean-p2p-host",
+ "libp2p",
+ "protocol",
+ "ssz",
+ "tempfile",
  "tracing",
 ]
 
