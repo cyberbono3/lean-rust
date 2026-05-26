@@ -22,12 +22,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lean_core::Service;
-use lean_p2p_host::{
-    DevnetHost, Host, HostOptions, NoOpRpcProvider, P2pService, PublishError, RpcProvider,
-};
+use lean_p2p_host::{DevnetHost, Host, NoOpRpcProvider, P2pService, PublishError, RpcProvider};
 use lean_wire::{BlocksByRootRequest, Status};
 use libp2p::{Multiaddr, PeerId};
 use protocol::{Block, BlockBody, Checkpoint, SignedBlock, Slot, ValidatorIndex};
+
+mod common;
+use common::options_in;
 use ssz::HashTreeRoot;
 use tempfile::{tempdir, TempDir};
 use tokio::time::{sleep, timeout, Instant};
@@ -95,16 +96,6 @@ fn store_provider(blocks: &[(SignedBlock, Bytes32)], status: Status) -> Arc<Stor
         blocks: map,
         status,
     })
-}
-
-fn options_in(dir: &Path, bootnodes: Option<&Path>) -> HostOptions {
-    HostOptions::try_new(
-        "/ip4/127.0.0.1/udp/0/quic-v1",
-        "test/0.1.0",
-        &dir.join("id"),
-        bootnodes,
-    )
-    .unwrap()
 }
 
 /// Writes a one-line bootnodes YAML pointing at `peer_id` reachable at
