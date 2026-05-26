@@ -538,10 +538,10 @@ dependencies = [
  "lean-core",
  "lean-duties",
  "lean-observability",
+ "lean-p2p-host",
  "libp2p",
  "node",
  "protocol",
- "runtime-p2p",
  "ssz",
  "tempfile",
  "tokio",
@@ -2235,6 +2235,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "lean-p2p-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "config",
+ "fixtures",
+ "futures",
+ "hex",
+ "lean-core",
+ "lean-wire",
+ "libp2p",
+ "p2p-rpc",
+ "parking_lot",
+ "protocol",
+ "serde",
+ "serde_yaml",
+ "snap",
+ "ssz",
+ "static_assertions",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "lean-sync"
 version = "0.1.0"
 dependencies = [
@@ -2918,11 +2947,11 @@ dependencies = [
  "lean-chain",
  "lean-core",
  "lean-duties",
+ "lean-p2p-host",
  "lean-wire",
  "p2p-rpc",
  "parking_lot",
  "protocol",
- "runtime-p2p",
  "storage",
  "tempfile",
  "tokio",
@@ -3644,35 +3673,6 @@ name = "ruint-macro"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
-
-[[package]]
-name = "runtime-p2p"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "config",
- "fixtures",
- "futures",
- "hex",
- "lean-core",
- "lean-wire",
- "libp2p",
- "p2p-rpc",
- "parking_lot",
- "protocol",
- "serde",
- "serde_yaml",
- "snap",
- "ssz",
- "static_assertions",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "types",
-]
 
 [[package]]
 name = "rustc-hash"

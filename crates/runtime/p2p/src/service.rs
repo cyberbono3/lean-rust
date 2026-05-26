@@ -244,7 +244,7 @@ impl P2pService {
 #[async_trait]
 impl Service for P2pService {
     fn name(&self) -> &'static str {
-        "runtime-p2p"
+        "lean-p2p-host"
     }
 
     #[instrument(name = "p2p.start", skip(self), fields(peer_id = %self.peer_id))]

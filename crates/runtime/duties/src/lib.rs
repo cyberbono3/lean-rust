@@ -6,7 +6,7 @@
 //! port (satisfied by [`lean_chain::Service`] via an adapter in
 //! [`chain_adapter`]); publish goes through the [`Publisher`] port
 //! whose impl lives in `node` per Decision 7 (Dependency Inversion).
-//! No `runtime-p2p` import lives in this crate.
+//! No `lean-p2p-host` import lives in this crate.
 //!
 //! Out of scope (deliberate, mirrors lean-go): aggregator duties,
 //! direct forkchoice mutation, optional metrics hooks.

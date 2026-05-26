@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use lean_core::NodeConfig;
 use lean_observability::{FileSink, TracingGuard};
-use runtime_p2p::HostOptions;
+use lean_p2p_host::HostOptions;
 use tracing::{info, warn};
 
 use crate::cli::{Cli, Command};

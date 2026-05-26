@@ -7,9 +7,9 @@ use anyhow::Context;
 use lean_api::{HttpService, MetricsService, Recorder};
 use lean_chain::Service as ChainService;
 use lean_core::{Node, NodeConfig};
+use lean_p2p_host::{DevnetHost, HostOptions};
 use p2p_rpc::RpcProvider;
 use protocol::{Block, Checkpoint, SignedBlock, Slot, State};
-use runtime_p2p::{DevnetHost, HostOptions};
 use storage::{HeadInfo, MemoryStore, Store};
 use types::{Bytes32, Bytes4000};
 

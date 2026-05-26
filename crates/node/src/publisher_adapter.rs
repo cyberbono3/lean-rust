@@ -5,10 +5,10 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use lean_duties::{PublishError, Publisher};
+use lean_p2p_host::P2pService;
 use protocol::{SignedBlock, SignedVote};
-use runtime_p2p::P2pService;
 
-/// Forwards validator-duty publish requests to [`runtime_p2p`].
+/// Forwards validator-duty publish requests to [`lean_p2p_host`].
 #[derive(Clone)]
 pub struct PublisherAdapter {
     p2p: Arc<P2pService>,
@@ -21,7 +21,7 @@ impl PublisherAdapter {
         Self { p2p }
     }
 
-    fn host(&self) -> Result<runtime_p2p::Host, PublishError> {
+    fn host(&self) -> Result<lean_p2p_host::Host, PublishError> {
         self.p2p
             .host()
             .ok_or_else(|| anyhow!("p2p host is not running").into())
@@ -52,8 +52,8 @@ impl Publisher for PublisherAdapter {
 mod tests {
     use super::*;
     use lean_core::Service;
+    use lean_p2p_host::{DevnetHost, HostOptions};
     use p2p_rpc::NoOpRpcProvider;
-    use runtime_p2p::{DevnetHost, HostOptions};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 

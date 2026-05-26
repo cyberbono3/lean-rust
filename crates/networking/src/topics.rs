@@ -3,8 +3,8 @@
 //! Topic strings are the canonical identifiers libp2p hashes into a
 //! `TopicHash` and that the deterministic message-id function
 //! ([`crate::compute_gossipsub_message_id`]) folds into the SHA-256 input.
-//! Centralising them here keeps `runtime-p2p` free of protocol-level
-//! constants — `runtime-p2p::gossip::Topic` is a typed wrapper that
+//! Centralising them here keeps `lean-p2p-host` free of protocol-level
+//! constants — `lean-p2p-host::gossip::Topic` is a typed wrapper that
 //! delegates to these values.
 
 /// Gossipsub topic carrying [`protocol::SignedBlock`] payloads

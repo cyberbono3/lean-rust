@@ -29,7 +29,7 @@ fn debug_summary_counts_status_timeout_from_combined_container_logs() {
     let lean = write_fixture(
         dir.path(),
         "lean.log",
-        "DEBUG runtime_p2p::service: status rpc outbound timeout; peer did not answer optional status request\n",
+        "DEBUG lean_p2p_host::service: status rpc outbound timeout; peer did not answer optional status request\n",
     );
 
     let output = Command::new("bash")

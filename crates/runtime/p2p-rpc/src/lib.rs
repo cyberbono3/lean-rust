@@ -1,7 +1,7 @@
 //! Contract surface for the p2p req/resp layer.
 //!
 //! This crate is the boundary between the composition root (`node`) and
-//! the libp2p driver in `runtime-p2p` (later `p2p-host`). It carries no
+//! the libp2p driver in `lean-p2p-host` (later `p2p-host`). It carries no
 //! libp2p dependency: only the trait the application implements, a no-op
 //! default for tests, and the failure surface returned by outbound
 //! requests.

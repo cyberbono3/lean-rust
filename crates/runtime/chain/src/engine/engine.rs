@@ -14,7 +14,7 @@
 //!   [`Engine::with_store`].
 //!
 //! Issue-spec callers (`lean-chain` per #28) hold the only writer handle
-//! into `import_*`; read-only subsystems (`lean-api`, `runtime-p2p`) clone
+//! into `import_*`; read-only subsystems (`lean-api`, `lean-p2p-host`) clone
 //! the engine and use the read-through accessors.
 
 use std::sync::Arc;

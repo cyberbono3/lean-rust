@@ -1,5 +1,5 @@
 [package]
-name          = "runtime-p2p"
+name          = "lean-p2p-host"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

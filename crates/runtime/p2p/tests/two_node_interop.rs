@@ -11,7 +11,7 @@
 //! Each node uses real network IO (no mocked transport), so the tests
 //! operate in real wall-clock time and rely on bounded [`tokio::time::timeout`]
 //! guards. Node B discovers node A via the YAML bootnodes file
-//! [`runtime_p2p`] already loads at `DevnetHost::build_with_provider`;
+//! [`lean_p2p_host`] already loads at `DevnetHost::build_with_provider`;
 //! no extra dial-API surface is required.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -22,12 +22,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lean_core::Service;
+use lean_p2p_host::{
+    DevnetHost, Host, HostOptions, NoOpRpcProvider, P2pService, PublishError, RpcProvider,
+};
 use lean_wire::{BlocksByRootRequest, Status};
 use libp2p::{Multiaddr, PeerId};
 use protocol::{Block, BlockBody, Checkpoint, SignedBlock, Slot, ValidatorIndex};
-use runtime_p2p::{
-    DevnetHost, Host, HostOptions, NoOpRpcProvider, P2pService, PublishError, RpcProvider,
-};
 use ssz::HashTreeRoot;
 use tempfile::{tempdir, TempDir};
 use tokio::time::{sleep, timeout, Instant};
@@ -39,7 +39,7 @@ const TEST_DEADLINE: Duration = Duration::from_secs(15);
 /// Bound on `send_blocks_by_root` round-trips.
 const RPC_DEADLINE: Duration = Duration::from_secs(5);
 /// Bound on gossipsub publish-retry until the mesh forms (heartbeat = 1 s,
-/// see [`runtime_p2p`] internals); two heartbeats with margin.
+/// see [`lean_p2p_host`] internals); two heartbeats with margin.
 const PUBLISH_DEADLINE: Duration = Duration::from_secs(5);
 /// Inter-attempt back-off for the publish-retry loop.
 const PUBLISH_BACKOFF: Duration = Duration::from_millis(50);
