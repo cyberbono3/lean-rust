@@ -119,6 +119,14 @@ pub fn decode_bytes32_list(bytes: &[u8], max: usize) -> Result<Vec<Bytes32>, Dec
 /// `off_i` is the absolute byte position of `payload_i` from the start of
 /// the encoded list. Offsets occupy the leading `4 * n` bytes; `off_0`
 /// therefore equals `4 * n`.
+///
+/// # Panics
+/// Panics if the cumulative offset would exceed `u32::MAX` (4 GiB). All
+/// domain SSZ list limits are far below this; the panic is a static
+/// precondition on the encoder, not a runtime concern. The prior silent
+/// `unwrap_or(u32::MAX)` saturation produced corrupt unparseable bytes;
+/// failing loudly is preferable.
+#[allow(clippy::panic)]
 pub fn encode_variable_element_list<T: Encode>(items: &[T], buf: &mut Vec<u8>) {
     let n = items.len();
     if n == 0 {
@@ -133,7 +141,15 @@ pub fn encode_variable_element_list<T: Encode>(items: &[T], buf: &mut Vec<u8>) {
     let mut current_offset = prefix_len;
     for (i, item) in items.iter().enumerate() {
         let offset_pos = prefix_start + i * BYTES_PER_LENGTH_OFFSET;
-        let offset_u32 = u32::try_from(current_offset).unwrap_or(u32::MAX);
+        // SSZ wire format caps offsets at u32::MAX. Encoding a list whose
+        // total prefix-plus-payload bytes exceed 4 GiB would produce a
+        // corrupt wire encoding (silently truncated offset); the prior
+        // `unwrap_or(u32::MAX)` masked this. Domain types (blocks, votes,
+        // states) all carry SSZ list limits well below 4 GiB so this
+        // panic is a static precondition, not a runtime branch.
+        let Ok(offset_u32) = u32::try_from(current_offset) else {
+            panic!("ssz variable-element list offset {current_offset} exceeds u32::MAX wire limit",);
+        };
         buf[offset_pos..offset_pos + BYTES_PER_LENGTH_OFFSET]
             .copy_from_slice(&offset_u32.to_le_bytes());
 
@@ -148,8 +164,9 @@ pub fn encode_variable_element_list<T: Encode>(items: &[T], buf: &mut Vec<u8>) {
 /// # Errors
 /// - [`DecodeError::BytesInvalid`] when the leading offset is malformed
 ///   (zero, not a multiple of 4, or beyond the buffer), when subsequent
-///   offsets don't strictly increase, or when the implied element count
-///   exceeds `max`.
+///   offsets are non-monotonic (`off[i+1] < off[i]`), or when the implied
+///   element count exceeds `max`. Equal offsets are permitted and denote
+///   zero-length elements per the SSZ spec.
 /// - Any [`DecodeError`] surfaced by `T::from_ssz_bytes`.
 pub fn decode_variable_element_list<T: Decode>(
     bytes: &[u8],
@@ -208,7 +225,9 @@ pub fn decode_variable_element_list<T: Decode>(
 }
 
 fn read_offset(bytes: &[u8], pos: usize) -> Result<usize, DecodeError> {
-    let end = pos + BYTES_PER_LENGTH_OFFSET;
+    let end = pos
+        .checked_add(BYTES_PER_LENGTH_OFFSET)
+        .ok_or_else(|| DecodeError::BytesInvalid(format!("offset position {pos} overflows")))?;
     if end > bytes.len() {
         return Err(DecodeError::BytesInvalid(format!(
             "offset read out of bounds at {pos}",
