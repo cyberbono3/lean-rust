@@ -59,7 +59,7 @@ impl HttpService {
 #[async_trait]
 impl Service for HttpService {
     fn name(&self) -> &'static str {
-        "runtime-api-http"
+        "lean-api-http"
     }
 
     #[instrument(name = "http.start", skip(self), fields(listen_addr = %self.server.listen_addr()))]

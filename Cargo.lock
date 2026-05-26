@@ -2157,6 +2157,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "lean-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "lean-core",
+ "parking_lot",
+ "prometheus",
+ "protocol",
+ "serde",
+ "serde_json",
+ "storage",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower 0.4.13",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "lean-chain"
 version = "0.1.0"
 dependencies = [
@@ -2902,13 +2924,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "engine",
+ "lean-api",
  "lean-chain",
  "lean-core",
  "lean-duties",
  "networking",
  "parking_lot",
  "protocol",
- "runtime-api",
  "runtime-p2p",
  "storage",
  "tempfile",
@@ -3621,28 +3643,6 @@ name = "ruint-macro"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
-
-[[package]]
-name = "runtime-api"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "lean-core",
- "parking_lot",
- "prometheus",
- "protocol",
- "serde",
- "serde_json",
- "storage",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tower 0.4.13",
- "tracing",
- "types",
-]
 
 [[package]]
 name = "runtime-p2p"

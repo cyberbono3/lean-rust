@@ -1,4 +1,4 @@
-//! Integration tests for [`runtime_api::MetricsService`].
+//! Integration tests for [`lean_api::MetricsService`].
 
 #![allow(
     missing_docs,
@@ -11,8 +11,8 @@
 mod support;
 
 mod metrics {
+    use lean_api::{MetricsService, Recorder};
     use lean_core::Service;
-    use runtime_api::{MetricsService, Recorder};
     use tokio_util::sync::CancellationToken;
 
     use crate::support::{http_get, loopback};

@@ -10,7 +10,7 @@ use axum::{
 };
 use serde::Serialize;
 
-/// Errors surfaced by the runtime-api HTTP handlers.
+/// Errors surfaced by the lean-api HTTP handlers.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum HttpError {

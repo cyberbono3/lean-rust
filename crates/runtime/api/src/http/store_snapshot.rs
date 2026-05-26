@@ -10,7 +10,7 @@ use protocol::Checkpoint;
 use serde::Serialize;
 use storage::HeadInfo;
 
-/// JSON view of a [`protocol::Checkpoint`] for the runtime-api wire
+/// JSON view of a [`protocol::Checkpoint`] for the lean-api wire
 /// shape: `{"root":"0x<64hex>","slot":N}`. The root is pre-encoded as a
 /// `0x`-prefixed lowercase hex string at the [`From`] boundary.
 #[derive(Serialize)]

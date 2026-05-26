@@ -55,7 +55,7 @@ impl MetricsService {
 #[async_trait]
 impl Service for MetricsService {
     fn name(&self) -> &'static str {
-        "runtime-api-metrics"
+        "lean-api-metrics"
     }
 
     #[instrument(name = "metrics.start", skip(self), fields(listen_addr = %self.server.listen_addr()))]
