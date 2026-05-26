@@ -11,22 +11,21 @@ description   = "Sync service: peer-driven BlocksByRoot backfill loop (Tier 6)."
 workspace = true
 
 [dependencies]
-lean-core  = { path = "../core" }
-lean-chain = { path = "../chain" }
-lean-wire       = { path = "../../networking" }
-engine        = { path = "../../engine" }
-protocol      = { path = "../../protocol" }
-types         = { path = "../../types" }
-tokio         = { workspace = true }
-tokio-util    = { workspace = true }
-async-trait   = { workspace = true }
-tracing       = { workspace = true }
-parking_lot   = { workspace = true }
-thiserror     = { workspace = true }
-anyhow        = { workspace = true }
+lean-core   = { path = "../core" }
+lean-chain  = { path = "../chain" }
+lean-wire   = { path = "../../networking" }
+protocol    = { path = "../../protocol" }
+types       = { path = "../../types" }
+tokio       = { workspace = true }
+tokio-util  = { workspace = true }
+async-trait = { workspace = true }
+tracing     = { workspace = true }
+parking_lot = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
 
 [dev-dependencies]
-engine            = { path = "../../engine", features = ["test-fixtures"] }
+lean-chain        = { path = "../chain", features = ["test-fixtures"] }
 storage           = { path = "../../storage" }
 ssz               = { path = "../../ssz" }
 static_assertions = { workspace = true }

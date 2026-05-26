@@ -14,20 +14,19 @@ workspace = true
 lean-core   = { path = "../runtime/core" }
 lean-chain  = { path = "../runtime/chain" }
 lean-duties = { path = "../runtime/duties" }
-runtime-p2p    = { path = "../runtime/p2p" }
+runtime-p2p = { path = "../runtime/p2p" }
 lean-api    = { path = "../runtime/api" }
-engine         = { path = "../engine" }
-lean-wire        = { path = "../networking" }
-protocol       = { path = "../protocol" }
-storage        = { path = "../storage" }
-types          = { path = "../types" }
-anyhow         = { workspace = true }
-async-trait    = { workspace = true }
-parking_lot    = { workspace = true }
-tokio          = { workspace = true }
-tokio-util     = { workspace = true }
-tracing        = { workspace = true }
+lean-wire   = { path = "../networking" }
+protocol    = { path = "../protocol" }
+storage     = { path = "../storage" }
+types       = { path = "../types" }
+anyhow      = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+tokio       = { workspace = true }
+tokio-util  = { workspace = true }
+tracing     = { workspace = true }
 
 [dev-dependencies]
-engine   = { path = "../engine", features = ["test-fixtures"] }
-tempfile = { workspace = true }
+lean-chain = { path = "../runtime/chain", features = ["test-fixtures"] }
+tempfile   = { workspace = true }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use engine::{AttestationImportResult, BlockImportResult};
+use lean_chain::engine::{AttestationImportResult, BlockImportResult};
 use lean_chain::Service as ChainService;
 use lean_core::Service;
 use parking_lot::Mutex;

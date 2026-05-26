@@ -1,4 +1,4 @@
-//! Test-only fixtures for the `engine` crate.
+//! Test-only fixtures for the `engine` module.
 //!
 //! Builds anchor state/block pairs from `protocol`'s public surface so the
 //! engine tests do not depend on forkchoice's private `test_fixtures` module.
@@ -18,7 +18,7 @@ use protocol::{
 use ssz::HashTreeRoot;
 use types::{Bytes32, Bytes4000};
 
-use crate::engine::Engine;
+use super::engine::Engine;
 
 /// Validator-count constant used by the import / produce tests. Four matches
 /// the forkchoice production-test default and keeps the round-robin proposer

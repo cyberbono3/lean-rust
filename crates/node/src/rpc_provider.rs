@@ -45,8 +45,8 @@ mod tests {
     use storage::{HeadInfo, MemoryStore};
 
     fn build_adapter() -> (RpcProviderAdapter, Arc<dyn Store>) {
-        let (state, block) = engine::test_fixtures::anchor_pair(4);
-        let engine = engine::Engine::from_anchor(state, block).unwrap();
+        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+        let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
         let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
         let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
         (RpcProviderAdapter::new(chain, Arc::clone(&store)), store)

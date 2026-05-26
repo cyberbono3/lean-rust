@@ -1,6 +1,6 @@
 //! Chain [`Service`] — the single engine writer.
 //!
-//! Wraps [`engine::Engine`] + [`storage::Store`] and exposes async
+//! Wraps [`crate::engine::Engine`] + [`storage::Store`] and exposes async
 //! `import_block` / `import_attestation`. Spawns a background tick loop
 //! on `start` that advances the forkchoice clock every
 //! `config::SECONDS_PER_INTERVAL`.
@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
+use crate::engine::{AttestationImportResult, BlockImportResult, Engine};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use engine::{AttestationImportResult, BlockImportResult, Engine};
 use lean_wire::Status;
 use parking_lot::{Mutex, RwLock};
 use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};

@@ -20,9 +20,9 @@ use protocol::{SignedBlock, SignedVote, State};
 use ssz::HashTreeRoot;
 use types::Bytes32;
 
-use crate::engine::Engine;
-use crate::error::EngineError;
-use crate::results::{AttestationImportResult, BlockImportResult};
+use super::engine::Engine;
+use super::error::EngineError;
+use super::results::{AttestationImportResult, BlockImportResult};
 
 impl Engine {
     /// Validates `signed_block`, runs the full state transition, and tracks
@@ -120,7 +120,7 @@ mod tests {
     use protocol::{Block, BlockBody, Checkpoint, Slot, ValidatorIndex, Vote};
     use types::Bytes4000;
 
-    use crate::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
+    use super::super::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
 
     /// Snapshot of store fields that must remain byte-equal across a
     /// no-mutation branch (`DuplicateBlock` / `MissingParent` / `Rejected`).

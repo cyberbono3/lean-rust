@@ -1,5 +1,5 @@
-//! Structured outcomes returned by [`crate::Engine::import_block`] and
-//! [`crate::Engine::import_attestation`].
+//! Structured outcomes returned by [`super::Engine::import_block`] and
+//! [`super::Engine::import_attestation`].
 //!
 //! Both result types are sum-type enums whose variants carry exactly the
 //! fields meaningful to that outcome. This is the idiomatic Rust counterpart
@@ -9,9 +9,9 @@
 use protocol::ValidatorIndex;
 use types::Bytes32;
 
-use crate::error::EngineError;
+use super::error::EngineError;
 
-/// Outcome of [`crate::Engine::import_block`].
+/// Outcome of [`super::Engine::import_block`].
 ///
 /// Variant names mirror the issue-spec ports (`Accepted`, `DuplicateBlock`,
 /// `MissingParent`). `Rejected` covers every other failure shape encountered
@@ -58,7 +58,7 @@ pub enum BlockImportResult {
     },
 }
 
-/// Outcome of [`crate::Engine::import_attestation`].
+/// Outcome of [`super::Engine::import_attestation`].
 #[derive(Debug)]
 #[non_exhaustive]
 #[must_use = "discarding an attestation-import outcome silently swallows Ignored / Rejected"]

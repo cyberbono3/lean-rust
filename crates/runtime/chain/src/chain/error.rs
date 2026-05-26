@@ -1,6 +1,6 @@
 //! Error type for the chain [`Service`](super::Service).
 
-use engine::EngineError;
+use crate::engine::EngineError;
 use thiserror::Error;
 use types::Bytes32;
 

@@ -9,7 +9,7 @@
 //! the state observed at the most recent refresh, not the live state.
 //! Use [`Engine`] accessors directly when strong consistency matters.
 
-use engine::Engine;
+use crate::engine::Engine;
 use protocol::Checkpoint;
 use types::Bytes32;
 

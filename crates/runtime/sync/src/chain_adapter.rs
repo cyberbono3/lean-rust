@@ -10,7 +10,7 @@
 //! of any sync dependency.
 
 use async_trait::async_trait;
-use engine::BlockImportResult;
+use lean_chain::engine::BlockImportResult;
 use lean_chain::{ChainError, Service as ChainService};
 use lean_wire::Status;
 use protocol::SignedBlock;

@@ -7,7 +7,7 @@
 //!
 //! The engine surface is intentionally narrow:
 //! - import paths: [`Engine::import_block`] / [`Engine::import_attestation`]
-//!   (in [`crate::importer`]).
+//!   (in [`super::importer`]).
 //! - production: [`Engine::produce_block`] / [`Engine::produce_attestation_vote`].
 //! - read-through: [`Engine::head`] / [`Engine::has_block`] /
 //!   [`Engine::safe_target`] / [`Engine::latest_finalized`] /
@@ -26,7 +26,7 @@ use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
 use types::Bytes32;
 
-use crate::error::EngineError;
+use super::error::EngineError;
 
 /// Consensus execution boundary around a shared [`forkchoice::Store`].
 ///
@@ -245,7 +245,7 @@ mod tests {
     use ssz::HashTreeRoot;
     use static_assertions::assert_impl_all;
 
-    use crate::test_fixtures::{anchor_pair, engine_at_genesis};
+    use super::super::test_fixtures::{anchor_pair, engine_at_genesis};
 
     assert_impl_all!(Engine: Send, Sync, Clone);
 

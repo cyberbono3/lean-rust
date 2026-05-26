@@ -1162,16 +1162,6 @@ dependencies = [
 [[package]]
 name = "engine"
 version = "0.1.0"
-dependencies = [
- "forkchoice",
- "parking_lot",
- "protocol",
- "ssz",
- "static_assertions",
- "thiserror 2.0.18",
- "tracing",
- "types",
-]
 
 [[package]]
 name = "enum-as-inner"
@@ -2183,8 +2173,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "config",
- "engine",
  "forkchoice",
+ "lean-chain",
  "lean-core",
  "lean-wire",
  "parking_lot",
@@ -2246,7 +2236,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "engine",
  "lean-chain",
  "lean-core",
  "lean-wire",
@@ -2921,7 +2910,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "engine",
  "lean-api",
  "lean-chain",
  "lean-core",

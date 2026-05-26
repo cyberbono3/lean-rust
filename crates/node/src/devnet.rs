@@ -73,7 +73,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         message: genesis_block.clone(),
         signature: Bytes4000::default(),
     };
-    let engine = engine::Engine::from_anchor(genesis_state, genesis_block)?;
+    let engine = lean_chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
     let anchor_root = engine.head();
     let finalized = engine.latest_finalized();
     persist_anchor(
@@ -175,7 +175,7 @@ mod tests {
             .with_validators_path(validators_path())
             .unwrap()
             .with_genesis_time_unix(future_genesis());
-        let (genesis_state, genesis_block) = engine::test_fixtures::anchor_pair(4);
+        let (genesis_state, genesis_block) = lean_chain::engine::test_fixtures::anchor_pair(4);
 
         Config {
             node: NodeConfig::default(),
@@ -202,9 +202,9 @@ mod tests {
     #[test]
     fn persist_anchor_seeds_head_block_and_state() {
         let store = MemoryStore::default();
-        let (state, block) = engine::test_fixtures::anchor_pair(4);
+        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
         let slot = block.slot;
-        let engine = engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+        let engine = lean_chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
         let root = engine.head();
         let finalized = engine.latest_finalized();
         let signed = SignedBlock {

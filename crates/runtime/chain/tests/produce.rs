@@ -11,9 +11,11 @@
 
 use std::sync::Arc;
 
-use engine::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
-use engine::{Engine, EngineError};
 use forkchoice::ForkchoiceError;
+use lean_chain::engine::test_fixtures::{
+    engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS,
+};
+use lean_chain::engine::{Engine, EngineError};
 use lean_chain::{ChainError, Service};
 use protocol::{SignedBlock, Slot, ValidatorIndex};
 use ssz::HashTreeRoot;

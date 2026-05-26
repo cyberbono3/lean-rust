@@ -2,7 +2,7 @@
 //!
 //! # Scope
 //!
-//! - [`chain::Service`] — wraps [`engine::Engine`] + [`storage::Store`],
+//! - [`chain::Service`] — wraps [`crate::engine::Engine`] + [`storage::Store`],
 //!   exposes async `import_block` / `import_attestation` /
 //!   `produce_block` / `produce_attestation`, and drives the
 //!   forkchoice tick loop on a `tokio` background task.
@@ -21,5 +21,6 @@
 #![forbid(unsafe_code)]
 
 pub mod chain;
+pub mod engine;
 
 pub use chain::{ChainError, ChainSnapshot, Service};

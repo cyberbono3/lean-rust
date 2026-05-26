@@ -12,8 +12,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use engine::test_fixtures::{engine_at_genesis, ENGINE_VALIDATORS};
-use engine::Engine;
+use lean_chain::engine::test_fixtures::{engine_at_genesis, ENGINE_VALIDATORS};
+use lean_chain::engine::Engine;
 use lean_chain::Service;
 use lean_core::Service as _;
 use static_assertions::assert_impl_all;

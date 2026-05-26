@@ -19,7 +19,7 @@
 //! this contract MUST document the deviation per method.
 
 use async_trait::async_trait;
-use engine::BlockImportResult;
+use lean_chain::engine::BlockImportResult;
 use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use protocol::SignedBlock;
 use tokio::sync::mpsc;
