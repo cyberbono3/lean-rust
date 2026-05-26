@@ -380,5 +380,5 @@ impl lean_core::Service for Service {
 // Adapter `impl` blocks for the Tier-6 services that drive this
 // chain Service live in the consuming crates (orphan rule: each
 // trait is defined in the same crate as its adapter):
-//   - `runtime-sync::chain_adapter`    impl sync::Chain for Service
+//   - `lean-sync::chain_adapter`    impl sync::Chain for Service
 //   - `runtime-duties::chain_adapter`  impl duties::Chain for Service

@@ -46,7 +46,7 @@ pub struct Config {
 /// Builds a devnet [`Node`] with concrete runtime services.
 ///
 /// The current p2p surface does not yet expose the clean peer-event and
-/// status-request hooks required by `runtime-sync`, so peer backfill sync
+/// status-request hooks required by `lean-sync`, so peer backfill sync
 /// is left unwired here. Gossip ingestion still runs in the sync lifecycle
 /// slot so p2p-delivered blocks and votes reach the chain before duties
 /// begin producing local messages.

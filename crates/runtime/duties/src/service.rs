@@ -6,7 +6,7 @@
 //! clock, and forwards production through the [`Chain`] port and
 //! publish through the [`Publisher`] port.
 //!
-//! Lifecycle mirrors [`runtime_sync::Loop`]: [`lean_core::Service`]
+//! Lifecycle mirrors [`lean_sync::Loop`]: [`lean_core::Service`]
 //! impl with `start` / `stop` / `status`, cancellation-via-token, and
 //! best-effort drop cleanup.
 

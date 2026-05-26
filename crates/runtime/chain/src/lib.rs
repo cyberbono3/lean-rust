@@ -13,7 +13,7 @@
 //!   transition errors); logical import outcomes stay in the engine's
 //!   sum types.
 //!
-//! The sync backfill loop lives in the sibling `runtime-sync` crate;
+//! The sync backfill loop lives in the sibling `lean-sync` crate;
 //! the proposer / attester scheduler lives in `runtime-duties`. Each
 //! drives this crate's [`Service`] through a narrow async port whose
 //! adapter `impl` lives in the consumer crate (orphan rule).

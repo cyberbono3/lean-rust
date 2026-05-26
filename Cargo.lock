@@ -2200,6 +2200,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "lean-sync"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "engine",
+ "lean-chain",
+ "lean-core",
+ "networking",
+ "parking_lot",
+ "protocol",
+ "ssz",
+ "static_assertions",
+ "storage",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3643,28 +3665,6 @@ dependencies = [
  "ssz",
  "static_assertions",
  "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "types",
-]
-
-[[package]]
-name = "runtime-sync"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "engine",
- "lean-chain",
- "lean-core",
- "networking",
- "parking_lot",
- "protocol",
- "ssz",
- "static_assertions",
- "storage",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

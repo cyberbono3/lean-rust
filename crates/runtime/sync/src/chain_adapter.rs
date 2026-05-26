@@ -5,7 +5,7 @@
 //! Lives in this crate (rather than `lean-chain`) because the
 //! orphan rule requires `impl Trait for Type` to be defined alongside
 //! either the trait or the type. The trait `Chain` is owned by
-//! `runtime-sync`; the type [`lean_chain::Service`] is owned by
+//! `lean-sync`; the type [`lean_chain::Service`] is owned by
 //! `lean-chain`. Putting the impl here keeps `lean-chain` free
 //! of any sync dependency.
 
