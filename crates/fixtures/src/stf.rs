@@ -1,7 +1,7 @@
 //! Shared sample-value helpers for the canonical 4-validator parity fixture.
 
+use protocol::stf::genesis_state;
 use protocol::State;
-use statetransition::genesis_state;
 
 /// Validator-set size of the canonical 4-validator parity fixture.
 pub const NUM_VALIDATORS: u64 = 4;

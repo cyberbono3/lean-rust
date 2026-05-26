@@ -11,10 +11,9 @@ description   = "Test fixtures and compatibility contracts."
 workspace = true
 
 [dependencies]
-protocol        = { path = "../protocol" }
-statetransition = { path = "../statetransition" }
-storage         = { path = "../storage" }
-types           = { path = "../types" }
+protocol = { path = "../protocol" }
+storage  = { path = "../storage" }
+types    = { path = "../types" }
 
 [dev-dependencies]
 hex            = { workspace = true }
