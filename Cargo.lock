@@ -2192,7 +2192,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
  "parking_lot",
  "static_assertions",
  "thiserror 2.0.18",

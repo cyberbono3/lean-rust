@@ -20,15 +20,22 @@
 //! closures. There are no compile-time references to `engine`,
 //! `forkchoice`, `statetransition`, `runtime/chain`, or `runtime/p2p` —
 //! composition happens at the `node` crate (Issue #37).
+//!
+//! [`httpsvc`] hosts the shared axum-server shell (bind + cancel-driven
+//! serve loop) that both [`HttpService`] and [`MetricsService`] reuse;
+//! it lived in `lean-core` until commit 4.2 collapsed `axum` ownership
+//! into this crate.
 
 #![forbid(unsafe_code)]
 
 mod server;
 
 pub mod http;
+pub mod httpsvc;
 pub mod metrics;
 
 pub use http::{HttpError, HttpService};
+pub use httpsvc::{HttpsvcError, Server};
 pub use metrics::{
     GaugeProvider, LabeledGaugeProvider, LabeledGaugeSamples, MetricsError, MetricsService,
     Recorder,

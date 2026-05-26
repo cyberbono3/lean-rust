@@ -8,9 +8,9 @@
 
 use std::net::SocketAddr;
 
+use crate::httpsvc::{HttpsvcError, Server};
 use anyhow::anyhow;
 use axum::Router;
-use lean_core::{HttpsvcError, Server};
 use parking_lot::Mutex;
 use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
