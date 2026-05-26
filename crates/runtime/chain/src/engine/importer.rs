@@ -20,8 +20,8 @@ use protocol::{SignedBlock, SignedVote, State};
 use ssz::HashTreeRoot;
 use types::Bytes32;
 
-use super::engine::Engine;
 use super::error::EngineError;
+use super::handle::Engine;
 use super::results::{AttestationImportResult, BlockImportResult};
 
 impl Engine {

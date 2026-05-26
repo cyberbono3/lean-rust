@@ -18,7 +18,7 @@ use protocol::{
 use ssz::HashTreeRoot;
 use types::{Bytes32, Bytes4000};
 
-use super::engine::Engine;
+use super::handle::Engine;
 
 /// Validator-count constant used by the import / produce tests. Four matches
 /// the forkchoice production-test default and keeps the round-robin proposer

@@ -15,15 +15,14 @@
 //! - [`EngineError`] — `thiserror` enum that funnels forkchoice and
 //!   state-transition failures.
 
-#[allow(clippy::module_inception)]
-mod engine;
 mod error;
+mod handle;
 mod importer;
 mod results;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
 
-pub use engine::Engine;
 pub use error::EngineError;
+pub use handle::Engine;
 pub use results::{AttestationImportResult, BlockImportResult};
