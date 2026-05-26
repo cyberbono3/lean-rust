@@ -52,7 +52,7 @@ services:
     container_name: lean-rust-node1
     pull_policy: never
     environment:
-      RUST_LOG: ${LEAN_RUST_RUST_LOG:-info,lean_beacon=debug,node=debug,engine=debug,runtime_core=debug,runtime_p2p=debug,runtime_chain=debug,runtime_duties=debug,runtime_api=debug,networking=debug,libp2p_swarm=info,discv5=info}
+      RUST_LOG: ${LEAN_RUST_RUST_LOG:-info,lean_beacon=debug,node=debug,lean_core=debug,lean_chain=debug,lean_sync=debug,lean_duties=debug,lean_p2p_host=debug,lean_api=debug,lean_wire=debug,libp2p_swarm=info,discv5=info}
     command:
       - --data-dir=/data
       - --network=/genesis/lean-rust-devnet0.yaml

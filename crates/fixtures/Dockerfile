@@ -3,8 +3,9 @@ FROM rust:1.85-bookworm AS builder
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY bin ./bin
 
-RUN cargo build -p beacon --release
+RUN cargo build -p lean-beacon --release
 
 FROM debian:bookworm-slim AS runtime
 
