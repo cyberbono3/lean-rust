@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod stf;
+pub mod storage;
 
 use std::path::{Path, PathBuf};
 

@@ -13,6 +13,8 @@ workspace = true
 [dependencies]
 protocol        = { path = "../protocol" }
 statetransition = { path = "../statetransition" }
+storage         = { path = "../storage" }
+types           = { path = "../types" }
 
 [dev-dependencies]
 hex            = { workspace = true }

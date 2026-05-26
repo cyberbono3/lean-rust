@@ -17,4 +17,5 @@ parking_lot = { workspace = true }
 thiserror   = { workspace = true }
 
 [dev-dependencies]
+fixtures          = { path = "../fixtures" }
 static_assertions = { workspace = true }
