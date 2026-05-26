@@ -14,8 +14,8 @@
 
 use std::path::Path;
 
+use lean_core::Service;
 use protocol::{SignedBlock, SignedVote};
-use runtime_core::Service;
 use runtime_p2p::{DevnetHost, HostOptions, P2pService, PublishError};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;

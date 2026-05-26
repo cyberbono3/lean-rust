@@ -11,7 +11,7 @@ description   = "Chain service: single engine writer + tick driver (Tier 6)."
 workspace = true
 
 [dependencies]
-runtime-core = { path = "../core" }
+lean-core = { path = "../core" }
 engine       = { path = "../../engine" }
 storage      = { path = "../../storage" }
 networking   = { path = "../../networking" }

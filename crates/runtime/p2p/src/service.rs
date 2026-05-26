@@ -1,4 +1,4 @@
-//! [`P2pService`] — `runtime_core::Service` impl driving the libp2p swarm.
+//! [`P2pService`] — `lean_core::Service` impl driving the libp2p swarm.
 //!
 //! Lifecycle:
 //! 1. [`DevnetHost::build`](crate::DevnetHost::build) constructs the
@@ -27,7 +27,7 @@ use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
-use runtime_core::Service;
+use lean_core::Service;
 
 use crate::error::{HostError, HostResult};
 use crate::gossip::{handler, BlockReceiver, Topic, VoteReceiver};
@@ -54,7 +54,7 @@ const BIND_DEADLINE: Duration = Duration::from_secs(2);
 /// Long-lived service driven by the swarm-poll task.
 ///
 /// Holds construction-time state (options, peer id, bootnodes, swarm)
-/// behind a single mutex so the typed [`runtime_core::Service`] surface
+/// behind a single mutex so the typed [`lean_core::Service`] surface
 /// can take `&self` everywhere.
 pub struct P2pService {
     peer_id: PeerId,

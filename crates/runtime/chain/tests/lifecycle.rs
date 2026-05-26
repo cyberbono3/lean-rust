@@ -14,14 +14,14 @@ use std::time::Duration;
 
 use engine::test_fixtures::{engine_at_genesis, ENGINE_VALIDATORS};
 use engine::Engine;
+use lean_core::Service as _;
 use runtime_chain::Service;
-use runtime_core::Service as _;
 use static_assertions::assert_impl_all;
 use storage::MemoryStore;
 use tokio_util::sync::CancellationToken;
 
 // Compile-time witness: `Service` must be `Send + Sync` to live inside an
-// `Arc<dyn runtime_core::Service>` slot on `Node`.
+// `Arc<dyn lean_core::Service>` slot on `Node`.
 assert_impl_all!(Service: Send, Sync);
 
 fn build(engine: Engine) -> Service {

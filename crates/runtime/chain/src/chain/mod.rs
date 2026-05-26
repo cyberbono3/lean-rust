@@ -1,7 +1,7 @@
 //! Chain service module.
 //!
 //! - [`Service`] — the single engine writer; implements
-//!   [`runtime_core::Service`].
+//!   [`lean_core::Service`].
 //! - [`ChainSnapshot`] — hot-read snapshot consumed by non-writer
 //!   services through a shared `Arc<RwLock<_>>`.
 //! - [`ChainError`] — infrastructure-level failures from the chain

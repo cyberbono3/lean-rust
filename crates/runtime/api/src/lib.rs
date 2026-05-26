@@ -6,12 +6,12 @@
 //! rules.
 //!
 //! # Scope
-//! - [`HttpService`] — [`runtime_core::Service`] implementation that
+//! - [`HttpService`] — [`lean_core::Service`] implementation that
 //!   serves head endpoints, backed by an
 //!   `Arc<dyn storage::Store>` injected at construction.
 //! - [`http::HEAD_PATHS`] — mounted head endpoint paths.
 //! - [`HttpError`] — public error surface returned to clients.
-//! - [`MetricsService`] — [`runtime_core::Service`] implementation that
+//! - [`MetricsService`] — [`lean_core::Service`] implementation that
 //!   serves Prometheus text exposition on `/metrics`, backed by
 //!   injected provider closures.
 //!

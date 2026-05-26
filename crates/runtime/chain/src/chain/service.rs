@@ -307,7 +307,7 @@ impl Service {
 
 impl Drop for Service {
     /// Best-effort cleanup if a caller drops the service without going
-    /// through [`runtime_core::Service::stop`]: cancel the tick token so
+    /// through [`lean_core::Service::stop`]: cancel the tick token so
     /// the spawned task exits on its next iteration. We cannot await the
     /// join here, so the task detaches; cancellation guarantees it does
     /// not loop forever holding `Arc` clones of the snapshot and engine.
@@ -320,7 +320,7 @@ impl Drop for Service {
 }
 
 #[async_trait]
-impl runtime_core::Service for Service {
+impl lean_core::Service for Service {
     fn name(&self) -> &'static str {
         "chain"
     }

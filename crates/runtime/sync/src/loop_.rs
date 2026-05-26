@@ -94,7 +94,7 @@ impl Loop {
 
 impl Drop for Loop {
     /// Best-effort cleanup if the loop is dropped without going through
-    /// [`runtime_core::Service::stop`]: cancel the shared token so the
+    /// [`lean_core::Service::stop`]: cancel the shared token so the
     /// watch task exits on its next iteration and the per-peer tasks
     /// observe shutdown. The handles detach; cancellation guarantees
     /// they will not loop holding `Arc` clones.
@@ -107,7 +107,7 @@ impl Drop for Loop {
 }
 
 #[async_trait]
-impl runtime_core::Service for Loop {
+impl lean_core::Service for Loop {
     fn name(&self) -> &'static str {
         "sync"
     }

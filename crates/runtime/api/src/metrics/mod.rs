@@ -1,7 +1,7 @@
 //! Prometheus metrics API.
 //!
 //! Public surface:
-//! - [`MetricsService`] — `runtime_core::Service` implementation that
+//! - [`MetricsService`] — `lean_core::Service` implementation that
 //!   binds the listener and serves `/metrics`.
 //! - [`Recorder`] — registry of injected gauge providers. Composition
 //!   roots adapt concrete runtime services into closures, keeping this

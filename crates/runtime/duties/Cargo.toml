@@ -11,7 +11,7 @@ description   = "Duties service: narrow devnet0 proposer / attester scheduler (T
 workspace = true
 
 [dependencies]
-runtime-core      = { path = "../core" }
+lean-core      = { path = "../core" }
 runtime-chain     = { path = "../chain" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }

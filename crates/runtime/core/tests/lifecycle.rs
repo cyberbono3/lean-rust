@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use lean_core::{Node, NodeConfig, NodeError, Service, ServiceFailure};
 use parking_lot::Mutex;
-use runtime_core::{Node, NodeConfig, NodeError, Service, ServiceFailure};
 use static_assertions::{assert_impl_all, assert_obj_safe};
 use tokio_util::sync::CancellationToken;
 

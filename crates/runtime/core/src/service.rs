@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 /// use std::sync::Arc;
 /// use anyhow::Result;
 /// use async_trait::async_trait;
-/// use runtime_core::Service;
+/// use lean_core::Service;
 /// use tokio_util::sync::CancellationToken;
 ///
 /// struct Noop;

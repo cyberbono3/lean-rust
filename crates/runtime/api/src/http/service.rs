@@ -1,4 +1,4 @@
-//! [`HttpService`] — `runtime_core::Service` impl driving the Lean
+//! [`HttpService`] — `lean_core::Service` impl driving the Lean
 //! HTTP API.
 //!
 //! Lifecycle mirrors `runtime/p2p::P2pService`'s state machine: build
@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::Router;
-use runtime_core::Service;
+use lean_core::Service;
 use storage::Store;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;

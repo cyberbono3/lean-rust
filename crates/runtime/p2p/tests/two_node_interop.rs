@@ -21,10 +21,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use lean_core::Service;
 use libp2p::{Multiaddr, PeerId};
 use networking::{BlocksByRootRequest, Status};
 use protocol::{Block, BlockBody, Checkpoint, SignedBlock, Slot, ValidatorIndex};
-use runtime_core::Service;
 use runtime_p2p::{
     DevnetHost, Host, HostOptions, NoOpRpcProvider, P2pService, PublishError, RpcProvider,
 };

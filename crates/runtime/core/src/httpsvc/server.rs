@@ -19,7 +19,7 @@ use super::error::HttpsvcError;
 /// # Example
 /// ```no_run
 /// use axum::{routing::get, Router};
-/// use runtime_core::Server;
+/// use lean_core::Server;
 /// use tokio_util::sync::CancellationToken;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {

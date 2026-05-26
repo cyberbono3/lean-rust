@@ -535,10 +535,10 @@ dependencies = [
  "config",
  "fixtures",
  "hex",
+ "lean-core",
  "libp2p",
  "node",
  "protocol",
- "runtime-core",
  "runtime-duties",
  "runtime-p2p",
  "ssz",
@@ -2157,6 +2157,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "lean-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "parking_lot",
+ "serial_test",
+ "static_assertions",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2816,12 +2836,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "engine",
+ "lean-core",
  "networking",
  "parking_lot",
  "protocol",
  "runtime-api",
  "runtime-chain",
- "runtime-core",
  "runtime-duties",
  "runtime-p2p",
  "storage",
@@ -3543,10 +3563,10 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "lean-core",
  "parking_lot",
  "prometheus",
  "protocol",
- "runtime-core",
  "serde",
  "serde_json",
  "storage",
@@ -3567,10 +3587,10 @@ dependencies = [
  "config",
  "engine",
  "forkchoice",
+ "lean-core",
  "networking",
  "parking_lot",
  "protocol",
- "runtime-core",
  "ssz",
  "static_assertions",
  "storage",
@@ -3582,36 +3602,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "runtime-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "parking_lot",
- "serial_test",
- "static_assertions",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "runtime-duties"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "config",
+ "lean-core",
  "parking_lot",
  "protocol",
  "runtime-chain",
- "runtime-core",
  "serde",
  "serde_yaml",
  "static_assertions",
@@ -3632,11 +3632,11 @@ dependencies = [
  "fixtures",
  "futures",
  "hex",
+ "lean-core",
  "libp2p",
  "networking",
  "parking_lot",
  "protocol",
- "runtime-core",
  "serde",
  "serde_yaml",
  "snap",
@@ -3657,11 +3657,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "engine",
+ "lean-core",
  "networking",
  "parking_lot",
  "protocol",
  "runtime-chain",
- "runtime-core",
  "ssz",
  "static_assertions",
  "storage",

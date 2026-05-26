@@ -1,7 +1,7 @@
 //! Lean HTTP API head endpoints backed by [`storage::Store`].
 //!
 //! Public surface:
-//! - [`HttpService`] — `runtime_core::Service` implementation that
+//! - [`HttpService`] — `lean_core::Service` implementation that
 //!   binds the listener and serves the registered routes.
 //! - [`HttpError`] — error type surfaced to clients as JSON.
 //! - [`HEAD_PATHS`] — mounted head endpoint paths.

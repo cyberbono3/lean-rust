@@ -4,10 +4,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
+use lean_core::{Node, NodeConfig};
 use protocol::{Block, Checkpoint, SignedBlock, Slot, State};
 use runtime_api::{HttpService, MetricsService, Recorder};
 use runtime_chain::Service as ChainService;
-use runtime_core::{Node, NodeConfig};
 use runtime_p2p::{DevnetHost, HostOptions, RpcProvider};
 use storage::{HeadInfo, MemoryStore, Store};
 use types::{Bytes32, Bytes4000};

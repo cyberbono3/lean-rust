@@ -11,7 +11,7 @@ description   = "Composition root wiring concrete runtime services into a Node."
 workspace = true
 
 [dependencies]
-runtime-core   = { path = "../runtime/core" }
+lean-core   = { path = "../runtime/core" }
 runtime-chain  = { path = "../runtime/chain" }
 runtime-duties = { path = "../runtime/duties" }
 runtime-p2p    = { path = "../runtime/p2p" }

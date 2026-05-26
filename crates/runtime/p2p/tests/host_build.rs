@@ -15,7 +15,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use runtime_core::Service;
+use lean_core::Service;
 use runtime_p2p::{DevnetHost, HostError, HostOptions, P2pService};
 use tempfile::TempDir;
 use tokio::time::timeout;

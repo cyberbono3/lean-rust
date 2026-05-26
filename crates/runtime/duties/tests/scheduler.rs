@@ -16,11 +16,11 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use lean_core::Service as _;
 use parking_lot::Mutex;
 use protocol::{
     Block, BlockBody, BlockHeader, Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex, Vote,
 };
-use runtime_core::Service as _;
 use runtime_duties::{
     Chain as DutiesChain, Config as DutiesConfig, DutiesError, GenesisTimeUnix, PublishError,
     Publisher, Service as DutiesService,

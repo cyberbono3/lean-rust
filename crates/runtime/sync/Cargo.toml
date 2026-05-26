@@ -11,7 +11,7 @@ description   = "Sync service: peer-driven BlocksByRoot backfill loop (Tier 6)."
 workspace = true
 
 [dependencies]
-runtime-core  = { path = "../core" }
+lean-core  = { path = "../core" }
 runtime-chain = { path = "../chain" }
 networking    = { path = "../../networking" }
 engine        = { path = "../../engine" }

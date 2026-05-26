@@ -1,4 +1,4 @@
-//! [`MetricsService`] — `runtime_core::Service` impl driving the
+//! [`MetricsService`] — `lean_core::Service` impl driving the
 //! Prometheus metrics endpoint.
 //!
 //! Lifecycle mirrors `runtime/p2p::P2pService`'s state machine: build
@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 
 use async_trait::async_trait;
 use axum::Router;
-use runtime_core::Service;
+use lean_core::Service;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 

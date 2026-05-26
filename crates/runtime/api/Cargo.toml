@@ -11,7 +11,7 @@ description   = "Lean HTTP API + Prometheus metrics."
 workspace = true
 
 [dependencies]
-runtime-core = { path = "../core" }
+lean-core = { path = "../core" }
 protocol     = { path = "../../protocol" }
 storage      = { path = "../../storage" }
 types        = { path = "../../types" }

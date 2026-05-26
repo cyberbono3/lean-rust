@@ -11,7 +11,7 @@ description   = "libp2p QUIC-v1 host construction with gossipsub + request_respo
 workspace = true
 
 [dependencies]
-runtime-core      = { path = "../core" }
+lean-core      = { path = "../core" }
 networking        = { path = "../../networking" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }

@@ -51,7 +51,7 @@ impl Publisher for PublisherAdapter {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use runtime_core::Service;
+    use lean_core::Service;
     use runtime_p2p::{DevnetHost, HostOptions, NoOpRpcProvider};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;

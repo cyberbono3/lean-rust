@@ -11,8 +11,8 @@
 mod support;
 
 mod metrics {
+    use lean_core::Service;
     use runtime_api::{MetricsService, Recorder};
-    use runtime_core::Service;
     use tokio_util::sync::CancellationToken;
 
     use crate::support::{http_get, loopback};

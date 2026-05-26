@@ -69,11 +69,11 @@ pub enum TracingInitError {
 ///
 /// # Example
 /// ```no_run
-/// use runtime_core::{init_tracing, Verbosity};
+/// use lean_core::{init_tracing, Verbosity};
 ///
 /// let _guard = init_tracing(Verbosity::Info, None)?;
 /// tracing::info!("ready");
-/// # Ok::<(), runtime_core::TracingInitError>(())
+/// # Ok::<(), lean_core::TracingInitError>(())
 /// ```
 pub fn init_tracing(
     verbosity: Verbosity,
