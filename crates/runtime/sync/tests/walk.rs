@@ -23,22 +23,33 @@ use lean_sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncErr
 use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use parking_lot::Mutex;
 use protocol::{Block, BlockBody, Checkpoint, SignedBlock, Slot, ValidatorIndex};
+use ssz::HashTreeRoot;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use types::{Bytes32, Bytes4000};
 
 // ---- Helpers --------------------------------------------------------------
 
+/// Returns the real `hash_tree_root` of the slot-N block in the canonical
+/// linear test chain (slot 1's parent is `Bytes32::zero()`; each subsequent
+/// slot's parent is the previous block's hash). Computed recursively so
+/// the synthetic chain roots match what `loop_::walk_back` validates the
+/// peer's `BlocksByRoot` responses against.
 fn root_of(n: u8) -> Bytes32 {
-    let mut bytes = [0u8; 32];
-    bytes[0] = n;
-    Bytes32::new(bytes)
+    if n == 0 {
+        return Bytes32::zero();
+    }
+    let parent = root_of(n - 1);
+    make_block(u64::from(n), parent)
+        .message
+        .hash_tree_root()
+        .into()
 }
 
-/// Builds a `SignedBlock` whose hash-tree-root identity is opaque — the
-/// loop never inspects it, only `parent_root` and `slot`. The synthetic
-/// `block_root` is injected through the fake network's `chain_by_root`
-/// map; the engine is never invoked.
+/// Builds a `SignedBlock` for the canonical linear test chain. The
+/// resulting block's `hash_tree_root` is the value returned by
+/// `root_of(slot)`, so the fake-network response satisfies the
+/// walk-back hash-validation introduced alongside this change.
 fn make_block(slot: u64, parent: Bytes32) -> SignedBlock {
     SignedBlock {
         message: Block {

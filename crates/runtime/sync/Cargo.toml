@@ -15,6 +15,7 @@ lean-core   = { path = "../core" }
 lean-chain  = { path = "../chain" }
 lean-wire   = { path = "../../networking" }
 protocol    = { path = "../../protocol" }
+ssz         = { path = "../../ssz" }
 types       = { path = "../../types" }
 tokio       = { workspace = true }
 tokio-util  = { workspace = true }

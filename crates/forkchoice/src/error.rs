@@ -91,6 +91,18 @@ pub enum ForkchoiceError {
         current_slot: Slot,
     },
 
+    /// An attestation's `validator_id` is `>= config.num_validators`. The
+    /// vote pool is keyed by validator id; without this gate a peer could
+    /// forge arbitrary `u64` ids and grow the pool without bound (~4 KiB
+    /// per entry — 250K forged ids ≈ 1 GiB).
+    #[error("forkchoice attestation validator id {validator_id} out of range (num_validators={num_validators})")]
+    ValidatorIndexOutOfRange {
+        /// `signed_vote.validator_id` declared by the attester.
+        validator_id: u64,
+        /// `Store::config.num_validators` at call time.
+        num_validators: u64,
+    },
+
     /// LMD-GHOST descent was asked to start from a non-zero root that is
     /// not present in the supplied block map.
     #[error("forkchoice GHOST traversal: unknown root block at {root:?}")]

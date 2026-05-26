@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use lean_wire::{BlocksByRootRequest, Status};
 use parking_lot::Mutex;
 use protocol::SignedBlock;
+use ssz::HashTreeRoot;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -283,8 +284,17 @@ impl PeerWorker {
             if next_root == Bytes32::zero() {
                 break;
             }
-            if self.chain.has_block(next_root).await? {
-                break;
+            // Transient storage errors during the walk warn-log and abort
+            // THIS peer's walk rather than propagating out (which would
+            // tear down the spawned per-peer task with no diagnostic and
+            // appear to the caller as silent sync death).
+            match self.chain.has_block(next_root).await {
+                Ok(true) => break,
+                Ok(false) => {}
+                Err(err) => {
+                    warn!(%err, ?next_root, "sync walk_back: chain.has_block failed, aborting peer walk");
+                    return Ok(Vec::new());
+                }
             }
             // Proven infallible: `BlocksByRootRequest::new` only rejects
             // iterables longer than `MAX_REQUEST_BLOCKS`; a single-root
@@ -293,9 +303,33 @@ impl PeerWorker {
             let request = BlocksByRootRequest::new([next_root])
                 .expect("single-root request is within MAX_REQUEST_BLOCKS");
             let response = self.network.request_blocks_by_root(peer, request).await?;
-            let Some(block) = response.blocks().first().cloned() else {
+            let blocks = response.blocks();
+            // Validate the peer's response shape and hash. A malicious or
+            // buggy peer could otherwise return ANY block (or many blocks)
+            // and redirect the walk; the engine would then ingest blocks
+            // that don't match the requested root chain.
+            if blocks.is_empty() {
                 break;
-            };
+            }
+            if blocks.len() > 1 {
+                warn!(
+                    got = blocks.len(),
+                    ?peer,
+                    "sync walk_back: peer returned >1 block for single-root request"
+                );
+                return Ok(Vec::new());
+            }
+            let block = blocks[0].clone();
+            let returned_root: Bytes32 = block.message.hash_tree_root().into();
+            if returned_root != next_root {
+                warn!(
+                    requested = ?next_root,
+                    returned = ?returned_root,
+                    ?peer,
+                    "sync walk_back: peer returned block whose hash does not match requested root"
+                );
+                return Ok(Vec::new());
+            }
             next_root = block.message.parent_root;
             pending.push(block);
         }
