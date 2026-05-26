@@ -4,9 +4,19 @@ Lean HTTP API + Prometheus metrics (Tier 6).
 
 ## Status
 
-**Scaffold only.** The crate exists for workspace wiring and to
-hold the Cargo.toml dep that `node` will use; the actual handlers
-land in a later issue.
+Provides the runtime HTTP service and Prometheus metrics service used
+by composition crates.
+
+Current head endpoints:
+
+- `GET /eth/v1/head`
+- `GET /lean/v0/head`
+- `GET /lean/v0/head/full`
+
+`GET /lean/v0/head` is the Ream-compatible endpoint and returns
+`{"head":"0x..."}`. The `/eth/v1/head` and `/lean/v0/head/full`
+routes return lean-rust's richer diagnostic JSON body with `head` and
+`finalized` checkpoints.
 
 ## Planned scope
 

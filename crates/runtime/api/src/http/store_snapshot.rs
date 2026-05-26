@@ -1,4 +1,4 @@
-//! JSON wire shapes for the `/eth/v1/...` head endpoints.
+//! JSON wire shapes for the runtime head endpoints.
 //!
 //! Domain types (`storage::HeadInfo`, `protocol::Checkpoint`,
 //! `types::Bytes32`) stay serde-free per the workspace architecture
@@ -19,7 +19,13 @@ pub(crate) struct CheckpointDto {
     slot: u64,
 }
 
-/// JSON view of [`storage::HeadInfo`] returned by `GET /eth/v1/head`.
+/// Ream-compatible JSON view returned by `GET /lean/v0/head`.
+#[derive(Serialize)]
+pub(crate) struct HeadRootDto {
+    head: String,
+}
+
+/// JSON view of [`storage::HeadInfo`] returned by diagnostic head endpoints.
 #[derive(Serialize)]
 pub(crate) struct HeadInfoDto {
     head: CheckpointDto,
@@ -44,6 +50,14 @@ impl From<HeadInfo> for HeadInfoDto {
     }
 }
 
+impl From<HeadInfo> for HeadRootDto {
+    fn from(info: HeadInfo) -> Self {
+        Self {
+            head: info.head.root.to_hex(),
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -52,7 +66,21 @@ mod tests {
     use types::Bytes32;
 
     #[test]
-    fn head_info_serialises_to_expected_wire_shape() {
+    fn head_root_serialises_to_ream_compatible_wire_shape() {
+        let info = HeadInfo::new(
+            Checkpoint::new(Bytes32::new([0xAB; 32]), Slot::new(7)),
+            Checkpoint::new(Bytes32::new([0xCD; 32]), Slot::new(3)),
+        );
+
+        let json = serde_json::to_string(&HeadRootDto::from(info)).unwrap();
+        assert_eq!(
+            json,
+            r#"{"head":"0xabababababababababababababababababababababababababababababababab"}"#
+        );
+    }
+
+    #[test]
+    fn head_info_serialises_to_expected_diagnostic_wire_shape() {
         let cases: [(&str, HeadInfo, &str); 2] = [
             (
                 "default",

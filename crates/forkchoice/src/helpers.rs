@@ -65,10 +65,6 @@ pub fn get_fork_choice_head(
         .ok_or(ForkchoiceError::UnknownRootBlock { root })?
         .slot;
 
-    if latest_votes.is_empty() {
-        return Ok(root);
-    }
-
     // Step 1: per-block vote weight. For each voted block, walk back to the
     // root depth and bump the weight of every block on the path. Votes whose
     // head root is not tracked are silently skipped (matches leanSpec).
@@ -147,13 +143,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_votes_returns_root_unchanged() {
+    fn empty_votes_descend_by_zero_weight_tie_break() {
         let mut blocks = HashMap::new();
         let root = Bytes32::new([1; 32]);
+        let child = Bytes32::new([2; 32]);
         insert(&mut blocks, root, block_with(0, Bytes32::zero(), 0));
+        insert(&mut blocks, child, block_with(1, root, 1));
 
         let head = get_fork_choice_head(&blocks, root, &HashMap::new(), 0).unwrap();
-        assert_eq!(head, root);
+        assert_eq!(head, child);
     }
 
     #[test]

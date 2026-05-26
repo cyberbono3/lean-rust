@@ -18,6 +18,7 @@ members = [
     "crates/runtime/api",
     "crates/node",
     "crates/beacon",
+    "crates/pq-devnet-0",
 ]
 
 [workspace.package]
@@ -70,6 +71,7 @@ libp2p = { version = "0.55", features = [
     "noise",
     "yamux",
     "ping",
+    "secp256k1",
 ] }
 snap = "1"
 crc32c = "0.6"

@@ -7,7 +7,7 @@
 
 use libp2p::{request_response::ResponseChannel, PeerId, Swarm};
 use networking::Status;
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 use super::{RpcProvider, RpcResponse};
 use crate::host::behaviour::DevnetBehaviour;
@@ -42,7 +42,7 @@ pub(crate) fn on_inbound(
         .behaviour_mut()
         .status_rr
         .send_response(channel, RpcResponse::Status(local));
-    debug!(peer = %peer, "status handshake ok (inbound)");
+    log_handshake_ok(peer, &local, peer_status, "inbound");
 }
 
 /// Outbound `Status` response: validate the peer's Status and
@@ -59,7 +59,23 @@ pub(crate) fn on_outbound_response(
         disconnect_on_mismatch(peer, &local, peer_status, swarm, "outbound response");
         return;
     }
-    debug!(peer = %peer, "status handshake ok (outbound)");
+    log_handshake_ok(peer, &local, peer_status, "outbound");
+}
+
+fn log_handshake_ok(peer: PeerId, local: &Status, peer_status: &Status, direction: &'static str) {
+    info!(
+        peer = %peer,
+        direction,
+        local_finalized_slot = local.finalized.slot.get(),
+        local_finalized_root = %local.finalized.root.to_hex(),
+        local_head_slot = local.head.slot.get(),
+        local_head_root = %local.head.root.to_hex(),
+        peer_finalized_slot = peer_status.finalized.slot.get(),
+        peer_finalized_root = %peer_status.finalized.root.to_hex(),
+        peer_head_slot = peer_status.head.slot.get(),
+        peer_head_root = %peer_status.head.root.to_hex(),
+        "status handshake accepted",
+    );
 }
 
 /// Logs the mismatch and tears down the peer connection. `direction`
@@ -74,9 +90,10 @@ fn disconnect_on_mismatch(
 ) {
     warn!(
         peer = %peer,
+        direction,
         ?local,
         peer_status = ?peer_status,
-        "status mismatch on {direction}; disconnecting",
+        "status handshake rejected; disconnecting",
     );
     let _ = swarm.disconnect_peer_id(peer);
 }

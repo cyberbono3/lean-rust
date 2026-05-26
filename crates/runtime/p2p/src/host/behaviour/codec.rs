@@ -1,8 +1,9 @@
 //! [`request_response::Codec`] for the devnet0 `Status` +
 //! `BlocksByRoot` protocols.
 //!
-//! Wire shape per message: SSZ payload wrapped in Snappy framed bytes
-//! ([`networking::encode_req_resp`] / [`networking::decode_req_resp`]).
+//! Wire shape per message: `uvarint(ssz_len) || snappy_framed(ssz_bytes)`
+//! ([`networking::write_req_resp_frame`] /
+//! [`networking::read_req_resp_frame`]).
 //! The substream half-closes after the sender finishes, so each codec
 //! method reads to EOF and decodes the resulting buffer in one shot.
 //!
@@ -11,15 +12,16 @@
 //! `protocol` parameter; unknown protocols surface as
 //! [`io::ErrorKind::Unsupported`].
 
-use std::io;
+use std::io::{self, Cursor};
 
 use async_trait::async_trait;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::{request_response, StreamProtocol};
 use networking::{
-    encode_req_resp, BlocksByRootRequest, BlocksByRootResponse, Status, BLOCKS_BY_ROOT_PROTOCOL_V1,
-    STATUS_PROTOCOL_V1,
+    read_req_resp_frame, write_req_resp_frame, BlocksByRootRequest, BlocksByRootResponse, Status,
+    BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
+use protocol::SignedBlock;
 
 /// Outbound or inbound request payload on one of the devnet0 req/resp
 /// protocols.
@@ -65,11 +67,13 @@ impl request_response::Codec for SszSnappyCodec {
         let buf = read_to_end(io).await?;
         match protocol.as_ref() {
             s if s == STATUS_PROTOCOL_V1.as_str() => {
-                Ok(RpcRequest::Status(decode::<Status>(&buf)?))
+                Ok(RpcRequest::Status(decode_single_frame::<Status>(&buf)?))
             }
-            s if s == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => Ok(RpcRequest::BlocksByRoot(
-                decode::<BlocksByRootRequest>(&buf)?,
-            )),
+            s if s == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => {
+                Ok(RpcRequest::BlocksByRoot(decode_single_frame::<
+                    BlocksByRootRequest,
+                >(&buf)?))
+            }
             other => Err(unknown_protocol(other)),
         }
     }
@@ -85,10 +89,10 @@ impl request_response::Codec for SszSnappyCodec {
         let buf = read_to_end(io).await?;
         match protocol.as_ref() {
             s if s == STATUS_PROTOCOL_V1.as_str() => {
-                Ok(RpcResponse::Status(decode::<Status>(&buf)?))
+                Ok(RpcResponse::Status(decode_single_frame::<Status>(&buf)?))
             }
             s if s == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => Ok(RpcResponse::BlocksByRoot(
-                decode::<BlocksByRootResponse>(&buf)?,
+                decode_blocks_by_root_response(&buf)?,
             )),
             other => Err(unknown_protocol(other)),
         }
@@ -104,9 +108,9 @@ impl request_response::Codec for SszSnappyCodec {
         T: AsyncWrite + Unpin + Send,
     {
         let bytes = match (&req, protocol.as_ref()) {
-            (RpcRequest::Status(s), p) if p == STATUS_PROTOCOL_V1.as_str() => encode_req_resp(s),
+            (RpcRequest::Status(s), p) if p == STATUS_PROTOCOL_V1.as_str() => encode_frame(s)?,
             (RpcRequest::BlocksByRoot(r), p) if p == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => {
-                encode_req_resp(r)
+                encode_frame(r)?
             }
             (_, other) => return Err(protocol_mismatch(other, "request")),
         };
@@ -123,9 +127,9 @@ impl request_response::Codec for SszSnappyCodec {
         T: AsyncWrite + Unpin + Send,
     {
         let bytes = match (&res, protocol.as_ref()) {
-            (RpcResponse::Status(s), p) if p == STATUS_PROTOCOL_V1.as_str() => encode_req_resp(s),
+            (RpcResponse::Status(s), p) if p == STATUS_PROTOCOL_V1.as_str() => encode_frame(s)?,
             (RpcResponse::BlocksByRoot(r), p) if p == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => {
-                encode_req_resp(r)
+                encode_blocks_by_root_response(r)?
             }
             (_, other) => return Err(protocol_mismatch(other, "response")),
         };
@@ -147,9 +151,53 @@ async fn read_to_end<T: AsyncRead + Unpin + Send>(io: &mut T) -> io::Result<Vec<
     Ok(buf)
 }
 
-fn decode<T: ssz::Decode>(buf: &[u8]) -> io::Result<T> {
-    networking::decode_req_resp::<T>(buf)
+fn encode_frame<T: ssz::Encode>(value: &T) -> io::Result<Vec<u8>> {
+    let mut wire = Vec::new();
+    write_req_resp_frame(&mut wire, &ssz::encode(value)).map_err(networking_err)?;
+    Ok(wire)
+}
+
+fn encode_blocks_by_root_response(response: &BlocksByRootResponse) -> io::Result<Vec<u8>> {
+    let mut wire = Vec::new();
+    for block in response.blocks() {
+        write_req_resp_frame(&mut wire, &ssz::encode(block)).map_err(networking_err)?;
+    }
+    Ok(wire)
+}
+
+fn decode_single_frame<T: ssz::Decode>(buf: &[u8]) -> io::Result<T> {
+    let frames = decode_frames::<T>(buf)?;
+    let frame_count = frames.len();
+    let [frame] = frames.try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected exactly one req/resp frame, got {frame_count}"),
+        )
+    })?;
+    Ok(frame)
+}
+
+fn decode_blocks_by_root_response(buf: &[u8]) -> io::Result<BlocksByRootResponse> {
+    let blocks = decode_frames::<SignedBlock>(buf)?;
+    BlocksByRootResponse::new(blocks)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))
+}
+
+fn decode_frames<T: ssz::Decode>(buf: &[u8]) -> io::Result<Vec<T>> {
+    let mut cursor = Cursor::new(buf);
+    let mut frames = Vec::new();
+    while let Some(ssz_bytes) = read_req_resp_frame(&mut cursor, None).map_err(networking_err)? {
+        frames.push(ssz::decode::<T>(&ssz_bytes).map_err(ssz_err)?);
+    }
+    Ok(frames)
+}
+
+fn networking_err(err: networking::NetworkingError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, err)
+}
+
+fn ssz_err(err: ssz::SszError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, err)
 }
 
 fn unknown_protocol(name: &str) -> io::Error {

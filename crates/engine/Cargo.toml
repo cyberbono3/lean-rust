@@ -17,6 +17,7 @@ forkchoice  = { path = "../forkchoice" }
 ssz         = { path = "../ssz" }
 parking_lot = { workspace = true }
 thiserror   = { workspace = true }
+tracing     = { workspace = true }
 
 [features]
 # Re-exports the in-crate fixture builders (`anchor_pair`,

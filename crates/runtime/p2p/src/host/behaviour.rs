@@ -215,6 +215,7 @@ pub(crate) fn take_decompressed_for(id: &gossipsub::MessageId) -> Option<Vec<u8>
 mod tests {
     use super::*;
     use libp2p::gossipsub::{Message, TopicHash};
+    use networking::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};
 
     fn message(topic: &str, data: Vec<u8>) -> Message {
         Message {
@@ -241,13 +242,13 @@ mod tests {
         let cases: [(&str, &str, Vec<u8>, [u8; 4]); 2] = [
             (
                 "invalid_snappy",
-                "/lean/block",
+                BLOCK_TOPIC_V1,
                 vec![0xFF, 0xFF, 0xFF, 0xFF],
                 MESSAGE_DOMAIN_INVALID_SNAPPY,
             ),
             (
                 "valid_snappy",
-                "/lean/vote",
+                VOTE_TOPIC_V1,
                 snappy_encode(b"hello world"),
                 MESSAGE_DOMAIN_VALID_SNAPPY,
             ),
@@ -294,7 +295,7 @@ mod tests {
         // second take of the same id, both return None.
         let raw = b"unit-test payload";
         let encoded = snappy_encode(raw);
-        let msg = message("/lean/block", encoded);
+        let msg = message(BLOCK_TOPIC_V1, encoded);
         let id = gossipsub_message_id(&msg);
 
         let other = gossipsub::MessageId::from(vec![0u8; 20]);
@@ -310,7 +311,7 @@ mod tests {
 
     #[test]
     fn invalid_snappy_payload_does_not_populate_cache() {
-        let msg = message("/lean/block", vec![0xFF, 0xFF, 0xFF, 0xFF]);
+        let msg = message(BLOCK_TOPIC_V1, vec![0xFF, 0xFF, 0xFF, 0xFF]);
         let id = gossipsub_message_id(&msg);
         assert!(
             take_decompressed_for(&id).is_none(),

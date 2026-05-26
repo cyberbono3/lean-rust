@@ -9,11 +9,11 @@
 
 /// Gossipsub topic carrying [`protocol::SignedBlock`] payloads
 /// (SSZ + Snappy block compression — see [`crate::encode_gossip`]).
-pub const BLOCK_TOPIC_V1: &str = "/lean/block";
+pub const BLOCK_TOPIC_V1: &str = "/leanconsensus/devnet0/block/ssz_snappy";
 
 /// Gossipsub topic carrying [`protocol::SignedVote`] payloads
 /// (SSZ + Snappy block compression — see [`crate::encode_gossip`]).
-pub const VOTE_TOPIC_V1: &str = "/lean/vote";
+pub const VOTE_TOPIC_V1: &str = "/leanconsensus/devnet0/vote/ssz_snappy";
 
 // Compile-time enforcement of the libp2p `StreamProtocol` / `IdentTopic`
 // invariant: topic strings must start with `/`. Violations fail the
@@ -29,7 +29,7 @@ mod tests {
 
     #[test]
     fn topic_constants_match_spec() {
-        assert_eq!(BLOCK_TOPIC_V1, "/lean/block");
-        assert_eq!(VOTE_TOPIC_V1, "/lean/vote");
+        assert_eq!(BLOCK_TOPIC_V1, "/leanconsensus/devnet0/block/ssz_snappy");
+        assert_eq!(VOTE_TOPIC_V1, "/leanconsensus/devnet0/vote/ssz_snappy");
     }
 }

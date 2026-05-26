@@ -19,7 +19,7 @@ use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
 use storage::HeadInfo;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 use types::{Bytes32, Bytes4000};
 
 use super::cache::ChainSnapshot;
@@ -94,6 +94,7 @@ impl Service {
     ///   re-acquires the lock (engine invariant violation).
     #[instrument(level = "debug", skip_all, fields(slot = signed.message.slot.get()), err)]
     pub async fn import_block(&self, signed: SignedBlock) -> Result<BlockImportResult, ChainError> {
+        let slot = signed.message.slot;
         let to_persist = signed.clone();
         let outcome = self.engine.import_block(signed);
 
@@ -105,6 +106,12 @@ impl Service {
         {
             self.persist_accepted(*block_root, *head_root, to_persist)?;
             self.refresh_snapshot();
+            debug!(
+                slot = slot.get(),
+                block_root = %block_root.to_hex(),
+                head_root = %head_root.to_hex(),
+                "chain accepted block persisted",
+            );
         }
         Ok(outcome)
     }
@@ -121,9 +128,17 @@ impl Service {
         &self,
         signed: SignedVote,
     ) -> Result<AttestationImportResult, ChainError> {
+        let slot = signed.message.slot;
+        let validator = signed.validator_id;
         let outcome = self.engine.import_attestation(signed);
-        if matches!(outcome, AttestationImportResult::Accepted { .. }) {
+        if let AttestationImportResult::Accepted { head_root, .. } = &outcome {
             self.refresh_snapshot();
+            debug!(
+                slot = slot.get(),
+                validator = validator.get(),
+                head_root = %head_root.to_hex(),
+                "chain accepted attestation applied",
+            );
         }
         Ok(outcome)
     }
@@ -157,6 +172,13 @@ impl Service {
         let head_root = self.engine.head();
         self.persist_accepted(produced.root, head_root, signed.clone())?;
         self.refresh_snapshot();
+        debug!(
+            slot = slot.get(),
+            validator = validator.get(),
+            block_root = %produced.root.to_hex(),
+            head_root = %head_root.to_hex(),
+            "chain produced block persisted",
+        );
         Ok(signed)
     }
 
@@ -192,13 +214,31 @@ impl Service {
         // and the engine returns `Rejected`. lean-go behaves the same and
         // warn-logs; we mirror that and continue.
         let outcome = self.engine.import_attestation(signed.clone());
-        if matches!(outcome, AttestationImportResult::Rejected { .. }) {
-            warn!(
-                ?outcome,
-                slot = slot.get(),
-                validator = validator.get(),
-                "own-attestation re-import rejected (vote still propagates to peers)",
-            );
+        match &outcome {
+            AttestationImportResult::Accepted { head_root, .. } => {
+                debug!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    head_root = %head_root.to_hex(),
+                    "chain own attestation reimported",
+                );
+            }
+            AttestationImportResult::Rejected { .. } => {
+                warn!(
+                    ?outcome,
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    "own-attestation re-import rejected (vote still propagates to peers)",
+                );
+            }
+            _ => {
+                debug!(
+                    ?outcome,
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    "own-attestation re-import outcome",
+                );
+            }
         }
         self.refresh_snapshot();
         Ok(signed)

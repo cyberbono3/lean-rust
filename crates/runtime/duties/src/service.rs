@@ -469,6 +469,12 @@ impl Worker {
                     %err,
                     "duties attestation publish failed",
                 );
+            } else {
+                debug!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    "duties attestation published",
+                );
             }
         }
     }

@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(crate) mod behaviour;
 pub(crate) mod bootnodes;
-pub(crate) mod identity;
+pub(crate) mod keypair;
 pub(crate) mod transport;
 
 /// Capacity of the host-command channel.

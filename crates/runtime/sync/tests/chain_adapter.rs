@@ -32,7 +32,8 @@ async fn local_status_reflects_engine_head_after_import() {
     let pre = SyncChain::local_status(&svc).await.unwrap();
 
     // Drive one accepted import and re-read.
-    let signed = produce_signed_block(svc_engine(&svc), Slot::new(1), ValidatorIndex::new(1));
+    let producer = sibling_engine();
+    let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
     let outcome = Service::import_block(&svc, signed).await.unwrap();
     let head_root_after_import = match outcome {
         BlockImportResult::Accepted { head_root, .. } => head_root,
@@ -49,7 +50,8 @@ async fn local_status_reflects_engine_head_after_import() {
 #[tokio::test(flavor = "current_thread")]
 async fn has_block_reports_true_after_import() {
     let svc = build_service();
-    let signed = produce_signed_block(svc_engine(&svc), Slot::new(1), ValidatorIndex::new(1));
+    let producer = sibling_engine();
+    let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
     let block_root: Bytes32 = signed.message.hash_tree_root().into();
 
     assert!(!SyncChain::has_block(&svc, block_root).await.unwrap());
@@ -60,8 +62,6 @@ async fn has_block_reports_true_after_import() {
 /// `Engine` access through the service requires a public hook; for tests
 /// we sidestep by producing the block via a fresh sibling engine at the
 /// same genesis (deterministic — no state divergence before import).
-fn svc_engine(_svc: &Service) -> &'static engine::Engine {
-    use std::sync::OnceLock;
-    static E: OnceLock<engine::Engine> = OnceLock::new();
-    E.get_or_init(|| engine_at_genesis(ENGINE_VALIDATORS))
+fn sibling_engine() -> engine::Engine {
+    engine_at_genesis(ENGINE_VALIDATORS)
 }

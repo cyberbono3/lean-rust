@@ -27,9 +27,9 @@ pub use publisher::{MessageId, PublishError};
 /// at subscribe / publish call sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Topic {
-    /// `/lean/block` — carries [`protocol::SignedBlock`] payloads.
+    /// Ream-compatible local-pq block topic.
     Block,
-    /// `/lean/vote` — carries [`protocol::SignedVote`] payloads.
+    /// Ream-compatible local-pq vote topic.
     Vote,
 }
 

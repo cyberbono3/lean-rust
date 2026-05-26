@@ -102,7 +102,7 @@ impl fmt::Display for AgentVersion {
     }
 }
 
-/// On-disk path of the host's protobuf-encoded identity keypair.
+/// On-disk path of the host's identity key material.
 ///
 /// Empty path rejected.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

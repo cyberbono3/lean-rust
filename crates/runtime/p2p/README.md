@@ -72,8 +72,7 @@ later additions without `Arc<Mutex<Swarm>>` contention.
   Authenticity: `ValidationMode::Anonymous` (devnet0 is unsigned).
 - `request_response::Behaviour<SszSnappyCodec>` advertising
   `STATUS_PROTOCOL_V1` and `BLOCKS_BY_ROOT_PROTOCOL_V1`. The
-  codec is a stub — every read/write returns
-  `io::ErrorKind::Unsupported` until the handler logic lands.
+  codec uses SSZ payloads inside Ream-compatible req/resp Snappy frames.
 - `identify::Behaviour` advertising `lean/0.1.0` as the protocol
   version plus the configured [`AgentVersion`].
 - `ping::Behaviour` (default config).
@@ -85,8 +84,8 @@ later additions without `Arc<Mutex<Swarm>>` contention.
 ## Gossip
 
 `Service::start` subscribes the swarm's gossipsub behaviour to every
-[`Topic`] variant (`/lean/block`, `/lean/vote` — see
-[`networking::BLOCK_TOPIC_V1`] / [`networking::VOTE_TOPIC_V1`]). Failure
+[`Topic`] variant using the Ream-compatible local-pq topics in
+[`networking::BLOCK_TOPIC_V1`] / [`networking::VOTE_TOPIC_V1`]. Failure
 surfaces as [`HostError::GossipSubscribe`] and rolls the lifecycle back
 to `Idle`.
 
@@ -126,14 +125,14 @@ Backpressure: the handler uses `try_send` and drops on a full receiver
 
 Two protocols on `request_response::Behaviour<SszSnappyCodec>`:
 
-- [`networking::STATUS_PROTOCOL_V1`] (`/lean/status/1`) — handshake.
+- [`networking::STATUS_PROTOCOL_V1`] — handshake.
   Each side sends a `Status` request on `ConnectionEstablished`. The
   peer's reply is validated against the local Status from
   [`RpcProvider::local_status`]; mismatched peers are disconnected via
   `Swarm::disconnect_peer_id`. Devnet0-permissive predicate: same
   finalized slot ⇒ roots must agree; otherwise one party is ahead and
   the other can sync.
-- [`networking::BLOCKS_BY_ROOT_PROTOCOL_V1`] (`/lean/blocks_by_root/1`)
+- [`networking::BLOCKS_BY_ROOT_PROTOCOL_V1`]
   — request a list of blocks by tree-root. Inbound requests are
   answered by looking up each root via
   [`RpcProvider::get_block_by_root`]; unknown roots are silently
@@ -165,9 +164,11 @@ Lifecycle tests use [`DevnetHost::build`], which wires a
 
 ## Identity persistence
 
-`<identity_path>` holds the libp2p protobuf-encoded keypair. Missing
-file → generate Ed25519, persist, chmod `0600` (POSIX). Corrupt file
-→ [`HostError::InvalidIdentity`] — never silently overwritten.
+`<identity_path>` holds either a libp2p protobuf-encoded keypair or a
+local-pq raw hex secp256k1 private key. Missing file → generate
+Ed25519, persist protobuf, chmod `0600` (POSIX). Existing files are
+loaded without mutation; invalid raw hex, wrong-length raw keys, and
+invalid secp256k1 key material surface typed [`HostError`] variants.
 
 ## Bootnodes
 
@@ -183,6 +184,12 @@ Each entry parses into a `(Multiaddr, PeerId)` pair: the swarm dials
 the multiaddr; the peer id is required for outbound identification
 before the libp2p handshake completes. Malformed entries surface as
 [`HostError::InvalidBootnode`] carrying the offending raw string.
+
+For local-pq devnet0, ream still consumes generated ENR `nodes.yaml`.
+Rust consumes a temporary `bootnodes.rust.yaml` adapter in this flat
+multiaddr shape. The adapter should include remote bootnodes only; the
+2-node `leanrust_1` file contains `ream_0` and avoids self-dialing by
+construction.
 
 ## Bind fail-fast
 

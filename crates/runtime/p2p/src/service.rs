@@ -252,6 +252,11 @@ impl Service for P2pService {
         let (options, mut swarm, bootnodes) = self.take_idle()?;
         let listen_addr = options.listen_addr().as_multiaddr().clone();
 
+        info!(
+            configured_addr = %listen_addr,
+            peer_id = %self.peer_id,
+            "starting p2p listener",
+        );
         let bound_addr = match prepare(&mut swarm, listen_addr.clone()).await {
             Ok(addr) => addr,
             Err(err) => {
@@ -259,7 +264,7 @@ impl Service for P2pService {
                 return Err(err.into());
             }
         };
-        info!(%bound_addr, "host listener up");
+        info!(configured_addr = %listen_addr, %bound_addr, "host listener up");
         dial_bootnodes(&mut swarm, &bootnodes);
 
         let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
@@ -399,13 +404,20 @@ fn bind_err(addr: Multiaddr, reason: impl std::fmt::Display) -> HostError {
 fn dial_bootnodes(swarm: &mut Swarm<DevnetBehaviour>, bootnodes: &[Bootnode]) {
     for bootnode in bootnodes {
         swarm.add_peer_address(bootnode.peer_id, bootnode.addr.clone());
-        if let Err(err) = swarm.dial(bootnode.addr.clone()) {
-            warn!(
+        match swarm.dial(bootnode.addr.clone()) {
+            Ok(()) => info!(
                 peer = %bootnode.peer_id,
                 addr = %bootnode.addr,
-                %err,
-                "bootnode dial dispatch failed",
-            );
+                "bootnode dial dispatched",
+            ),
+            Err(err) => {
+                warn!(
+                    peer = %bootnode.peer_id,
+                    addr = %bootnode.addr,
+                    %err,
+                    "bootnode dial dispatch failed",
+                );
+            }
         }
     }
 }
@@ -547,6 +559,7 @@ fn handle_swarm_event(
         }
         SwarmEvent::Behaviour(inner) => debug!(?inner, "behaviour event"),
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            info!(peer = %peer_id, "connection established");
             initiate_status_handshake(peer_id, swarm, provider);
         }
         SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -574,7 +587,7 @@ fn initiate_status_handshake(
     swarm: &mut Swarm<DevnetBehaviour>,
     provider: &dyn RpcProvider,
 ) {
-    debug!(peer = %peer_id, "connection established; initiating status handshake");
+    debug!(peer = %peer_id, "initiating status handshake");
     let local = provider.local_status();
     let _ = swarm
         .behaviour_mut()
@@ -613,7 +626,7 @@ fn handle_status_rr_event(
             },
         },
         request_response::Event::OutboundFailure { peer, error, .. } => {
-            log_rpc_failure(peer, &error, "status", "outbound");
+            log_status_outbound_failure(peer, &error);
         }
         request_response::Event::InboundFailure { peer, error, .. } => {
             log_rpc_failure(peer, &error, "status", "inbound");
@@ -680,6 +693,23 @@ fn handle_blocks_rr_event(
 /// the peer via the unconsumed `ResponseChannel`.
 fn log_wrong_variant(peer: PeerId, on_protocol: &'static str, got: &'static str) {
     warn!(peer = %peer, "unexpected {got} on {on_protocol} protocol");
+}
+
+/// Logs an outbound status failure. Ream `master-0bceaee` interoperates
+/// through gossip but does not answer this optional fire-and-validate request
+/// in the local-pq two-node smoke, so a timeout is diagnostic noise rather
+/// than a degraded node condition. Other status failures remain warnings.
+fn log_status_outbound_failure(peer: PeerId, error: &request_response::OutboundFailure) {
+    match error {
+        request_response::OutboundFailure::Timeout => {
+            debug!(
+                peer = %peer,
+                %error,
+                "status rpc outbound timeout; peer did not answer optional status request",
+            );
+        }
+        _ => log_rpc_failure(peer, error, "status", "outbound"),
+    }
 }
 
 /// Logs a `request_response` outbound / inbound failure with a uniform

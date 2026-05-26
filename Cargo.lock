@@ -333,6 +333,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "asn1_der"
+version = "0.7.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4858a9d740c5007a9069007c3b4e91152d0506f13c1b31dd49051fd537656156"
+
+[[package]]
 name = "async-channel"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -527,8 +533,10 @@ dependencies = [
  "anyhow",
  "clap",
  "config",
+ "hex",
  "libp2p",
  "node",
+ "pq-devnet-0",
  "protocol",
  "runtime-core",
  "runtime-duties",
@@ -1161,6 +1169,7 @@ dependencies = [
  "ssz",
  "static_assertions",
  "thiserror 2.0.18",
+ "tracing",
  "types",
 ]
 
@@ -2088,6 +2097,7 @@ dependencies = [
  "elliptic-curve",
  "once_cell",
  "sha2",
+ "signature",
 ]
 
 [[package]]
@@ -2303,9 +2313,11 @@ version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0c7892c221730ba55f7196e98b0b8ba5e04b4155651736036628e9f73ed6fc3"
 dependencies = [
+ "asn1_der",
  "bs58",
  "ed25519-dalek",
  "hkdf",
+ "k256",
  "multihash",
  "quick-protobuf",
  "rand 0.8.6",
@@ -2789,6 +2801,7 @@ dependencies = [
  "async-trait",
  "engine",
  "networking",
+ "parking_lot",
  "protocol",
  "runtime-api",
  "runtime-chain",
@@ -3071,6 +3084,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "pq-devnet-0"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "libp2p",
+ "protocol",
+ "runtime-duties",
+ "serde_yaml",
+ "ssz",
+ "tempfile",
 ]
 
 [[package]]
@@ -3601,9 +3627,11 @@ dependencies = [
  "async-trait",
  "config",
  "futures",
+ "hex",
  "libp2p",
  "networking",
  "parking_lot",
+ "pq-devnet-0",
  "protocol",
  "runtime-core",
  "serde",

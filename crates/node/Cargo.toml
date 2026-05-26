@@ -23,10 +23,11 @@ storage        = { path = "../storage" }
 types          = { path = "../types" }
 anyhow         = { workspace = true }
 async-trait    = { workspace = true }
+parking_lot    = { workspace = true }
+tokio          = { workspace = true }
+tokio-util     = { workspace = true }
 tracing        = { workspace = true }
 
 [dev-dependencies]
 engine   = { path = "../engine", features = ["test-fixtures"] }
 tempfile = { workspace = true }
-tokio    = { workspace = true }
-tokio-util = { workspace = true }
