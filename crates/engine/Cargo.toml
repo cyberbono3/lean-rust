@@ -22,7 +22,7 @@ tracing     = { workspace = true }
 [features]
 # Re-exports the in-crate fixture builders (`anchor_pair`,
 # `engine_at_genesis`, `produce_signed_block`) under `pub mod test_fixtures`
-# so downstream crates (`runtime-chain`, ...) can drive integration tests
+# so downstream crates (`lean-chain`, ...) can drive integration tests
 # without duplicating the genesis builders.
 test-fixtures = []
 

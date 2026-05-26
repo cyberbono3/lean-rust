@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use engine::test_fixtures::{engine_at_genesis, ENGINE_VALIDATORS};
 use engine::AttestationImportResult;
+use lean_chain::Service;
 use protocol::{Checkpoint, SignedVote, Slot, ValidatorIndex, Vote};
-use runtime_chain::Service;
 use storage::MemoryStore;
 use types::{Bytes32, Bytes4000};
 

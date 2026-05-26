@@ -25,7 +25,7 @@ use protocol::SignedBlock;
 use tokio::sync::mpsc;
 use types::Bytes32;
 
-use runtime_chain::ChainError;
+use lean_chain::ChainError;
 
 use crate::error::SyncError;
 use crate::peer_id::PeerId;

@@ -2157,6 +2157,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "lean-chain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "config",
+ "engine",
+ "forkchoice",
+ "lean-core",
+ "networking",
+ "parking_lot",
+ "protocol",
+ "ssz",
+ "static_assertions",
+ "storage",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "lean-core"
 version = "0.1.0"
 dependencies = [
@@ -2836,12 +2859,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "engine",
+ "lean-chain",
  "lean-core",
  "networking",
  "parking_lot",
  "protocol",
  "runtime-api",
- "runtime-chain",
  "runtime-duties",
  "runtime-p2p",
  "storage",
@@ -3579,39 +3602,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "runtime-chain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "config",
- "engine",
- "forkchoice",
- "lean-core",
- "networking",
- "parking_lot",
- "protocol",
- "ssz",
- "static_assertions",
- "storage",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "types",
-]
-
-[[package]]
 name = "runtime-duties"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "config",
+ "lean-chain",
  "lean-core",
  "parking_lot",
  "protocol",
- "runtime-chain",
  "serde",
  "serde_yaml",
  "static_assertions",
@@ -3657,11 +3657,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "engine",
+ "lean-chain",
  "lean-core",
  "networking",
  "parking_lot",
  "protocol",
- "runtime-chain",
  "ssz",
  "static_assertions",
  "storage",

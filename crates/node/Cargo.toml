@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 lean-core   = { path = "../runtime/core" }
-runtime-chain  = { path = "../runtime/chain" }
+lean-chain  = { path = "../runtime/chain" }
 runtime-duties = { path = "../runtime/duties" }
 runtime-p2p    = { path = "../runtime/p2p" }
 runtime-api    = { path = "../runtime/api" }

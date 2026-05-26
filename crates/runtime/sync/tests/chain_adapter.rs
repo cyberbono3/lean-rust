@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use engine::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
 use engine::BlockImportResult;
+use lean_chain::Service;
 use protocol::{Slot, ValidatorIndex};
-use runtime_chain::Service;
 use runtime_sync::Chain as SyncChain;
 use ssz::HashTreeRoot;
 use storage::MemoryStore;

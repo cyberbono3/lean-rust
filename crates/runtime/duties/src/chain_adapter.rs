@@ -1,17 +1,17 @@
 //! Adapter that lets the duties [`Service`](crate::Service) drive
-//! [`runtime_chain::Service`] through the [`Chain`](crate::Chain)
+//! [`lean_chain::Service`] through the [`Chain`](crate::Chain)
 //! port.
 //!
-//! Lives in this crate (rather than `runtime-chain`) because the
+//! Lives in this crate (rather than `lean-chain`) because the
 //! orphan rule requires `impl Trait for Type` to be defined alongside
 //! either the trait or the type. The trait `Chain` is owned by
-//! `runtime-duties`; the type [`runtime_chain::Service`] is owned by
-//! `runtime-chain`. Putting the impl here keeps `runtime-chain` free
+//! `runtime-duties`; the type [`lean_chain::Service`] is owned by
+//! `lean-chain`. Putting the impl here keeps `lean-chain` free
 //! of any duties dependency.
 
 use async_trait::async_trait;
+use lean_chain::{ChainError, Service as ChainService};
 use protocol::{SignedBlock, SignedVote, Slot, ValidatorIndex};
-use runtime_chain::{ChainError, Service as ChainService};
 
 use crate::ports::Chain;
 

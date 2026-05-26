@@ -13,7 +13,7 @@
 //!   [`Engine::safe_target`] / [`Engine::latest_finalized`] /
 //!   [`Engine::with_store`].
 //!
-//! Issue-spec callers (`runtime-chain` per #28) hold the only writer handle
+//! Issue-spec callers (`lean-chain` per #28) hold the only writer handle
 //! into `import_*`; read-only subsystems (`runtime-api`, `runtime-p2p`) clone
 //! the engine and use the read-through accessors.
 
@@ -203,7 +203,7 @@ impl Engine {
     /// at this interval and has already gossiped a block, `false` otherwise.
     ///
     /// Mutating call — held under the engine mutex like the `import_*`
-    /// paths. Reserved for `runtime-chain` (the only writer); other
+    /// paths. Reserved for `lean-chain` (the only writer); other
     /// subsystems clone the engine for read-through accessors.
     ///
     /// # Errors

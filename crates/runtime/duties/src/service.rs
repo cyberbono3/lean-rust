@@ -509,14 +509,14 @@ mod tests {
             &self,
             _slot: Slot,
             _validator: ValidatorIndex,
-        ) -> Result<SignedBlock, runtime_chain::ChainError> {
+        ) -> Result<SignedBlock, lean_chain::ChainError> {
             Ok(SignedBlock::default())
         }
         async fn produce_attestation(
             &self,
             _slot: Slot,
             _validator: ValidatorIndex,
-        ) -> Result<SignedVote, runtime_chain::ChainError> {
+        ) -> Result<SignedVote, lean_chain::ChainError> {
             Ok(SignedVote::default())
         }
     }

@@ -17,11 +17,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use engine::BlockImportResult;
+use lean_chain::ChainError;
 use lean_core::Service as _;
 use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use parking_lot::Mutex;
 use protocol::{Block, BlockBody, Checkpoint, SignedBlock, Slot, ValidatorIndex};
-use runtime_chain::ChainError;
 use runtime_sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

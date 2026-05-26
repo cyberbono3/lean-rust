@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use runtime_chain::ChainError;
+use lean_chain::ChainError;
 
 /// Failures raised by the sync module.
 ///

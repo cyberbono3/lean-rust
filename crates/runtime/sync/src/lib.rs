@@ -8,7 +8,7 @@
 //!
 //! Per Decision 7 (Dependency Inversion), trait impls live elsewhere:
 //!
-//! - [`Chain`] is satisfied by [`runtime_chain::Service`] via the
+//! - [`Chain`] is satisfied by [`lean_chain::Service`] via the
 //!   adapter `impl` in [`chain_adapter`]. Tests in this crate use
 //!   in-memory fakes.
 //! - [`Network`] / [`PeerEventProvider`] have no in-crate impl. The

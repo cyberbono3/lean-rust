@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use lean_chain::Service as ChainService;
 use networking::Status;
 use protocol::SignedBlock;
-use runtime_chain::Service as ChainService;
 use runtime_p2p::RpcProvider;
 use storage::Store;
 use tracing::warn;

@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use engine::test_fixtures::{engine_at_genesis, ENGINE_VALIDATORS};
 use engine::Engine;
+use lean_chain::Service;
 use lean_core::Service as _;
-use runtime_chain::Service;
 use static_assertions::assert_impl_all;
 use storage::MemoryStore;
 use tokio_util::sync::CancellationToken;

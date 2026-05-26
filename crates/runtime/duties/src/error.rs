@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use runtime_chain::ChainError;
+use lean_chain::ChainError;
 
 /// Failures raised by the duties service.
 ///

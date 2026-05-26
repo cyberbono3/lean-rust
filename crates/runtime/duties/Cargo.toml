@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 lean-core      = { path = "../core" }
-runtime-chain     = { path = "../chain" }
+lean-chain     = { path = "../chain" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }
 tokio             = { workspace = true }
