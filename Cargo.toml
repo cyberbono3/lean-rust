@@ -17,7 +17,6 @@ members = [
     "crates/runtime/p2p-rpc",
     "crates/runtime/api",
     "crates/node",
-    "crates/beacon",
     "crates/beacon-cli",
     "crates/fixtures",
     "bin/lean-beacon",
