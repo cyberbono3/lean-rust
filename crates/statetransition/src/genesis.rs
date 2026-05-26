@@ -52,7 +52,7 @@ pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
 mod tests {
     use super::*;
 
-    use crate::test_fixtures::{genesis_4val, GENESIS_TIME, NUM_VALIDATORS};
+    use fixtures::stf::{genesis_4val, GENESIS_TIME, NUM_VALIDATORS};
 
     #[test]
     fn genesis_state_default_yields_zero_slot() {

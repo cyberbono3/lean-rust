@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod stf;
+
 use std::path::{Path, PathBuf};
 
 /// Fixture file containing the raw secp256k1 key for the ream node.

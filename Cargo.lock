@@ -1317,6 +1317,7 @@ dependencies = [
  "runtime-duties",
  "serde_yaml",
  "ssz",
+ "statetransition",
  "tempfile",
 ]
 
@@ -4122,6 +4123,7 @@ name = "statetransition"
 version = "0.1.0"
 dependencies = [
  "config",
+ "fixtures",
  "proptest",
  "protocol",
  "ssz",

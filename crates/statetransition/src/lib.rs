@@ -25,8 +25,5 @@
 
 pub mod genesis;
 
-#[cfg(test)]
-mod test_fixtures;
-
 pub use genesis::genesis_state;
 pub use protocol::StateTransitionError;
