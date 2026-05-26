@@ -1,7 +1,7 @@
 //! [`MetricsService`] — `lean_core::Service` impl driving the
 //! Prometheus metrics endpoint.
 //!
-//! Lifecycle mirrors `runtime/p2p::P2pService`'s state machine: build
+//! Lifecycle mirrors `lean-p2p-host::P2pService`'s state machine: build
 //! → `Idle`, `start` binds the listener and spawns the serve task →
 //! `Running`, `stop` cancels the token and joins the task → `Stopped`.
 

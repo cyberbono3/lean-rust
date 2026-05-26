@@ -7,7 +7,7 @@
 //!   `produce_block` / `produce_attestation`, and drives the
 //!   forkchoice tick loop on a `tokio` background task.
 //! - [`chain::ChainSnapshot`] — projection of engine state for
-//!   hot-read callers (`runtime/api`, `runtime/p2p`).
+//!   hot-read callers (`lean-api`, `lean-p2p-host`).
 //! - [`chain::ChainError`] — infrastructure failures (storage,
 //!   engine invariant violations, engine forkchoice / state-
 //!   transition errors); logical import outcomes stay in the engine's

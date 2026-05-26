@@ -17,14 +17,12 @@
 //!
 //! # Architecture
 //! Runtime data sources stay injected through narrow traits or
-//! closures. There are no compile-time references to `engine`,
-//! `forkchoice`, `statetransition`, `runtime/chain`, or `runtime/p2p` —
-//! composition happens at the `node` crate (Issue #37).
+//! closures. There are no compile-time references to `forkchoice`,
+//! `lean-chain`, or `lean-p2p-host` — composition happens at the
+//! `node` crate.
 //!
 //! [`httpsvc`] hosts the shared axum-server shell (bind + cancel-driven
-//! serve loop) that both [`HttpService`] and [`MetricsService`] reuse;
-//! it lived in `lean-core` until commit 4.2 collapsed `axum` ownership
-//! into this crate.
+//! serve loop) that both [`HttpService`] and [`MetricsService`] reuse.
 
 #![forbid(unsafe_code)]
 

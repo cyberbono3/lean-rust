@@ -66,7 +66,7 @@ impl Service {
 
     /// Returns a shared handle to the hot-read snapshot.
     ///
-    /// Non-writer services (`runtime/api`, `runtime/p2p`) clone this
+    /// Non-writer services (`lean-api`, `lean-p2p-host`) clone this
     /// handle and read through it instead of contending on the engine
     /// mutex.
     #[must_use]
@@ -190,7 +190,7 @@ impl Service {
     /// The local re-import is load-bearing: without it, this validator's
     /// own attestations only reach peers via gossip, and the next produced
     /// block would omit them — quorum on a small devnet can stall. Mirror
-    /// of the upstream Go fix at `lean-go/runtime/chain/service.go`
+    /// of the upstream Go fix at `lean-go/lean-chain/service.go`
     /// (`PR105 Phase 8`).
     ///
     /// # Errors
