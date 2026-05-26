@@ -381,4 +381,4 @@ impl lean_core::Service for Service {
 // chain Service live in the consuming crates (orphan rule: each
 // trait is defined in the same crate as its adapter):
 //   - `lean-sync::chain_adapter`    impl sync::Chain for Service
-//   - `runtime-duties::chain_adapter`  impl duties::Chain for Service
+//   - `lean-duties::chain_adapter`  impl duties::Chain for Service

@@ -536,10 +536,10 @@ dependencies = [
  "fixtures",
  "hex",
  "lean-core",
+ "lean-duties",
  "libp2p",
  "node",
  "protocol",
- "runtime-duties",
  "runtime-p2p",
  "ssz",
  "tempfile",
@@ -1312,9 +1312,9 @@ name = "fixtures"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "lean-duties",
  "libp2p",
  "protocol",
- "runtime-duties",
  "serde_yaml",
  "ssz",
  "statetransition",
@@ -2200,6 +2200,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "lean-duties"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "config",
+ "lean-chain",
+ "lean-core",
+ "parking_lot",
+ "protocol",
+ "serde",
+ "serde_yaml",
+ "static_assertions",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "lean-sync"
 version = "0.1.0"
 dependencies = [
@@ -2883,11 +2904,11 @@ dependencies = [
  "engine",
  "lean-chain",
  "lean-core",
+ "lean-duties",
  "networking",
  "parking_lot",
  "protocol",
  "runtime-api",
- "runtime-duties",
  "runtime-p2p",
  "storage",
  "tempfile",
@@ -3619,27 +3640,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower 0.4.13",
- "tracing",
- "types",
-]
-
-[[package]]
-name = "runtime-duties"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "config",
- "lean-chain",
- "lean-core",
- "parking_lot",
- "protocol",
- "serde",
- "serde_yaml",
- "static_assertions",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
  "tracing",
  "types",
 ]

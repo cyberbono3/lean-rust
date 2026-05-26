@@ -14,7 +14,7 @@
 //!   sum types.
 //!
 //! The sync backfill loop lives in the sibling `lean-sync` crate;
-//! the proposer / attester scheduler lives in `runtime-duties`. Each
+//! the proposer / attester scheduler lives in `lean-duties`. Each
 //! drives this crate's [`Service`] through a narrow async port whose
 //! adapter `impl` lives in the consumer crate (orphan rule).
 

@@ -17,13 +17,13 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use lean_core::Service as _;
+use lean_duties::{
+    Chain as DutiesChain, Config as DutiesConfig, DutiesError, GenesisTimeUnix, PublishError,
+    Publisher, Service as DutiesService,
+};
 use parking_lot::Mutex;
 use protocol::{
     Block, BlockBody, BlockHeader, Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex, Vote,
-};
-use runtime_duties::{
-    Chain as DutiesChain, Config as DutiesConfig, DutiesError, GenesisTimeUnix, PublishError,
-    Publisher, Service as DutiesService,
 };
 use tokio::time;
 use tokio_util::sync::CancellationToken;

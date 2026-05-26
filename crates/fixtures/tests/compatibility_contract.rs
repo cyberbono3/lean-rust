@@ -6,13 +6,13 @@ use fixtures::{
     fixture_path, LEANRUST_1_PEER_ID, LEANRUST_1_RAW_SECP256K1_KEY_FIXTURE, REAM_0_BOOTNODE_ADDR,
     REAM_0_PEER_ID, REAM_0_RAW_SECP256K1_KEY_FIXTURE, RUST_BOOTNODES_2NODE_FIXTURE,
 };
+use lean_duties::ValidatorAssignments;
 use libp2p::{
     identity::{secp256k1, Keypair},
     multiaddr::Protocol,
     Multiaddr,
 };
 use protocol::{State, ValidatorIndex};
-use runtime_duties::ValidatorAssignments;
 use ssz::HashTreeRoot;
 
 const GENESIS_TIME: u64 = 1_778_169_008;

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use lean_duties::{PublishError, Publisher};
 use protocol::{SignedBlock, SignedVote};
-use runtime_duties::{PublishError, Publisher};
 use runtime_p2p::P2pService;
 
 /// Forwards validator-duty publish requests to [`runtime_p2p`].

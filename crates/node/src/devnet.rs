@@ -32,7 +32,7 @@ pub struct Config {
     /// libp2p host options.
     pub p2p: HostOptions,
     /// Validator duty scheduler options.
-    pub duties: runtime_duties::Config,
+    pub duties: lean_duties::Config,
     /// HTTP API bind address.
     pub http_addr: SocketAddr,
     /// Prometheus metrics bind address.
@@ -96,7 +96,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         Arc::clone(&chain),
     ));
 
-    let duties = Arc::new(runtime_duties::Service::new(
+    let duties = Arc::new(lean_duties::Service::new(
         duties,
         chain.clone(),
         Arc::new(PublisherAdapter::new(Arc::clone(&p2p))),
@@ -141,7 +141,7 @@ fn persist_anchor(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use runtime_duties::GenesisTimeUnix;
+    use lean_duties::GenesisTimeUnix;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -171,7 +171,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let duties = runtime_duties::Config::default()
+        let duties = lean_duties::Config::default()
             .with_validators_path(validators_path())
             .unwrap()
             .with_genesis_time_unix(future_genesis());

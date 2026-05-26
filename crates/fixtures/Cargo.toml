@@ -19,7 +19,7 @@ types           = { path = "../types" }
 [dev-dependencies]
 hex            = { workspace = true }
 libp2p         = { workspace = true }
-runtime-duties = { path = "../runtime/duties" }
+lean-duties = { path = "../runtime/duties" }
 serde_yaml     = { workspace = true }
 ssz            = { path = "../ssz" }
 tempfile       = { workspace = true }

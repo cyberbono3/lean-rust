@@ -144,12 +144,12 @@ fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
     )
     .context("build p2p host options")?;
 
-    let duties = runtime_duties::Config::default()
+    let duties = lean_duties::Config::default()
         .with_validators_path(validators_path)
         .context("build duties config")?
         .with_validator_group(selected_validator_group(cli))
         .context("build duties config")?
-        .with_genesis_time_unix(runtime_duties::GenesisTimeUnix::new(
+        .with_genesis_time_unix(lean_duties::GenesisTimeUnix::new(
             genesis_state.config.genesis_time,
         ));
 
@@ -208,11 +208,9 @@ fn selected_validators_path(cli: &Cli) -> PathBuf {
 }
 
 fn selected_validator_group(cli: &Cli) -> String {
-    cli.node_id.clone().unwrap_or_else(|| {
-        runtime_duties::Config::default()
-            .validator_group()
-            .to_owned()
-    })
+    cli.node_id
+        .clone()
+        .unwrap_or_else(|| lean_duties::Config::default().validator_group().to_owned())
 }
 
 fn selected_identity_path(cli: &Cli) -> PathBuf {
