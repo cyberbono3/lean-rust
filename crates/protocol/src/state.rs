@@ -1937,22 +1937,8 @@ mod state_transition_tests {
 
     const GENESIS_TIME: u64 = 1_700_000_000;
 
-    /// Genesis-shape `State` for an `n`-validator chain whose
-    /// `latest_block_header` commits to the empty body. Inlined here to
-    /// keep the test scope local rather than going through `crate::stf`.
     fn genesis_state(num_validators: u64) -> State {
-        let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
-        State {
-            config: ProtocolConfig {
-                num_validators,
-                genesis_time: GENESIS_TIME,
-            },
-            latest_block_header: BlockHeader {
-                body_root,
-                ..BlockHeader::default()
-            },
-            ..State::default()
-        }
+        crate::stf::genesis_state(num_validators, GENESIS_TIME)
     }
 
     /// Two-phase build: produce a `SignedBlock` for `state` whose body is
