@@ -5,7 +5,6 @@ members = [
     "crates/ssz",
     "crates/config",
     "crates/protocol",
-    "crates/statetransition",
     "crates/forkchoice",
     "crates/engine",
     "crates/storage",

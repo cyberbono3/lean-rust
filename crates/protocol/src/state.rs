@@ -1793,7 +1793,7 @@ mod slot_processing_tests {
 
     /// Minimal fixture: a non-default `State` whose `latest_block_header`
     /// commits to the empty `BlockBody`. Mirrors the slot-0 shape used by
-    /// `statetransition::genesis_state` without crossing the crate boundary.
+    /// `crate::stf::genesis_state` without going through the module path.
     fn fresh_state() -> State {
         State {
             latest_block_header: BlockHeader {
@@ -1939,7 +1939,7 @@ mod state_transition_tests {
 
     /// Genesis-shape `State` for an `n`-validator chain whose
     /// `latest_block_header` commits to the empty body. Inlined here to
-    /// avoid pulling `statetransition` into `protocol`'s test deps.
+    /// keep the test scope local rather than going through `crate::stf`.
     fn genesis_state(num_validators: u64) -> State {
         let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
         State {
