@@ -52,7 +52,8 @@ impl Publisher for PublisherAdapter {
 mod tests {
     use super::*;
     use lean_core::Service;
-    use runtime_p2p::{DevnetHost, HostOptions, NoOpRpcProvider};
+    use p2p_rpc::NoOpRpcProvider;
+    use runtime_p2p::{DevnetHost, HostOptions};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 

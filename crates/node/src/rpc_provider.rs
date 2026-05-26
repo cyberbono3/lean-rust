@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use lean_chain::Service as ChainService;
 use lean_wire::Status;
+use p2p_rpc::RpcProvider;
 use protocol::SignedBlock;
-use runtime_p2p::RpcProvider;
 use storage::Store;
 use tracing::warn;
 use types::Bytes32;

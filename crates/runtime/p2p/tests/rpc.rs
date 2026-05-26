@@ -17,8 +17,9 @@ use std::sync::Arc;
 
 use lean_core::Service;
 use lean_wire::{BlocksByRootRequest, Status};
+use p2p_rpc::{NoOpRpcProvider, RpcError, RpcProvider};
 use protocol::{Checkpoint, SignedBlock, Slot};
-use runtime_p2p::{DevnetHost, HostOptions, NoOpRpcProvider, P2pService, RpcError, RpcProvider};
+use runtime_p2p::{DevnetHost, HostOptions, P2pService};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 use types::Bytes32;

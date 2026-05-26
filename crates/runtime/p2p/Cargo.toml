@@ -11,8 +11,9 @@ description   = "libp2p QUIC-v1 host construction with gossipsub + request_respo
 workspace = true
 
 [dependencies]
-lean-core      = { path = "../core" }
-lean-wire           = { path = "../../networking" }
+lean-core         = { path = "../core" }
+p2p-rpc           = { path = "../p2p-rpc" }
+lean-wire         = { path = "../../networking" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }
 ssz               = { path = "../../ssz" }

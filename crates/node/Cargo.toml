@@ -15,6 +15,7 @@ lean-core   = { path = "../runtime/core" }
 lean-chain  = { path = "../runtime/chain" }
 lean-duties = { path = "../runtime/duties" }
 runtime-p2p = { path = "../runtime/p2p" }
+p2p-rpc     = { path = "../runtime/p2p-rpc" }
 lean-api    = { path = "../runtime/api" }
 lean-wire   = { path = "../networking" }
 protocol    = { path = "../protocol" }
