@@ -58,6 +58,22 @@ pub fn load_chain_config(path: Option<&Path>) -> Result<ChainConfig> {
 /// Returns an error when the file cannot be read or the SSZ decoder rejects
 /// the bytes.
 pub fn load_state(path: &Path) -> Result<State> {
+    // Upper bound on the on-disk genesis state. The wire-format State for
+    // devnet0's validator-registry-limit (4096) + historical-roots-limit
+    // (262_144) bounds out well under this; the cap exists so an
+    // operator-supplied (or symlinked) huge / non-SSZ file cannot OOM the
+    // process during the initial read.
+    const MAX_GENESIS_STATE_BYTES: u64 = 16 * 1024 * 1024;
+
+    let meta = std::fs::metadata(path)
+        .with_context(|| format!("stat genesis state SSZ {}", path.display()))?;
+    anyhow::ensure!(
+        meta.len() <= MAX_GENESIS_STATE_BYTES,
+        "genesis state SSZ {} is {} bytes; refusing to read >{} bytes",
+        path.display(),
+        meta.len(),
+        MAX_GENESIS_STATE_BYTES,
+    );
     let bytes = std::fs::read(path)
         .with_context(|| format!("read genesis state SSZ {}", path.display()))?;
     debug!(

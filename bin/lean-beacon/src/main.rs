@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
 async fn run(cli: Cli) -> Result<()> {
     let _tracing_guard = init_tracing(&cli)?;
     log_startup_config(&cli);
+    warn_unwired_flags(&cli);
 
     match &cli.command {
         Some(Command::DevnetConfig) => {
@@ -67,6 +68,15 @@ async fn run(cli: Cli) -> Result<()> {
 
     signal_result.context("wait for shutdown signal")?;
     stop_result
+}
+
+fn warn_unwired_flags(cli: &Cli) {
+    if let Some(origin) = cli.http_allow_origin.as_deref() {
+        warn!(
+            value = origin,
+            "--http-allow-origin is accepted for CLI compatibility but NOT applied: no CORS layer is wired into the HTTP server. The HTTP API will respond with default axum headers regardless of this value.",
+        );
+    }
 }
 
 fn init_tracing(cli: &Cli) -> Result<TracingGuard> {

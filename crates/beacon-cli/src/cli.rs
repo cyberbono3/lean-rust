@@ -53,7 +53,9 @@ pub struct Cli {
     #[arg(long)]
     pub http_port: Option<u16>,
 
-    /// Allowed HTTP origin. Bare `--http-allow-origin` defaults to `*`.
+    /// Accepted for CLI-compat with the local-pq devnet runner; the value is
+    /// NOT applied to the HTTP server (no CORS layer is wired). Setting this
+    /// produces a startup warning. Bare `--http-allow-origin` defaults to `*`.
     #[arg(long, num_args = 0..=1, default_missing_value = "*")]
     pub http_allow_origin: Option<String>,
 

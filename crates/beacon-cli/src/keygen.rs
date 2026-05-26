@@ -62,13 +62,20 @@ fn write_key_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
+    // create_new (O_CREAT | O_EXCL) refuses to overwrite an existing key so a
+    // re-run of `generate-private-key` cannot silently destroy a validator
+    // identity. Mirrors host::keypair's own write path.
     let mut file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .write(true)
         .mode(0o600)
         .open(path)
-        .with_context(|| format!("open key output file {}", path.display()))?;
+        .with_context(|| {
+            format!(
+                "open key output file {} (file already exists? delete it first if you really mean to replace the validator identity)",
+                path.display()
+            )
+        })?;
     file.write_all(bytes)
         .with_context(|| format!("write key output file {}", path.display()))?;
     file.flush()
@@ -77,7 +84,25 @@ fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(not(unix))]
 fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    fs::write(path, bytes).with_context(|| format!("write key output file {}", path.display()))
+    use std::io::ErrorKind;
+
+    // create_new refuses to overwrite an existing key. fs::write would
+    // silently truncate.
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| match e.kind() {
+            ErrorKind::AlreadyExists => anyhow::anyhow!(
+                "key output file {} already exists (delete it first if you really mean to replace the validator identity)",
+                path.display()
+            ),
+            _ => anyhow::Error::new(e).context(format!("open key output file {}", path.display())),
+        })?;
+    file.write_all(bytes)
+        .with_context(|| format!("write key output file {}", path.display()))?;
+    file.flush()
+        .with_context(|| format!("flush key output file {}", path.display()))
 }
 
 #[cfg(unix)]
