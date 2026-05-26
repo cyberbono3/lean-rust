@@ -12,7 +12,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::{SubscriberInitExt, TryInitError};
 use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::observability::verbosity::Verbosity;
+use crate::verbosity::Verbosity;
 
 /// Directory + filename prefix for the optional file sink in
 /// [`init_tracing`]. Either pass both (and get stderr + file) or pass
@@ -69,11 +69,11 @@ pub enum TracingInitError {
 ///
 /// # Example
 /// ```no_run
-/// use lean_core::{init_tracing, Verbosity};
+/// use lean_observability::{init_tracing, Verbosity};
 ///
 /// let _guard = init_tracing(Verbosity::Info, None)?;
 /// tracing::info!("ready");
-/// # Ok::<(), lean_core::TracingInitError>(())
+/// # Ok::<(), lean_observability::TracingInitError>(())
 /// ```
 pub fn init_tracing(
     verbosity: Verbosity,

@@ -16,6 +16,8 @@
 //! [`EnvFilter`]: tracing_subscriber::EnvFilter
 //! [`tracing_appender`]: https://docs.rs/tracing-appender
 
+#![forbid(unsafe_code)]
+
 mod init;
 mod verbosity;
 

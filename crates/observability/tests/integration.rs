@@ -15,7 +15,7 @@
 
 use std::sync::OnceLock;
 
-use lean_core::{init_tracing, FileSink, TracingGuard, TracingInitError, Verbosity};
+use lean_observability::{init_tracing, FileSink, TracingGuard, TracingInitError, Verbosity};
 use serial_test::serial;
 use tempfile::TempDir;
 

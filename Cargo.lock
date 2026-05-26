@@ -537,6 +537,7 @@ dependencies = [
  "hex",
  "lean-core",
  "lean-duties",
+ "lean-observability",
  "libp2p",
  "node",
  "protocol",
@@ -2193,16 +2194,11 @@ dependencies = [
  "async-trait",
  "axum",
  "parking_lot",
- "serial_test",
  "static_assertions",
- "tempfile",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -2224,6 +2220,19 @@ dependencies = [
  "tokio-util",
  "tracing",
  "types",
+]
+
+[[package]]
+name = "lean-observability"
+version = "0.1.0"
+dependencies = [
+ "serial_test",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]

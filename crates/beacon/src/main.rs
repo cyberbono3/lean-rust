@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use lean_core::{FileSink, NodeConfig, TracingGuard};
+use lean_core::NodeConfig;
+use lean_observability::{FileSink, TracingGuard};
 use runtime_p2p::HostOptions;
 use tracing::{info, warn};
 
@@ -72,7 +73,7 @@ async fn run(cli: Cli) -> Result<()> {
 }
 
 fn init_tracing(cli: &Cli) -> Result<TracingGuard> {
-    lean_core::init_tracing(cli.verbosity(), file_sink(cli)?).context("initialize tracing")
+    lean_observability::init_tracing(cli.verbosity(), file_sink(cli)?).context("initialize tracing")
 }
 
 fn log_startup_config(cli: &Cli) {

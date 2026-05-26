@@ -15,18 +15,19 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-node           = { path = "../node" }
-lean-core   = { path = "../runtime/core" }
-lean-duties = { path = "../runtime/duties" }
-runtime-p2p    = { path = "../runtime/p2p" }
-config         = { path = "../config" }
-protocol       = { path = "../protocol" }
-ssz            = { path = "../ssz" }
-anyhow         = { workspace = true }
-clap           = { workspace = true }
-libp2p         = { workspace = true }
-tokio          = { workspace = true }
-tracing        = { workspace = true }
+node               = { path = "../node" }
+lean-core          = { path = "../runtime/core" }
+lean-duties        = { path = "../runtime/duties" }
+runtime-p2p        = { path = "../runtime/p2p" }
+lean-observability = { path = "../observability" }
+config             = { path = "../config" }
+protocol           = { path = "../protocol" }
+ssz                = { path = "../ssz" }
+anyhow             = { workspace = true }
+clap               = { workspace = true }
+libp2p             = { workspace = true }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
 
 [dev-dependencies]
 fixtures = { path = "../fixtures" }

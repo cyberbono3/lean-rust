@@ -15,8 +15,9 @@
 //!   `axum::Router`, and terminates on a `CancellationToken`. Reused by
 //!   `runtime/api` for the Lean HTTP API and Prometheus metrics.
 //!
-//! Service implementations (and the leanlog formatter) land in later
-//! issues; this crate carries no business logic.
+//! Tracing-subscriber setup lives in the sibling `lean-observability`
+//! crate. Service implementations (and the leanlog formatter) land in
+//! later issues; this crate carries no business logic.
 
 #![forbid(unsafe_code)]
 
@@ -25,14 +26,10 @@ mod error;
 mod httpsvc;
 mod lifecycle;
 mod node;
-mod observability;
 mod service;
 
 pub use config::{NodeConfig, DEFAULT_SHUTDOWN_TIMEOUT};
 pub use error::{NodeError, ServiceFailure};
 pub use httpsvc::{HttpsvcError, Server};
 pub use node::Node;
-pub use observability::{
-    init_tracing, FileSink, ParseVerbosityError, TracingGuard, TracingInitError, Verbosity,
-};
 pub use service::Service;

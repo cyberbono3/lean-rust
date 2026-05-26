@@ -8,6 +8,7 @@ members = [
     "crates/forkchoice",
     "crates/storage",
     "crates/networking",
+    "crates/observability",
     "crates/runtime/core",
     "crates/runtime/chain",
     "crates/runtime/sync",
