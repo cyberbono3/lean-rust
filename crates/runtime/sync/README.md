@@ -1,4 +1,4 @@
-# runtime-sync
+# lean-sync
 
 Peer-driven `BlocksByRoot` backfill loop (Tier 6).
 
@@ -11,7 +11,7 @@ then imports the recovered chain in forward order through the
 ## Scope
 
 - [`Loop`] — the orchestrator. Implements
-  [`runtime_core::Service`] (start / stop / status). Owns the
+  [`lean_core::Service`] (start / stop / status). Owns the
   watch task that drains peer-connect events plus a `TaskTracker`
   for per-peer `on_connect` workers; cancellation-via-token
   shutdown.
@@ -19,7 +19,7 @@ then imports the recovered chain in forward order through the
   construction.
 - [`Chain`] / [`Network`] / [`PeerEventProvider`] — narrow port
   traits declared here per Decision 7 (Dependency Inversion).
-  `Chain` is satisfied by [`runtime_chain::Service`] via the
+  `Chain` is satisfied by [`lean_chain::Service`] via the
   in-crate [`chain_adapter`]. `Network` and `PeerEventProvider`
   have no in-crate impl; the `runtime-p2p` / `node` crates provide
   the libp2p-backed adapters in later issues.
@@ -50,12 +50,12 @@ graph — that surface lives in `runtime-p2p`.
 
 ## Tier and dependencies
 
-Tier 6. Depends on `runtime-core`, `runtime-chain`, `engine`,
+Tier 6. Depends on `lean-core`, `lean-chain`, `engine`,
 `networking`, `protocol`, `types`, plus the standard async stack
 (`tokio`, `tokio-util`, `async-trait`, `tracing`, `parking_lot`).
 
 ## Issue reference
 
 Implements Issue #29. Originally lived as a `sync::` module of
-`runtime-chain`; extracted to its own crate when the surface
+`lean-chain`; extracted to its own crate when the surface
 stabilized.

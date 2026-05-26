@@ -13,7 +13,7 @@ endpoints.
 
 For the Docker-based `ream <-> lean-rust` local-pq devnet, use
 [`docs/local-pq-devnet0.md`](local-pq-devnet0.md). That flow uses Docker
-Compose, generated state under `crates/pq-devnet-0`, and the `/lean/v0/head`
+Compose, generated state under `crates/fixtures`, and the `/lean/v0/head`
 compatibility endpoint on both clients.
 
 ## Prerequisites
@@ -112,10 +112,10 @@ These flows cover different integration surfaces.
 | Flow | Clients | Runtime | State source | Endpoints | Use it for |
 | --- | --- | --- | --- | --- | --- |
 | `make interop-devnet0` | `lean-go <-> lean-rust` | direct loopback processes | checked-in Go fixture plus per-run artifacts under `target/interop/devnet0` | Go `/lean/v0/head`, Rust `/eth/v1/head` | fast protocol checks without Docker |
-| local-pq devnet | `ream <-> lean-rust` | Docker Compose bridge network | generated local-pq artifacts under `crates/pq-devnet-0` | ream `/lean/v0/head`, Rust `/lean/v0/head` | operator-like ream/Rust devnet validation |
+| local-pq devnet | `ream <-> lean-rust` | Docker Compose bridge network | generated local-pq artifacts under `crates/fixtures` | ream `/lean/v0/head`, Rust `/lean/v0/head` | operator-like ream/Rust devnet validation |
 
 The local-pq devnet uses `ream_0` and `leanrust_1`, generated validator
 registry data, and the Rust bootnode adapter at
-`crates/pq-devnet-0/genesis/bootnodes.rust.yaml`. The loopback interop script
+`crates/fixtures/genesis/bootnodes.rust.yaml`. The loopback interop script
 does not use the Docker Compose topology and remains useful for focused
 Rust/Go networking checks.

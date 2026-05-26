@@ -14,7 +14,7 @@ later additions without `Arc<Mutex<Swarm>>` contention.
 - [`DevnetHost::build`] — front door. Wires identity (load or
   generate), bootnodes (YAML), transport, and behaviour into a
   [`P2pService`] without starting the swarm.
-- [`P2pService`] — implements [`runtime_core::Service`]. `start`
+- [`P2pService`] — implements [`lean_core::Service`]. `start`
   binds the listener (fail-fast under a 2-second deadline), dials
   any configured bootnodes, and spawns the swarm-poll task.
   `stop` signals shutdown via the command channel + cancellation
@@ -54,7 +54,7 @@ later additions without `Arc<Mutex<Swarm>>` contention.
 [`RpcRequest`]: ./src/host/behaviour/codec.rs
 [`RpcResponse`]: ./src/host/behaviour/codec.rs
 [`RpcError`]: ./src/rpc/mod.rs
-[`runtime_core::Service`]: ../core/src/service.rs
+[`lean_core::Service`]: ../core/src/service.rs
 [`NetworkBehaviour`]: https://docs.rs/libp2p/0.55/libp2p/swarm/trait.NetworkBehaviour.html
 
 ## Composite behaviour
@@ -207,23 +207,23 @@ re-startable after the operator fixes the config.
 
 ## Dependency boundaries
 
-`runtime-p2p` does **not** depend on `runtime-chain`,
-`runtime-sync`, `runtime-duties`, `engine`, `storage`, `forkchoice`,
+`runtime-p2p` does **not** depend on `lean-chain`,
+`lean-sync`, `lean-duties`, `engine`, `storage`, `forkchoice`,
 or `statetransition` — verified by `cargo metadata`. The
-`Publisher` adapter wiring through `runtime-chain::Publisher` lives
+`Publisher` adapter wiring through `lean-chain::Publisher` lives
 in the `node` composition root, per Decision 7.
 
 ```bash
 cargo metadata --format-version=1 \
   | jq -r '.packages[] | select(.name=="runtime-p2p").dependencies[].name' \
-  | grep -E '^(runtime-chain|runtime-sync|runtime-duties|engine|storage|forkchoice|statetransition)$' \
+  | grep -E '^(lean-chain|lean-sync|lean-duties|engine|storage|forkchoice|statetransition)$' \
   && exit 1 || exit 0
 ```
 
 ## Out of scope
 
 - Two-node loopback interop smoke test — follow-up work.
-- `runtime-chain::Publisher` adapter wiring — `node` crate.
+- `lean-chain::Publisher` adapter wiring — `node` crate.
 - Per-block streaming `BlocksByRoot` wire format (current shape is one
   SSZ container per response).
 - Topic scoring / peer scoring / mesh tuning.
@@ -232,7 +232,7 @@ cargo metadata --format-version=1 \
 
 ## Tier and dependencies
 
-Tier 6. Depends on `runtime-core`, `networking`, `protocol`,
+Tier 6. Depends on `lean-core`, `networking`, `protocol`,
 `config`, plus `libp2p` (QUIC-v1, gossipsub, request_response,
 identify, ping, noise, yamux), `snap` for gossipsub message-id
 domain resolution, and the standard async stack (`tokio`,

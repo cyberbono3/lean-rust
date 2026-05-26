@@ -2,19 +2,19 @@
 
 This guide covers the Docker-based local-pq devnet that runs one `ream` node
 and one `lean-rust` node from this repo. The devnet lives under
-`crates/pq-devnet-0` and uses generated local-pq keys, genesis state, validator
+`crates/fixtures` and uses generated local-pq keys, genesis state, validator
 registry, and bootnode metadata.
 
 ## Prerequisites
 
 - Docker with Compose support.
 - A working Rust toolchain for building `lean-rust:local`.
-- Optional local overrides in `crates/pq-devnet-0/.env`.
+- Optional local overrides in `crates/fixtures/.env`.
 
 Create the local environment file before the first run:
 
 ```sh
-cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
+cp crates/fixtures/.env.example crates/fixtures/.env
 ```
 
 The default images are:
@@ -25,12 +25,12 @@ The default images are:
 | `LEAN_RUST_IMAGE` | `lean-rust:local` |
 | `GENESIS_GEN_IMAGE` | `ethpandaops/eth-beacon-genesis:pk910-leanchain` |
 | `GENESIS_OFFSET_SECS` | `60` |
-| `LEAN_RUST_RUST_LOG` | `info,lean_beacon=debug,node=debug,engine=debug,runtime_core=debug,runtime_p2p=debug,runtime_chain=debug,runtime_duties=debug,runtime_api=debug,networking=debug,libp2p_swarm=info,discv5=info` |
+| `LEAN_RUST_RUST_LOG` | `info,lean_beacon=debug,node=debug,engine=debug,lean_core=debug,runtime_p2p=debug,lean_chain=debug,lean_duties=debug,lean_api=debug,networking=debug,libp2p_swarm=info,discv5=info` |
 
 ## Quick Start
 
 ```sh
-cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
+cp crates/fixtures/.env.example crates/fixtures/.env
 make devnet-start
 make devnet-status
 make devnet-logs
@@ -59,7 +59,7 @@ make devnet-stop
 ## Topology
 
 Docker Compose file:
-`crates/pq-devnet-0/scripts/core/docker-compose.yml`
+`crates/fixtures/scripts/core/docker-compose.yml`
 
 | Node | Service | Container | Image | Role | Container IP | Host ports | Head URL |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -74,17 +74,17 @@ file. The Rust node reads `/genesis/bootnodes.rust.yaml`.
 
 | Path | Created by | Used by | Removed by `make devnet-clean` |
 | --- | --- | --- | --- |
-| `crates/pq-devnet-0/config.yaml` | `make devnet-genesis` | genesis generator input | yes |
-| `crates/pq-devnet-0/config/keys/node0.key` | `make devnet-genesis` | ream node identity and validator config | yes |
-| `crates/pq-devnet-0/config/keys/node1.key` | `make devnet-genesis` | lean-rust node identity and validator config | yes |
-| `crates/pq-devnet-0/genesis/config.yaml` | genesis generator | both nodes as network config | yes |
-| `crates/pq-devnet-0/genesis/genesis.json` | genesis generator | inspection/debugging | yes |
-| `crates/pq-devnet-0/genesis/genesis.ssz` | genesis generator | lean-rust genesis state | yes |
-| `crates/pq-devnet-0/genesis/nodes.yaml` | genesis generator | ream bootnodes/local-pq node metadata | yes |
-| `crates/pq-devnet-0/genesis/validators.yaml` | genesis generator | both nodes as validator registry | yes |
-| `crates/pq-devnet-0/genesis/validator-config.yaml` | `make devnet-genesis` | genesis generator mass validator input | yes |
-| `crates/pq-devnet-0/genesis/bootnodes.rust.yaml` | `make devnet-genesis` | lean-rust `--bootnodes` input | yes |
-| `crates/pq-devnet-0/logs/*.log` | lean-rust container logging | debugging | yes |
+| `crates/fixtures/config.yaml` | `make devnet-genesis` | genesis generator input | yes |
+| `crates/fixtures/config/keys/node0.key` | `make devnet-genesis` | ream node identity and validator config | yes |
+| `crates/fixtures/config/keys/node1.key` | `make devnet-genesis` | lean-rust node identity and validator config | yes |
+| `crates/fixtures/genesis/config.yaml` | genesis generator | both nodes as network config | yes |
+| `crates/fixtures/genesis/genesis.json` | genesis generator | inspection/debugging | yes |
+| `crates/fixtures/genesis/genesis.ssz` | genesis generator | lean-rust genesis state | yes |
+| `crates/fixtures/genesis/nodes.yaml` | genesis generator | ream bootnodes/local-pq node metadata | yes |
+| `crates/fixtures/genesis/validators.yaml` | genesis generator | both nodes as validator registry | yes |
+| `crates/fixtures/genesis/validator-config.yaml` | `make devnet-genesis` | genesis generator mass validator input | yes |
+| `crates/fixtures/genesis/bootnodes.rust.yaml` | `make devnet-genesis` | lean-rust `--bootnodes` input | yes |
+| `crates/fixtures/logs/*.log` | lean-rust container logging | debugging | yes |
 
 Scaffold files such as `config/keys/.gitkeep`, `genesis/.gitkeep`,
 `logs/.gitkeep`, and `scripts/core/.gitkeep` are preserved by
@@ -93,7 +93,7 @@ Scaffold files such as `config/keys/.gitkeep`, `genesis/.gitkeep`,
 ## Bootnode Compatibility
 
 Rust currently uses the generated
-`crates/pq-devnet-0/genesis/bootnodes.rust.yaml` adapter. The setup script
+`crates/fixtures/genesis/bootnodes.rust.yaml` adapter. The setup script
 derives the ream node peer ID from `config/keys/node0.key` with the Rust image
 and writes a multiaddr bootnode entry:
 
@@ -124,7 +124,7 @@ successfully so it can be reused while waiting for the devnet to settle.
 The Rust node receives this default filter through `RUST_LOG`:
 
 ```text
-info,lean_beacon=debug,node=debug,engine=debug,runtime_core=debug,runtime_p2p=debug,runtime_chain=debug,runtime_duties=debug,runtime_api=debug,networking=debug,libp2p_swarm=info,discv5=info
+info,lean_beacon=debug,node=debug,engine=debug,lean_core=debug,runtime_p2p=debug,lean_chain=debug,lean_duties=debug,lean_api=debug,networking=debug,libp2p_swarm=info,discv5=info
 ```
 
 `RUST_LOG` is the highest-precedence tracing input for `lean-beacon`. When
@@ -146,13 +146,13 @@ LEAN_RUST_RUST_LOG=lean_beacon=debug,runtime_p2p=trace,networking=trace make dev
 Raise chain/duties diagnostics:
 
 ```sh
-LEAN_RUST_RUST_LOG=lean_beacon=debug,engine=debug,runtime_chain=debug,runtime_duties=debug,node=debug make devnet-up
+LEAN_RUST_RUST_LOG=lean_beacon=debug,engine=debug,lean_chain=debug,lean_duties=debug,node=debug make devnet-up
 ```
 
 Raise API/storage diagnostics:
 
 ```sh
-LEAN_RUST_RUST_LOG=runtime_api=trace,storage=debug make devnet-up
+LEAN_RUST_RUST_LOG=lean_api=trace,storage=debug make devnet-up
 ```
 
 Follow both containers:
@@ -177,7 +177,7 @@ make devnet-debug-summary
 The Rust container also writes file logs under:
 
 ```text
-crates/pq-devnet-0/logs/lean-rust-<utc>.log
+crates/fixtures/logs/lean-rust-<utc>.log
 ```
 
 Logs include configured identity paths and peer IDs, but not raw private key
@@ -214,7 +214,7 @@ This Docker devnet is separate from `make interop-devnet0`.
 | Flow | Clients | Transport | State source | Main use |
 | --- | --- | --- | --- | --- |
 | `make interop-devnet0` | `lean-go <-> lean-rust` | direct loopback processes | checked-in Go fixture plus generated run artifacts | fast protocol interop checks between Go and Rust |
-| local-pq devnet | `ream <-> lean-rust` | Docker Compose bridge network | generated local-pq genesis under `crates/pq-devnet-0` | operator-like ream/Rust devnet validation |
+| local-pq devnet | `ream <-> lean-rust` | Docker Compose bridge network | generated local-pq genesis under `crates/fixtures` | operator-like ream/Rust devnet validation |
 
 Use loopback interop when testing Rust/Go networking behavior without Docker.
 Use this devnet when validating the repo-local local-pq flow, ream image
@@ -233,7 +233,7 @@ Symptoms:
 Checks:
 
 ```sh
-test -s crates/pq-devnet-0/genesis/genesis.ssz
+test -s crates/fixtures/genesis/genesis.ssz
 make devnet-debug-summary
 ```
 
@@ -254,8 +254,8 @@ Symptoms:
 Checks:
 
 ```sh
-cat crates/pq-devnet-0/config/keys/node0.key
-cat crates/pq-devnet-0/genesis/bootnodes.rust.yaml
+cat crates/fixtures/config/keys/node0.key
+cat crates/fixtures/genesis/bootnodes.rust.yaml
 ```
 
 Regenerate keys and bootnodes together. Do not edit individual generated files
@@ -277,9 +277,9 @@ Symptoms:
 Checks:
 
 ```sh
-test -s crates/pq-devnet-0/genesis/nodes.yaml
-test -s crates/pq-devnet-0/genesis/bootnodes.rust.yaml
-grep -n "/p2p/" crates/pq-devnet-0/genesis/bootnodes.rust.yaml
+test -s crates/fixtures/genesis/nodes.yaml
+test -s crates/fixtures/genesis/bootnodes.rust.yaml
+grep -n "/p2p/" crates/fixtures/genesis/bootnodes.rust.yaml
 ```
 
 Rebuild the Rust image if the `peer-id` helper is missing or stale:
@@ -307,8 +307,8 @@ Confirm both nodes use the same generated network config and validator
 registry:
 
 ```sh
-test -s crates/pq-devnet-0/genesis/config.yaml
-test -s crates/pq-devnet-0/genesis/validators.yaml
+test -s crates/fixtures/genesis/config.yaml
+test -s crates/fixtures/genesis/validators.yaml
 ```
 
 ### Rust Proposal Not Imported By ream
@@ -322,14 +322,14 @@ Checks:
 
 ```sh
 make devnet-status
-docker compose -f crates/pq-devnet-0/scripts/core/docker-compose.yml \
-  --project-directory crates/pq-devnet-0 logs node0
+docker compose -f crates/fixtures/scripts/core/docker-compose.yml \
+  --project-directory crates/fixtures logs node0
 ```
 
 Verify the validator registry contains both local-pq node IDs:
 
 ```sh
-grep -n "ream_0\\|leanrust_1" crates/pq-devnet-0/genesis/validators.yaml
+grep -n "ream_0\\|leanrust_1" crates/fixtures/genesis/validators.yaml
 ```
 
 ### Head Divergence

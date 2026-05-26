@@ -1,4 +1,4 @@
-# pq-devnet-0
+# fixtures
 
 Crate-local Docker devnet plus compatibility fixtures for the local-pq
 `ream <-> lean-rust` topology. The crate ships:
@@ -37,7 +37,7 @@ make devnet-quick-start DEVNET_QUICK_START_ARGS="--no-logs --no-stop"
 The target is a thin wrapper around the equivalent manual sequence:
 
 ```sh
-cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
+cp crates/fixtures/.env.example crates/fixtures/.env
 make devnet-start
 make devnet-status
 make devnet-logs

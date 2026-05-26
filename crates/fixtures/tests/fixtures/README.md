@@ -1,4 +1,4 @@
-# pq-devnet-0 Fixtures
+# fixtures Fixtures
 
 These fixtures pin the artifact contracts that the local `ream <-> lean-rust`
 devnet must consume before operational scripts are moved into this repository.
