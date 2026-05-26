@@ -23,6 +23,15 @@ use lean_wire::{
 use libp2p::{request_response, StreamProtocol};
 use protocol::SignedBlock;
 
+/// Defensive upper bound on a single inbound req/resp stream payload.
+///
+/// A malicious peer that holds the substream open and keeps sending bytes
+/// can OOM the process via `read_to_end` if no cap exists. Sized
+/// generously enough for a full `BlocksByRoot` response (≤ `MAX_REQUEST_BLOCKS`
+/// = 1024 `SignedBlock`s plus per-frame snappy / uvarint overhead) but
+/// tight enough to fault-stop an attacker.
+const MAX_RPC_STREAM_BYTES: u64 = 16 * 1024 * 1024;
+
 /// Outbound or inbound request payload on one of the devnet0 req/resp
 /// protocols.
 #[derive(Debug, Clone)]
@@ -146,8 +155,20 @@ async fn write_framed<T: AsyncWrite + Unpin + Send>(io: &mut T, bytes: &[u8]) ->
 }
 
 async fn read_to_end<T: AsyncRead + Unpin + Send>(io: &mut T) -> io::Result<Vec<u8>> {
+    // Cap inbound payload to prevent OOM from a peer that keeps the
+    // substream open and streams unbounded bytes. The frame-level uvarint
+    // limit is enforced separately inside decode_*_frame; this is the
+    // outer stream-level guard.
     let mut buf = Vec::new();
-    io.read_to_end(&mut buf).await?;
+    let read = io.take(MAX_RPC_STREAM_BYTES).read_to_end(&mut buf).await?;
+    if u64::try_from(read).unwrap_or(u64::MAX) >= MAX_RPC_STREAM_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "inbound rpc stream exceeded MAX_RPC_STREAM_BYTES ({MAX_RPC_STREAM_BYTES} bytes)"
+            ),
+        ));
+    }
     Ok(buf)
 }
 
@@ -186,7 +207,9 @@ fn decode_blocks_by_root_response(buf: &[u8]) -> io::Result<BlocksByRootResponse
 fn decode_frames<T: ssz::Decode>(buf: &[u8]) -> io::Result<Vec<T>> {
     let mut cursor = Cursor::new(buf);
     let mut frames = Vec::new();
-    while let Some(ssz_bytes) = read_req_resp_frame(&mut cursor, None).map_err(networking_err)? {
+    while let Some(ssz_bytes) =
+        read_req_resp_frame(&mut cursor, Some(MAX_RPC_STREAM_BYTES)).map_err(networking_err)?
+    {
         frames.push(ssz::decode::<T>(&ssz_bytes).map_err(ssz_err)?);
     }
     Ok(frames)
