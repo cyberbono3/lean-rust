@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-ENV_FILE="$REPO_ROOT/crates/pq-devnet-0/.env"
-ENV_EXAMPLE="$REPO_ROOT/crates/pq-devnet-0/.env.example"
+ENV_FILE="$REPO_ROOT/crates/fixtures/.env"
+ENV_EXAMPLE="$REPO_ROOT/crates/fixtures/.env.example"
 FOLLOW_LOGS=1
 AUTO_STOP=1
 
@@ -12,8 +12,8 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [--no-logs] [--no-stop] [-h|--help]
 
-Runs the pq-devnet-0 Quick Start sequence:
-  1. cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env (if missing)
+Runs the fixtures Quick Start sequence:
+  1. cp crates/fixtures/.env.example crates/fixtures/.env (if missing)
   2. make devnet-start
   3. make devnet-status
   4. make devnet-logs   (blocks until Ctrl+C; skip with --no-logs)
