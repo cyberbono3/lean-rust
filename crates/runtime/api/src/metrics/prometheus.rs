@@ -52,16 +52,22 @@ fn render_cached(
     recorder: &Recorder,
     cache: &Mutex<Option<(Instant, String)>>,
 ) -> Result<String, MetricsError> {
-    {
-        let guard = cache.lock();
-        if let Some((stamp, body)) = guard.as_ref() {
-            if stamp.elapsed() < RENDER_CACHE_TTL {
-                return Ok(body.clone());
-            }
+    // Hold the cache lock across `render()`. The previous code dropped
+    // the lock before rendering, so a burst of scrapes arriving after
+    // the TTL expired all observed a stale entry and all re-rendered in
+    // parallel (a thundering herd that defeats the cache). Holding the
+    // lock collapses a concurrent burst to a single render: the first
+    // caller renders while the rest block, then observe the fresh entry.
+    // `render` is synchronous and CPU-only (gather + encode), so no
+    // `.await` is held across the lock.
+    let mut guard = cache.lock();
+    if let Some((stamp, body)) = guard.as_ref() {
+        if stamp.elapsed() < RENDER_CACHE_TTL {
+            return Ok(body.clone());
         }
     }
     let body = render(recorder)?;
-    *cache.lock() = Some((Instant::now(), body.clone()));
+    *guard = Some((Instant::now(), body.clone()));
     Ok(body)
 }
 
@@ -100,6 +106,46 @@ mod tests {
 
         assert_contains(&body, "# TYPE lean_test_fixed_gauge gauge");
         assert_contains(&body, "lean_test_fixed_gauge 42");
+    }
+
+    #[test]
+    fn concurrent_render_collapses_to_single_render() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        const THREADS: usize = 32;
+
+        // A provider that counts how many times `render` runs.
+        let renders = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&renders);
+        let recorder = Recorder::new();
+        recorder.gauge("lean_test_render_count", "Counts renders.", move || {
+            counter.fetch_add(1, Ordering::SeqCst) as u64
+        });
+
+        // All threads share one empty cache and race `render_cached`.
+        let cache: Arc<Mutex<Option<(Instant, String)>>> = Arc::new(Mutex::new(None));
+        let barrier = Arc::new(Barrier::new(THREADS));
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let recorder = recorder.clone();
+                let cache = Arc::clone(&cache);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    render_cached(&recorder, &cache).expect("render")
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("thread");
+        }
+
+        // Holding the lock across render means the burst collapses to a
+        // single render; without the fix each thread would re-render.
+        assert_eq!(renders.load(Ordering::SeqCst), 1);
     }
 
     #[test]
