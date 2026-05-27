@@ -104,7 +104,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     ));
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));
-    let metrics = Arc::new(MetricsService::new(metrics_addr, Recorder::new()));
+    let metrics = Arc::new(MetricsService::new(metrics_addr, Recorder::new().freeze()?));
 
     Ok(Node::new(node)
         .with_chain(chain)

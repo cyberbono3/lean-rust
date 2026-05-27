@@ -23,6 +23,15 @@ pub enum MetricsError {
         /// Value returned by the provider.
         value: u64,
     },
+
+    /// Two providers were registered under the same metric name. Raised
+    /// by `Recorder::freeze` at boot so the node fails fast rather than
+    /// surfacing a Prometheus collector collision at the first scrape.
+    #[error("duplicate metric name {name}")]
+    DuplicateMetric {
+        /// The colliding metric name.
+        name: String,
+    },
 }
 
 impl MetricsError {

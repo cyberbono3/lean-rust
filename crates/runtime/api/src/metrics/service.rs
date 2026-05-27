@@ -13,7 +13,7 @@ use lean_core::Service;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
-use super::{prometheus, Recorder};
+use super::{prometheus, FrozenRecorder};
 use crate::server::EndpointServer;
 
 /// HTTP service serving Prometheus text exposition on `/metrics`.
@@ -23,15 +23,15 @@ use crate::server::EndpointServer;
 /// via [`Self::bound_addr`]. The service is single-shot per instance: a
 /// `Stopped` service does not transition back to `Idle`.
 pub struct MetricsService {
-    recorder: Recorder,
+    recorder: FrozenRecorder,
     server: EndpointServer,
 }
 
 impl MetricsService {
     /// Constructs a service that will bind `listen_addr` at `start` and
-    /// serve metrics from `recorder`.
+    /// serve metrics from the frozen `recorder`.
     #[must_use]
-    pub fn new(listen_addr: SocketAddr, recorder: Recorder) -> Self {
+    pub fn new(listen_addr: SocketAddr, recorder: FrozenRecorder) -> Self {
         Self {
             recorder,
             server: EndpointServer::new("metrics", listen_addr),

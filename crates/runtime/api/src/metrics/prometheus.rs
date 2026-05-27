@@ -9,7 +9,7 @@ use axum::{
 use parking_lot::Mutex;
 use prometheus::{Registry, TextEncoder, TEXT_FORMAT};
 
-use super::{error::MetricsError, recorder::Recorder};
+use super::{error::MetricsError, recorder::FrozenRecorder};
 
 /// Canonical mount path for the Prometheus scrape endpoint.
 pub(crate) const PATH: &str = "/metrics";
@@ -24,12 +24,12 @@ const RENDER_CACHE_TTL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 struct EndpointState {
-    recorder: Recorder,
+    recorder: FrozenRecorder,
     cache: Arc<Mutex<Option<(Instant, String)>>>,
 }
 
 /// Builds the Prometheus metrics router.
-pub(crate) fn router(recorder: Recorder) -> Router {
+pub(crate) fn router(recorder: FrozenRecorder) -> Router {
     let state = EndpointState {
         recorder,
         cache: Arc::new(Mutex::new(None)),
@@ -49,7 +49,7 @@ async fn get_metrics(
 }
 
 fn render_cached(
-    recorder: &Recorder,
+    recorder: &FrozenRecorder,
     cache: &Mutex<Option<(Instant, String)>>,
 ) -> Result<String, MetricsError> {
     // Hold the cache lock across `render()`. The previous code dropped
@@ -71,7 +71,7 @@ fn render_cached(
     Ok(body)
 }
 
-fn render(recorder: &Recorder) -> Result<String, MetricsError> {
+fn render(recorder: &FrozenRecorder) -> Result<String, MetricsError> {
     let registry = Registry::new();
     recorder.register_collectors(&registry)?;
 
@@ -83,11 +83,12 @@ fn render(recorder: &Recorder) -> Result<String, MetricsError> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::metrics::recorder::Recorder;
 
-    fn render_with(configure: impl FnOnce(&Recorder)) -> String {
-        let recorder = Recorder::new();
-        configure(&recorder);
-        render(&recorder).unwrap()
+    fn render_with(configure: impl FnOnce(&mut Recorder)) -> String {
+        let mut recorder = Recorder::new();
+        configure(&mut recorder);
+        render(&recorder.freeze().unwrap()).unwrap()
     }
 
     #[track_caller]
@@ -119,10 +120,11 @@ mod tests {
         // A provider that counts how many times `render` runs.
         let renders = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&renders);
-        let recorder = Recorder::new();
+        let mut recorder = Recorder::new();
         recorder.gauge("lean_test_render_count", "Counts renders.", move || {
             counter.fetch_add(1, Ordering::SeqCst) as u64
         });
+        let frozen = recorder.freeze().unwrap();
 
         // All threads share one empty cache and race `render_cached`.
         let cache: Arc<Mutex<Option<(Instant, String)>>> = Arc::new(Mutex::new(None));
@@ -130,7 +132,7 @@ mod tests {
 
         let handles: Vec<_> = (0..THREADS)
             .map(|_| {
-                let recorder = recorder.clone();
+                let recorder = frozen.clone();
                 let cache = Arc::clone(&cache);
                 let barrier = Arc::clone(&barrier);
                 thread::spawn(move || {
