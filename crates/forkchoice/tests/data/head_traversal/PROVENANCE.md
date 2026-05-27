@@ -2,7 +2,7 @@
 
 LMD-GHOST head-traversal vectors backing `crates/forkchoice/tests/parity.rs`.
 
-The lean-go canonical fixture, `lean-go/consensus/forkchoice/testdata/trajectory/baseline.json`, is a full-store trajectory (genesis → AdvanceTime → ImportBlock → ProcessAttestation → …). Replaying it requires the block-import path (`ImportBlock`), which lands in a later forkchoice issue.
+The upstream canonical fixture, `consensus/forkchoice/testdata/trajectory/baseline.json`, is a full-store trajectory (genesis → AdvanceTime → ImportBlock → ProcessAttestation → …). Replaying it requires the block-import path (`ImportBlock`), which lands in a later forkchoice change.
 
 Until then, the vectors exercised by `parity.rs` are **hand-derived**:
 

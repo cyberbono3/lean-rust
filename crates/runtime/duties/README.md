@@ -40,7 +40,7 @@ goes through a [`Publisher`] port whose impl lives in `node`.
 
 ## Out of scope
 
-Mirrors lean-go `runtime/duties/`: aggregator duties, direct
+Mirrors the upstream `runtime/duties/` package: aggregator duties, direct
 forkchoice mutation, post-MVP metrics hooks. The scheduler is the
 narrow devnet0 surface — nothing more.
 
@@ -61,7 +61,7 @@ cargo metadata --format-version=1 \
 
 ## Why a separate crate (vs. a module of `lean-chain`)
 
-- Mirrors lean-go layout (`runtime/duties/` is its own package).
+- Mirrors the upstream layout (`runtime/duties/` is its own package).
 - The `Publisher` port has its concrete impl in `node`, not in
   this crate — the crate boundary makes the dependency-inversion
   story explicit.
