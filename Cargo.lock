@@ -527,25 +527,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 
 [[package]]
-name = "beacon-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "config",
- "fixtures",
- "hex",
- "lean-duties",
- "lean-observability",
- "lean-p2p-host",
- "libp2p",
- "protocol",
- "ssz",
- "tempfile",
- "tracing",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2165,10 +2146,10 @@ name = "lean-beacon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "beacon-cli",
  "clap",
  "config",
  "fixtures",
+ "lean-cli",
  "lean-core",
  "lean-duties",
  "lean-observability",
@@ -2201,6 +2182,25 @@ dependencies = [
  "tokio-util",
  "tracing",
  "types",
+]
+
+[[package]]
+name = "lean-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "config",
+ "fixtures",
+ "hex",
+ "lean-duties",
+ "lean-observability",
+ "lean-p2p-host",
+ "libp2p",
+ "protocol",
+ "ssz",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

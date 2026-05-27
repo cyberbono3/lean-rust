@@ -15,7 +15,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-beacon-cli         = { path = "../../crates/beacon-cli" }
+lean-cli           = { path = "../../crates/lean-cli" }
 node               = { path = "../../crates/node" }
 lean-core          = { path = "../../crates/runtime/core" }
 lean-duties        = { path = "../../crates/runtime/duties" }

@@ -277,7 +277,7 @@ impl State {
         // typed errors) and then returns the canonical slot-0 anchor
         // shape (empty history, default bitlists) consistent with how
         // the rest of the codebase treats imported anchor states. See
-        // beacon-cli's loads_ream_legacy_local_pq_state_from_ssz test
+        // lean-cli's loads_ream_legacy_local_pq_state_from_ssz test
         // for the contract.
         Ok(Self {
             config,
