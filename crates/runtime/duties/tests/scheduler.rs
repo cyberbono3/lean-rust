@@ -93,6 +93,7 @@ struct MockPublisher {
     blocks: Mutex<Vec<SignedBlock>>,
     attestations: Mutex<Vec<SignedVote>>,
     fail_next: Mutex<bool>,
+    fail_always: Mutex<bool>,
 }
 
 impl MockPublisher {
@@ -105,19 +106,25 @@ impl MockPublisher {
     fn fail_once(&self) {
         *self.fail_next.lock() = true;
     }
+    fn fail_all(&self) {
+        *self.fail_always.lock() = true;
+    }
+    fn should_fail(&self) -> bool {
+        *self.fail_always.lock() || std::mem::replace(&mut *self.fail_next.lock(), false)
+    }
 }
 
 #[async_trait]
 impl Publisher for MockPublisher {
     async fn publish_block(&self, block: SignedBlock) -> Result<(), PublishError> {
-        if std::mem::replace(&mut *self.fail_next.lock(), false) {
+        if self.should_fail() {
             return Err(anyhow!("test publish failure").into());
         }
         self.blocks.lock().push(block);
         Ok(())
     }
     async fn publish_attestation(&self, vote: SignedVote) -> Result<(), PublishError> {
-        if std::mem::replace(&mut *self.fail_next.lock(), false) {
+        if self.should_fail() {
             return Err(anyhow!("test publish failure").into());
         }
         self.attestations.lock().push(vote);
@@ -312,6 +319,36 @@ async fn publisher_error_does_not_stop_scheduler() {
         publisher.attestation_count() >= 10,
         "expected slot-1 attestations to publish after failure, got {}",
         publisher.attestation_count(),
+    );
+
+    let cancel = CancellationToken::new();
+    service.stop(cancel).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn status_flips_to_err_after_consecutive_publish_failures() {
+    // A publisher that always fails: the slot-0 attester pass publishes
+    // ten attestations, all failing, which crosses the K=3 consecutive
+    // threshold. status() must then report degraded publish health —
+    // the old `last_err` slot never recorded publish failures at all.
+    let (service, _chain, publisher) = build("ream");
+    publisher.fail_all();
+    service.start().await.unwrap();
+    yield_runtime().await;
+    // status starts Ok (no failures yet).
+    service.status().await.unwrap();
+
+    let (_, vote_due_offset) = service.timing();
+    time::advance(vote_due_offset).await;
+    yield_runtime().await;
+
+    let err = service
+        .status()
+        .await
+        .expect_err("publish failures must degrade status");
+    assert!(
+        err.to_string().contains("publish degraded"),
+        "expected degraded publish status, got {err}",
     );
 
     let cancel = CancellationToken::new();

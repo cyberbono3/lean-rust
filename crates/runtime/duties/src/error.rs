@@ -6,6 +6,8 @@ use thiserror::Error;
 
 use lean_chain::ChainError;
 
+use super::ports::PublishError;
+
 /// Failures raised by the duties service.
 ///
 /// Per-slot production / publish errors are *not* terminal: they are
@@ -119,6 +121,14 @@ pub enum DutiesError {
     /// `"storage: ..."` / `"engine: ..."` without a redundant prefix.
     #[error(transparent)]
     Chain(#[from] ChainError),
+
+    /// Publishing a produced block / attestation failed. Recorded in
+    /// the scheduler's [`super::Service`] publish-health counter rather
+    /// than terminating the worker — a single transport flake is not a
+    /// service-terminal condition. Display forwards the inner
+    /// [`PublishError`] verbatim.
+    #[error(transparent)]
+    Publish(#[from] PublishError),
 }
 
 /// Convenience alias for `Result<T, DutiesError>`. Mirrors the

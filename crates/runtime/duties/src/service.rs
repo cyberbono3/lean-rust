@@ -50,19 +50,77 @@ pub struct Service {
     slot_duration: Duration,
     vote_due_offset: Duration,
     /// Shared scheduler state: the run handle (when started) and the
-    /// most-recent non-terminal scheduler error. Wrapped in `Arc<Mutex>`
-    /// so the worker task can record `last_err` without unsafe pointer
-    /// tricks (and without an `Arc` cycle, since `Worker` holds only
-    /// this state arc, not the whole service).
+    /// rolling publish-health counter. Wrapped in `Arc<Mutex>` so the
+    /// worker task can update health without unsafe pointer tricks (and
+    /// without an `Arc` cycle, since `Worker` holds only this state arc,
+    /// not the whole service).
     state: Arc<Mutex<ServiceState>>,
 }
+
+/// Number of consecutive duty failures (production or publish) after
+/// which [`lean_core::Service::status`] flips `Ok → Err`. Tolerating
+/// `K-1` flakes keeps a single transport hiccup from paging an
+/// operator while still surfacing a sustained outage.
+const PUBLISH_FAILURE_THRESHOLD: u32 = 3;
 
 #[derive(Default)]
 struct ServiceState {
     run: Option<RunHandle>,
-    /// Most recent non-terminal scheduler error. Surfaced via
+    /// Rolling publish-health counter. Surfaced via
     /// [`lean_core::Service::status`]. Reset on each `start`.
-    last_err: Option<DutiesError>,
+    health: PublishHealth,
+}
+
+/// Rolling record of duty-publish health, replacing the prior
+/// fire-and-forget `last_err` slot (which never recorded publish
+/// failures at all). A run of [`PUBLISH_FAILURE_THRESHOLD`] consecutive
+/// failures flips `status()` to `Err`; any success resets the streak.
+#[derive(Default, Debug)]
+struct PublishHealth {
+    /// Consecutive failures since the last success. Reset to 0 on any
+    /// successful publish.
+    consecutive_failures: u32,
+    /// The most recent failure, retained for the `status()` message.
+    last_error: Option<DutiesError>,
+    /// Slot of the most recent failure.
+    last_failure_slot: Option<u64>,
+}
+
+impl PublishHealth {
+    /// Records a failed duty at `slot`, incrementing the consecutive
+    /// streak and capturing the error for diagnostics.
+    fn on_failure(&mut self, slot: Slot, err: DutiesError) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.last_error = Some(err);
+        self.last_failure_slot = Some(slot.get());
+    }
+
+    /// Records a successful publish, clearing the consecutive streak.
+    /// `last_error` / `last_failure_slot` are left in place — they only
+    /// surface while the streak is at or past the threshold.
+    fn on_success(&mut self) {
+        self.consecutive_failures = 0;
+    }
+
+    /// Returns `Err` once the consecutive-failure streak reaches
+    /// [`PUBLISH_FAILURE_THRESHOLD`], carrying the last error and the
+    /// slot it occurred on; `Ok` otherwise.
+    fn status(&self) -> anyhow::Result<()> {
+        if self.consecutive_failures < PUBLISH_FAILURE_THRESHOLD {
+            return Ok(());
+        }
+        let slot = self.last_failure_slot.unwrap_or_default();
+        match self.last_error.as_ref() {
+            Some(err) => Err(anyhow!(
+                "duties publish degraded: {} consecutive failures (last at slot {slot}): {err}",
+                self.consecutive_failures,
+            )),
+            None => Err(anyhow!(
+                "duties publish degraded: {} consecutive failures",
+                self.consecutive_failures,
+            )),
+        }
+    }
 }
 
 impl core::fmt::Debug for Service {
@@ -73,7 +131,7 @@ impl core::fmt::Debug for Service {
             .field("slot_duration", &self.slot_duration)
             .field("vote_due_offset", &self.vote_due_offset)
             .field("running", &state.run.is_some())
-            .field("has_last_err", &state.last_err.is_some())
+            .field("consecutive_failures", &state.health.consecutive_failures)
             .finish_non_exhaustive()
     }
 }
@@ -169,7 +227,7 @@ impl lean_core::Service for Service {
         if state.run.is_some() {
             return Err(DutiesError::AlreadyStarted.into());
         }
-        state.last_err = None;
+        state.health = PublishHealth::default();
 
         let cancel = CancellationToken::new();
         let worker = Worker {
@@ -182,7 +240,7 @@ impl lean_core::Service for Service {
             genesis: Genesis::new(self.config.genesis_time_unix()),
             cancel: cancel.clone(),
             progress: Progress::default(),
-            last_err: LastErrSink {
+            health: HealthSink {
                 state: Arc::clone(&self.state),
             },
         };
@@ -223,24 +281,25 @@ impl lean_core::Service for Service {
             Some(h) if h.task.is_finished() => {
                 Err(anyhow!("duties worker task exited prematurely"))
             }
-            Some(_) => {
-                if let Some(err) = state.last_err.as_ref() {
-                    Err(anyhow!("duties last error: {err}"))
-                } else {
-                    Ok(())
-                }
-            }
+            Some(_) => state.health.status(),
         }
     }
 }
 
-struct LastErrSink {
+/// Worker-side handle to the shared publish-health counter. Recording
+/// here surfaces via [`lean_core::Service::status`] without the worker
+/// holding the whole [`Service`].
+struct HealthSink {
     state: Arc<Mutex<ServiceState>>,
 }
 
-impl LastErrSink {
-    fn record(&self, err: DutiesError) {
-        self.state.lock().last_err = Some(err);
+impl HealthSink {
+    fn record_failure(&self, slot: Slot, err: DutiesError) {
+        self.state.lock().health.on_failure(slot, err);
+    }
+
+    fn record_success(&self) {
+        self.state.lock().health.on_success();
     }
 }
 
@@ -336,10 +395,10 @@ struct Worker {
     genesis: Genesis,
     cancel: CancellationToken,
     progress: Progress,
-    /// Sink for non-terminal scheduler errors. Constructed at start
-    /// with an `Arc` clone of the Service's state — recording an
-    /// error here surfaces via `Service::status`.
-    last_err: LastErrSink,
+    /// Sink for the rolling publish-health counter. Constructed at
+    /// start with an `Arc` clone of the Service's state — recording a
+    /// failure / success here surfaces via `Service::status`.
+    health: HealthSink,
 }
 
 impl Worker {
@@ -401,7 +460,7 @@ impl Worker {
         self.progress.mark_proposer(slot);
         if let Err(err) = self.run_proposer(slot).await {
             warn!(slot = slot.get(), %err, "duties proposer pass failed");
-            self.last_err.record(err);
+            self.health.record_failure(slot, err);
         }
     }
 
@@ -436,17 +495,23 @@ impl Worker {
         };
         let block = self.chain.produce_block(slot, validator).await?;
         match self.publisher.publish_block(block).await {
-            Ok(()) => info!(
-                slot = slot.get(),
-                validator = validator.get(),
-                "duties block proposed",
-            ),
-            Err(err) => warn!(
-                slot = slot.get(),
-                validator = validator.get(),
-                %err,
-                "duties block publish failed",
-            ),
+            Ok(()) => {
+                info!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    "duties block proposed",
+                );
+                self.health.record_success();
+            }
+            Err(err) => {
+                warn!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    %err,
+                    "duties block publish failed",
+                );
+                self.health.record_failure(slot, err.into());
+            }
         }
         Ok(())
     }
@@ -465,22 +530,28 @@ impl Worker {
                         %err,
                         "duties attestation production failed",
                     );
+                    self.health.record_failure(slot, err.into());
                     continue;
                 }
             };
-            if let Err(err) = self.publisher.publish_attestation(vote).await {
-                warn!(
-                    slot = slot.get(),
-                    validator = validator.get(),
-                    %err,
-                    "duties attestation publish failed",
-                );
-            } else {
-                debug!(
-                    slot = slot.get(),
-                    validator = validator.get(),
-                    "duties attestation published",
-                );
+            match self.publisher.publish_attestation(vote).await {
+                Ok(()) => {
+                    debug!(
+                        slot = slot.get(),
+                        validator = validator.get(),
+                        "duties attestation published",
+                    );
+                    self.health.record_success();
+                }
+                Err(err) => {
+                    warn!(
+                        slot = slot.get(),
+                        validator = validator.get(),
+                        %err,
+                        "duties attestation publish failed",
+                    );
+                    self.health.record_failure(slot, err.into());
+                }
             }
         }
     }
@@ -572,5 +643,59 @@ mod tests {
     async fn status_before_start_errors() {
         let svc = service();
         assert!(<Service as lean_core::Service>::status(&svc).await.is_err());
+    }
+
+    // -- PublishHealth ------------------------------------------------------
+
+    fn sample_err() -> DutiesError {
+        DutiesError::Publish(anyhow!("transport down").into())
+    }
+
+    #[test]
+    fn publish_health_ok_below_threshold() {
+        let mut h = PublishHealth::default();
+        for _ in 0..PUBLISH_FAILURE_THRESHOLD - 1 {
+            h.on_failure(Slot::new(7), sample_err());
+        }
+        assert!(
+            h.status().is_ok(),
+            "must stay Ok below K={PUBLISH_FAILURE_THRESHOLD}"
+        );
+    }
+
+    #[test]
+    fn publish_health_flips_exactly_on_kth_failure() {
+        let mut h = PublishHealth::default();
+        // K-1 failures: still Ok.
+        for _ in 0..PUBLISH_FAILURE_THRESHOLD - 1 {
+            h.on_failure(Slot::new(2), sample_err());
+        }
+        assert!(h.status().is_ok());
+        // The Kth consecutive failure flips status.
+        h.on_failure(Slot::new(2), sample_err());
+        let err = h.status().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("slot 2"),
+            "expected last_failure_slot, got {msg}"
+        );
+        assert!(
+            msg.contains("transport down"),
+            "expected last error, got {msg}"
+        );
+    }
+
+    #[test]
+    fn publish_health_success_resets_streak() {
+        let mut h = PublishHealth::default();
+        for _ in 0..PUBLISH_FAILURE_THRESHOLD {
+            h.on_failure(Slot::new(1), sample_err());
+        }
+        assert!(h.status().is_err());
+        h.on_success();
+        assert!(
+            h.status().is_ok(),
+            "a success must clear the degraded state"
+        );
     }
 }
