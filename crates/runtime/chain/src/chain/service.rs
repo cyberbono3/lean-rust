@@ -8,6 +8,12 @@
 //! See [`Service::import_block`] for the storage / engine divergence
 //! contract on persistence failure.
 
+// The tick slot is a `parking_lot::Mutex`; `start`/`stop` are serialized by
+// the `lean_core::Node` lifecycle so the guard never crosses an await today.
+// Deny `await_holding_lock` so any future edit that parks the guard across an
+// `.await` (which would stall the tokio worker thread) fails the build.
+#![deny(clippy::await_holding_lock)]
+
 use std::sync::Arc;
 
 use crate::engine::{AttestationImportResult, BlockImportResult, Engine};
@@ -320,14 +326,17 @@ impl Service {
 
 impl Drop for Service {
     /// Best-effort cleanup if a caller drops the service without going
-    /// through [`lean_core::Service::stop`]: cancel the tick token so
-    /// the spawned task exits on its next iteration. We cannot await the
-    /// join here, so the task detaches; cancellation guarantees it does
-    /// not loop forever holding `Arc` clones of the snapshot and engine.
+    /// through [`lean_core::Service::stop`]. We cannot await the join here,
+    /// so the task detaches; aborting it deterministically terminates the
+    /// loop at its next poll, releasing the `Arc` clones of the snapshot and
+    /// engine immediately rather than after up to one more tick period.
     fn drop(&mut self) {
         // `get_mut` skips locking: `&mut self` proves no aliasing.
         if let Some(handle) = self.tick.get_mut().take() {
+            // Cancel the token (graceful signal) and abort the join handle so
+            // termination does not wait on the in-flight tick interval.
             handle.cancel.cancel();
+            handle.task.abort();
         }
     }
 }
@@ -369,10 +378,18 @@ impl lean_core::Service for Service {
             biased;
             () = cancel.cancelled() => {
                 task.abort();
-                // Drain so the task fully transitions; the `JoinError::Cancelled`
-                // it produces here is expected and discarded.
-                let _ = task.await;
-                Err(anyhow!("chain tick task did not stop within shutdown budget"))
+                // Drain so the task fully transitions, then distinguish the
+                // outcome instead of reporting one generic error: a panic and a
+                // budget-exceeded abort are different failures to an operator.
+                match task.await {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.is_panic() => {
+                        Err(anyhow!("chain tick task panicked during shutdown"))
+                    }
+                    Err(_) => {
+                        Err(anyhow!("chain tick task did not stop within shutdown budget"))
+                    }
+                }
             }
             join = &mut task => {
                 join.context("chain tick task panicked")?;
