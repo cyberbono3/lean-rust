@@ -35,6 +35,15 @@ use super::error::{DutiesError, DutiesResult};
 /// wrapper struct needed since the shape is already a stdlib map.
 type RawAssignments = BTreeMap<String, Vec<u64>>;
 
+/// Maximum accepted size of a `validators.yaml` file, in bytes.
+///
+/// devnet0's file is <100 bytes; mainnet validator registries are
+/// larger but still well under 1 MiB. The cap bounds the disk read so
+/// an operator-supplied (or symlinked) huge file cannot OOM the process
+/// before YAML parsing starts — the same `Metadata::len` pattern used
+/// for the genesis-SSZ read.
+pub const MAX_VALIDATORS_FILE_BYTES: u64 = 1 << 20;
+
 /// Sentinel path surfaced inside [`DutiesError::YamlParse`] when the
 /// parse came from [`ValidatorAssignments::from_bytes`] rather than a
 /// real file. Renders as `"<in-memory>"` in error messages.
@@ -76,6 +85,13 @@ impl ValidatorAssignments {
             return Err(DutiesError::EmptyValidatorsPath);
         }
         let resolved = resolve_path(raw);
+        // Bound the read before touching the bytes: `Metadata::len`
+        // rejects an oversized file without first allocating its
+        // contents. A missing file falls through to the `fs::read`
+        // branch below so the IO error is reported uniformly.
+        if let Ok(meta) = std::fs::metadata(&resolved) {
+            check_file_size(meta.len())?;
+        }
         // Clone on the IO-error branch so the resolved path is still
         // available to wrap a subsequent parse error. Both branches are
         // rare; the extra `PathBuf` clone is bounded by error frequency.
@@ -183,6 +199,19 @@ impl ValidatorAssignments {
             total_validators: total,
         })
     }
+}
+
+/// Rejects a file whose byte length exceeds
+/// [`MAX_VALIDATORS_FILE_BYTES`]. Extracted so the boundary logic is
+/// unit-testable without writing a multi-megabyte fixture to disk.
+fn check_file_size(len: u64) -> DutiesResult<()> {
+    if len > MAX_VALIDATORS_FILE_BYTES {
+        return Err(DutiesError::ValidatorsFileTooLarge {
+            size: len,
+            cap: MAX_VALIDATORS_FILE_BYTES,
+        });
+    }
+    Ok(())
 }
 
 fn resolve_path(raw: &Path) -> PathBuf {
@@ -296,6 +325,27 @@ quadrivium: [2, 5, 8, 11, 14, 17, 20, 23, 26, 29]
         assert!(
             display.contains(IN_MEMORY_SENTINEL),
             "expected '{IN_MEMORY_SENTINEL}' in error display, got {display}",
+        );
+    }
+
+    #[test]
+    fn check_file_size_accepts_at_and_below_cap() {
+        check_file_size(0).unwrap();
+        check_file_size(MAX_VALIDATORS_FILE_BYTES).unwrap();
+    }
+
+    #[test]
+    fn check_file_size_rejects_above_cap() {
+        // A 2 MiB file is over the 1 MiB cap.
+        let two_mib = 2 * MAX_VALIDATORS_FILE_BYTES;
+        let err = check_file_size(two_mib).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DutiesError::ValidatorsFileTooLarge { size, cap }
+                    if size == two_mib && cap == MAX_VALIDATORS_FILE_BYTES
+            ),
+            "got {err:?}",
         );
     }
 

@@ -59,6 +59,32 @@ pub enum DutiesError {
         total: u64,
     },
 
+    /// A `slot_duration_ms` of zero was supplied to a config builder.
+    /// Modelled as a [`core::num::NonZeroU64`] at the type level so the
+    /// divide-by-zero in the scheduler's slot math is unreachable; this
+    /// variant surfaces the rejection at the loose-input boundary.
+    #[error("duties slot_duration_ms must be non-zero")]
+    ZeroSlotDuration,
+
+    /// `genesis_time_unix` was left at [`super::GenesisTimeUnix::EPOCH`]
+    /// (the Unix epoch). Running with epoch genesis makes every slot
+    /// fall in the deep past, so the operator sees a "running" node that
+    /// schedules fictitious slots. The service refuses to start until a
+    /// real genesis time is configured.
+    #[error("duties genesis_time_unix must be set (not the Unix epoch)")]
+    GenesisTimeUnset,
+
+    /// The validator-assignment file exceeds the configured size cap.
+    /// Bounds the read so an operator-supplied (or symlinked) huge file
+    /// cannot OOM the process before YAML parsing starts.
+    #[error("duties validators file is {size} bytes, exceeds cap of {cap} bytes")]
+    ValidatorsFileTooLarge {
+        /// Observed file size in bytes.
+        size: u64,
+        /// Configured maximum in bytes.
+        cap: u64,
+    },
+
     /// `Service::start` was called twice.
     #[error("duties service already started")]
     AlreadyStarted,

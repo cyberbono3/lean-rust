@@ -131,14 +131,22 @@ const FIXTURE_PATH: &str = "tests/fixtures/validators.yaml";
 const MALFORMED_PATH: &str = "tests/fixtures/validators_malformed.yaml";
 
 fn config(group: &str) -> DutiesConfig {
+    // Genesis at the current wall-clock second. Under `start_paused`,
+    // `SystemTime::now()` is still the real clock, so mapping genesis ≈
+    // now onto the frozen tokio `Instant` makes the anchor land at
+    // `Instant::now()` — the worker fires at slot 0 immediately, same
+    // as the old `GenesisTimeUnix::new(0)`. A non-epoch value is
+    // required now that `Config::ensure_runnable` rejects epoch genesis.
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_secs();
     DutiesConfig::default()
         .with_validators_path(FIXTURE_PATH)
         .unwrap()
         .with_validator_group(group)
         .unwrap()
-        // Genesis at tokio's current "epoch" so the worker fires
-        // immediately once we advance time.
-        .with_genesis_time_unix(GenesisTimeUnix::new(0))
+        .with_genesis_time_unix(GenesisTimeUnix::new(now_unix))
 }
 
 fn build(group: &str) -> (DutiesService, Arc<FakeChain>, Arc<MockPublisher>) {
@@ -233,17 +241,35 @@ async fn unknown_validator_group_is_rejected_at_start() {
 async fn malformed_yaml_is_rejected_at_start() {
     let chain = Arc::new(FakeChain::default());
     let publisher = Arc::new(MockPublisher::default());
-    let cfg = DutiesConfig::default()
-        .with_validators_path(MALFORMED_PATH)
-        .unwrap()
-        .with_validator_group("ream")
-        .unwrap();
+    // Genesis must be set (non-epoch) so `start` reaches the YAML load
+    // rather than short-circuiting on the genesis guard.
+    let cfg = config("ream").with_validators_path(MALFORMED_PATH).unwrap();
     let service = DutiesService::new(cfg, chain, publisher);
     let err = service.start().await.unwrap_err();
     let formatted = format!("{err:?}").to_lowercase();
     assert!(
         formatted.contains("yaml") || formatted.contains("parse"),
         "expected YAML parse error, got {formatted}",
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn epoch_genesis_is_rejected_at_start() {
+    // `DutiesConfig::default()` leaves genesis at the Unix epoch; the
+    // service must refuse to start rather than schedule fictitious slots.
+    let chain = Arc::new(FakeChain::default());
+    let publisher = Arc::new(MockPublisher::default());
+    let cfg = DutiesConfig::default()
+        .with_validators_path(FIXTURE_PATH)
+        .unwrap()
+        .with_validator_group("ream")
+        .unwrap();
+    let service = DutiesService::new(cfg, chain, publisher);
+    let err = service.start().await.unwrap_err();
+    let formatted = format!("{err:?}");
+    assert!(
+        formatted.contains("GenesisTimeUnset") || formatted.contains("genesis_time_unix"),
+        "expected GenesisTimeUnset, got {formatted}",
     );
 }
 

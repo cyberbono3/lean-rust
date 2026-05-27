@@ -87,14 +87,15 @@ impl Service {
     /// not prevent service composition.
     #[must_use]
     pub fn new(config: Config, chain: Arc<dyn Chain>, publisher: Arc<dyn Publisher>) -> Self {
-        let slot_duration = Duration::from_millis(config::DEVNET_CONFIG.slot_duration_ms);
-        // Integer math: slot_duration_ms * bps / 10_000.
-        // `DEVNET_CONFIG` is a compile-time const — overflow is not
-        // reachable at realistic values (product caps near 2^36 for
-        // slot_duration in seconds and bps within [0, 10_000]).
-        let vote_due_offset = Duration::from_millis(
-            config::DEVNET_CONFIG.slot_duration_ms * config::DEVNET_CONFIG.vote_due_bps / 10_000,
-        );
+        let slot_duration_ms = config.slot_duration_ms().get();
+        let slot_duration = Duration::from_millis(slot_duration_ms);
+        // Integer math: slot_duration_ms * bps / 10_000. The
+        // `vote_due_bps` factor comes from the compile-time
+        // `DEVNET_CONFIG` const and is bounded to [0, 10_000]; at the
+        // realistic `slot_duration_ms` devnet range the product stays
+        // far below `u64::MAX`, so overflow is not reachable.
+        let vote_due_offset =
+            Duration::from_millis(slot_duration_ms * config::DEVNET_CONFIG.vote_due_bps / 10_000);
         Self {
             config,
             chain,
@@ -141,6 +142,11 @@ impl lean_core::Service for Service {
 
     #[instrument(level = "info", name = "duties.start", skip_all, err)]
     async fn start(&self) -> anyhow::Result<()> {
+        // Reject a config that would schedule fictitious slots (epoch
+        // genesis) before doing any work. `slot_duration_ms` is a
+        // `NonZeroU64`, so the divide-by-zero case is already
+        // unrepresentable.
+        self.config.ensure_runnable()?;
         // Load assignments before flipping the running flag so a load
         // failure leaves the service stoppable and re-startable.
         let assignments = ValidatorAssignments::load(self.config.validators_path())
