@@ -87,6 +87,18 @@ pub enum DutiesError {
         cap: u64,
     },
 
+    /// A per-validator attestation duty (produce + publish) did not
+    /// complete within its slot budget and was cancelled by the
+    /// per-future timeout. Recorded in publish health like any other
+    /// duty failure.
+    #[error("duties attestation for validator {validator} timed out after {timeout_ms} ms")]
+    DutyTimeout {
+        /// Validator whose duty timed out.
+        validator: u64,
+        /// Per-validator budget in milliseconds.
+        timeout_ms: u64,
+    },
+
     /// `Service::start` was called twice.
     #[error("duties service already started")]
     AlreadyStarted,

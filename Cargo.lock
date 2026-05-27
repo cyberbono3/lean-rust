@@ -2318,6 +2318,7 @@ dependencies = [
  "async-trait",
  "config",
  "criterion",
+ "futures",
  "lean-chain",
  "lean-core",
  "parking_lot",

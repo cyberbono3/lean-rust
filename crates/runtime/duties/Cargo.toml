@@ -17,6 +17,7 @@ protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }
 tokio             = { workspace = true }
 tokio-util        = { workspace = true }
+futures           = { workspace = true }
 async-trait       = { workspace = true }
 tracing           = { workspace = true }
 parking_lot       = { workspace = true }

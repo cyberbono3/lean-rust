@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
+use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
 use protocol::{Slot, ValidatorIndex};
 use tokio::task::JoinHandle;
@@ -519,42 +520,96 @@ impl Worker {
         Ok(())
     }
 
-    /// Per-validator attester pass. Each step warn-logs and continues
-    /// on failure — attester errors are never service-terminal, so the
-    /// function is fire-and-forget rather than `Result`-returning.
+    /// Per-validator attester pass. Drives all validators' duties
+    /// concurrently through a [`FuturesUnordered`] instead of awaiting
+    /// each sequentially: at N validators the old loop's wall-time was
+    /// the SUM of per-validator latencies, which blows the ~2 s vote-due
+    /// window at operator scale. Each duty carries a per-validator
+    /// timeout (half the slot duration) so one stalled
+    /// produce/publish cannot wedge the pass, and the whole drive sits
+    /// under a `select!` on the cancel token so shutdown drops every
+    /// inflight future immediately rather than waiting on the slowest.
+    ///
+    /// Outcomes are folded into publish health as they complete; the
+    /// pass is fire-and-forget (no `Result`) because attester failures
+    /// are never service-terminal.
     async fn run_attesters(&self, slot: Slot) {
-        for validator in self.validators.iter().copied() {
-            let vote = match self.chain.produce_attestation(slot, validator).await {
-                Ok(v) => v,
-                Err(err) => {
-                    warn!(
-                        slot = slot.get(),
-                        validator = validator.get(),
-                        %err,
-                        "duties attestation production failed",
-                    );
-                    self.health.record_failure(slot, err.into());
-                    continue;
-                }
-            };
-            match self.publisher.publish_attestation(vote).await {
-                Ok(()) => {
-                    debug!(
-                        slot = slot.get(),
-                        validator = validator.get(),
-                        "duties attestation published",
-                    );
-                    self.health.record_success();
-                }
-                Err(err) => {
-                    warn!(
-                        slot = slot.get(),
-                        validator = validator.get(),
-                        %err,
-                        "duties attestation publish failed",
-                    );
-                    self.health.record_failure(slot, err.into());
-                }
+        let budget = self.slot_duration / 2;
+        let mut duties = self
+            .validators
+            .iter()
+            .copied()
+            .map(|validator| async move {
+                let outcome = tokio::time::timeout(budget, self.attest_one(slot, validator)).await;
+                (validator, outcome)
+            })
+            .collect::<FuturesUnordered<_>>();
+
+        loop {
+            tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => break,
+                next = duties.next() => match next {
+                    Some((validator, outcome)) => {
+                        self.record_attest_outcome(slot, validator, budget, outcome);
+                    }
+                    None => break,
+                },
+            }
+        }
+    }
+
+    /// Produces and publishes one validator's attestation. Returns the
+    /// first failure as a [`DutiesError`] so the caller can fold it into
+    /// publish health.
+    async fn attest_one(&self, slot: Slot, validator: ValidatorIndex) -> DutiesResult<()> {
+        let vote = self.chain.produce_attestation(slot, validator).await?;
+        self.publisher.publish_attestation(vote).await?;
+        Ok(())
+    }
+
+    /// Folds one validator's attestation outcome into publish health,
+    /// warn-logging failures and the timeout case.
+    fn record_attest_outcome(
+        &self,
+        slot: Slot,
+        validator: ValidatorIndex,
+        budget: Duration,
+        outcome: Result<DutiesResult<()>, tokio::time::error::Elapsed>,
+    ) {
+        match outcome {
+            Ok(Ok(())) => {
+                debug!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    "duties attestation published",
+                );
+                self.health.record_success();
+            }
+            Ok(Err(err)) => {
+                warn!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    %err,
+                    "duties attestation duty failed",
+                );
+                self.health.record_failure(slot, err);
+            }
+            Err(_elapsed) => {
+                let timeout_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX);
+                warn!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    timeout_ms,
+                    "duties attestation duty timed out",
+                );
+                self.health.record_failure(
+                    slot,
+                    DutiesError::DutyTimeout {
+                        validator: validator.get(),
+                        timeout_ms,
+                    },
+                );
             }
         }
     }

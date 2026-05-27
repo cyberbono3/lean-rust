@@ -94,6 +94,7 @@ struct MockPublisher {
     attestations: Mutex<Vec<SignedVote>>,
     fail_next: Mutex<bool>,
     fail_always: Mutex<bool>,
+    block_attestations: Mutex<bool>,
 }
 
 impl MockPublisher {
@@ -109,8 +110,14 @@ impl MockPublisher {
     fn fail_all(&self) {
         *self.fail_always.lock() = true;
     }
+    fn block_attestations(&self) {
+        *self.block_attestations.lock() = true;
+    }
     fn should_fail(&self) -> bool {
         *self.fail_always.lock() || std::mem::replace(&mut *self.fail_next.lock(), false)
+    }
+    fn should_block(&self) -> bool {
+        *self.block_attestations.lock()
     }
 }
 
@@ -124,6 +131,11 @@ impl Publisher for MockPublisher {
         Ok(())
     }
     async fn publish_attestation(&self, vote: SignedVote) -> Result<(), PublishError> {
+        if self.should_block() {
+            // Park forever (paused clock never advances): the test fires
+            // a cancel mid-pass and asserts shutdown does not wait on us.
+            std::future::pending::<()>().await;
+        }
         if self.should_fail() {
             return Err(anyhow!("test publish failure").into());
         }
@@ -350,6 +362,27 @@ async fn status_flips_to_err_after_consecutive_publish_failures() {
         err.to_string().contains("publish degraded"),
         "expected degraded publish status, got {err}",
     );
+
+    let cancel = CancellationToken::new();
+    service.stop(cancel).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_cancels_inflight_attestation_duties() {
+    // A publisher that parks forever on every attestation. Once the
+    // slot-0 attester pass spawns its concurrent duties, they all block
+    // in publish. `stop` fires the worker's cancel token, which the
+    // drive loop's `select!` observes and breaks on — shutdown must not
+    // wait on the stuck duties. If cancellation regressed, the worker
+    // would never join and this test would hang.
+    let (service, _chain, publisher) = build("ream");
+    publisher.block_attestations();
+    service.start().await.unwrap();
+    yield_runtime().await;
+
+    let (_, vote_due_offset) = service.timing();
+    time::advance(vote_due_offset).await;
+    yield_runtime().await;
 
     let cancel = CancellationToken::new();
     service.stop(cancel).await.unwrap();
