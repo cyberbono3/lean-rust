@@ -43,3 +43,8 @@ anyhow       = { workspace = true }
 lean-chain        = { path = ".", features = ["test-fixtures"] }
 static_assertions = { workspace = true }
 tokio             = { workspace = true, features = ["test-util"] }
+criterion         = { workspace = true }
+
+[[bench]]
+name    = "engine_import"
+harness = false
