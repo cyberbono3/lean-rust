@@ -129,11 +129,13 @@ fn persist_anchor(
     store
         .save_state(anchor_root, anchor_state)
         .context("persist genesis anchor state")?;
+    // Validate the anchor head at the deser seam: genesis (finalized == head
+    // at slot 0) is accepted; a finalized checkpoint ahead of the head is
+    // refused before it reaches storage.
+    let head = HeadInfo::try_new(Checkpoint::new(anchor_root, anchor_slot), finalized)
+        .context("validate genesis anchor head")?;
     store
-        .save_head(HeadInfo::new(
-            Checkpoint::new(anchor_root, anchor_slot),
-            finalized,
-        ))
+        .save_head(head)
         .context("persist genesis anchor head")?;
     Ok(())
 }
