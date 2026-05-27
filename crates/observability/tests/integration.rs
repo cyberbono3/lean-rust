@@ -68,7 +68,7 @@ fn file_sink_creates_timestamped_log_file_and_blocks_reinit() {
     // in this process.
     let err = init_tracing(Verbosity::Debug, None).expect_err("expected re-init error");
     assert!(
-        matches!(err, TracingInitError::AlreadyInitialized(_)),
+        matches!(err, TracingInitError::AlreadyInitialized),
         "got {err:?}",
     );
 }

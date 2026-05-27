@@ -5,6 +5,7 @@
 use std::io;
 use std::io::IsTerminal;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use thiserror::Error;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -101,14 +102,30 @@ pub struct TracingGuard {
     _file_worker: Option<WorkerGuard>,
 }
 
+/// Process-wide one-shot guard: the first [`init_tracing`] caller claims
+/// it and proceeds; every later caller (including threads racing the
+/// first) observes the claim and returns
+/// [`TracingInitError::AlreadyInitialized`] without building an appender.
+/// This makes init race-safe: exactly one caller installs the subscriber,
+/// and losers never create a stray file or a `WorkerGuard` whose drop
+/// could tear down the winner's writer.
+static INIT_CLAIMED: OnceLock<()> = OnceLock::new();
+
 /// Errors raised by [`init_tracing`].
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum TracingInitError {
-    /// A global `tracing` subscriber was already installed when
-    /// [`init_tracing`] was called.
+    /// [`init_tracing`] was already called in this process (the
+    /// one-shot [`INIT_CLAIMED`] slot was taken). Deterministic across
+    /// concurrent callers — no dependence on subscriber-install timing.
     #[error("tracing subscriber already initialized")]
-    AlreadyInitialized(#[source] TryInitError),
+    AlreadyInitialized,
+
+    /// Installing the global subscriber failed even though this caller
+    /// won the init claim — a foreign subscriber was installed outside
+    /// [`init_tracing`].
+    #[error("install tracing subscriber: {0}")]
+    Install(#[source] TryInitError),
 
     /// Failed to create the file-sink directory.
     #[error("create log directory: {0}")]
@@ -125,15 +142,20 @@ pub enum TracingInitError {
 /// - `verbosity` controls the [`EnvFilter`] directive (silences known-
 ///   noisy crates at coarse levels — see [`Verbosity::directive`]).
 /// - `file_sink`, when [`Some`], adds a non-blocking file layer that
-///   writes to `<dir>/<prefix>-<utc-stamp>.log`.
-/// - The `RUST_LOG` env var, when set, supersedes `verbosity` (standard
-///   `tracing-subscriber` precedence).
+///   writes to `<dir>/<prefix>.<date>.log`, rolling per
+///   [`FileSink::rotation`].
+/// - The `RUST_LOG` env var, when set and valid, supersedes `verbosity`
+///   (standard `tracing-subscriber` precedence); a malformed `RUST_LOG`
+///   warns once on stderr and falls back to `verbosity`.
 ///
 /// # Errors
-/// - [`TracingInitError::AlreadyInitialized`] if a subscriber was already
-///   installed in the current process.
+/// - [`TracingInitError::AlreadyInitialized`] if `init_tracing` was
+///   already called in this process (deterministic across racing
+///   callers — only the first wins).
 /// - [`TracingInitError::CreateLogDir`] if `file_sink.dir` cannot be
-///   created.
+///   created; [`TracingInitError::FileAppender`] if the rolling appender
+///   cannot be built; [`TracingInitError::Install`] if a foreign
+///   subscriber was already installed.
 ///
 /// # Example
 /// ```no_run
@@ -147,6 +169,13 @@ pub fn init_tracing(
     verbosity: Verbosity,
     file_sink: Option<FileSink<'_>>,
 ) -> Result<TracingGuard, TracingInitError> {
+    // Claim the one-shot init slot before doing any work. Losing the
+    // race (or a second call) returns immediately without creating an
+    // appender, so only the winner ever opens a log file.
+    if INIT_CLAIMED.set(()).is_err() {
+        return Err(TracingInitError::AlreadyInitialized);
+    }
+
     let filter = env_filter(verbosity);
 
     // Emit ANSI color escapes only when stderr is a real terminal.
@@ -187,28 +216,65 @@ pub fn init_tracing(
         .with(stderr_layer)
         .with(file_layer)
         .try_init()
-        .map_err(TracingInitError::AlreadyInitialized)?;
+        .map_err(TracingInitError::Install)?;
 
     Ok(TracingGuard {
         _file_worker: file_worker,
     })
 }
 
+/// Which source the [`EnvFilter`] directive was resolved from. Returned
+/// by [`build_filter`] so the caller can warn on the invalid-`RUST_LOG`
+/// path without re-inspecting the env.
+#[derive(Debug, PartialEq, Eq)]
+enum FilterChoice {
+    /// `RUST_LOG` was set and parsed cleanly.
+    RustLog,
+    /// `RUST_LOG` was set but failed to parse; fell back to `verbosity`.
+    RustLogInvalid,
+    /// `RUST_LOG` was unset/blank; used the `verbosity` directive.
+    Verbosity,
+}
+
 /// Builds the [`EnvFilter`] used by [`init_tracing`].
 ///
 /// `RUST_LOG` (the standard `tracing-subscriber` env var) wins when set
-/// and non-empty; otherwise the directive derived from `verbosity` is
-/// used. `parse_lossy` swallows directive-parse errors and falls back to
-/// the empty filter — appropriate for a runtime entry point where a
-/// malformed env var should not abort startup.
+/// and parses; a malformed `RUST_LOG` emits one warning and falls back
+/// to the `verbosity` directive instead of being silently swallowed by
+/// `parse_lossy`. A runtime entry point should surface an operator typo,
+/// not run with an unintended filter and no signal.
 fn env_filter(verbosity: Verbosity) -> EnvFilter {
     let env = std::env::var(EnvFilter::DEFAULT_ENV).unwrap_or_default();
-    let source = if env.is_empty() {
-        verbosity.directive()
-    } else {
-        env.as_str()
-    };
-    EnvFilter::builder().parse_lossy(source)
+    let (filter, choice) = build_filter(&env, verbosity);
+    if choice == FilterChoice::RustLogInvalid {
+        // tracing is not installed yet — warn via stderr directly.
+        eprintln!(
+            "WARN lean-observability: RUST_LOG={env:?} is not a valid filter \
+             directive; falling back to verbosity {verbosity}"
+        );
+    }
+    filter
+}
+
+/// Resolves the directive source and parses it. Pure over its inputs (no
+/// env read, no stderr) so the `RUST_LOG`-invalid fallback is unit
+/// testable; [`env_filter`] reads the env and emits the warning.
+fn build_filter(env: &str, verbosity: Verbosity) -> (EnvFilter, FilterChoice) {
+    if !env.trim().is_empty() {
+        match EnvFilter::builder().parse(env) {
+            Ok(filter) => return (filter, FilterChoice::RustLog),
+            Err(_) => {
+                return (
+                    EnvFilter::builder().parse_lossy(verbosity.directive()),
+                    FilterChoice::RustLogInvalid,
+                );
+            }
+        }
+    }
+    (
+        EnvFilter::builder().parse_lossy(verbosity.directive()),
+        FilterChoice::Verbosity,
+    )
 }
 
 /// Whether the stderr `fmt` layer should emit ANSI color escapes:
@@ -221,6 +287,30 @@ fn stderr_ansi_enabled() -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_filter_uses_verbosity_when_env_blank() {
+        let (_f, choice) = build_filter("", Verbosity::Info);
+        assert_eq!(choice, FilterChoice::Verbosity);
+        let (_f, choice) = build_filter("   ", Verbosity::Info);
+        assert_eq!(choice, FilterChoice::Verbosity);
+    }
+
+    #[test]
+    fn build_filter_accepts_valid_rust_log() {
+        let (_f, choice) = build_filter("debug", Verbosity::Info);
+        assert_eq!(choice, FilterChoice::RustLog);
+    }
+
+    #[test]
+    fn build_filter_falls_back_on_invalid_rust_log() {
+        // `app=notalevel` has a valid target but an invalid level, so
+        // `EnvFilter::parse` rejects it; build_filter must report the
+        // fallback (env_filter turns this into a warn) rather than
+        // silently dropping the filter.
+        let (_f, choice) = build_filter("app=notalevel", Verbosity::Info);
+        assert_eq!(choice, FilterChoice::RustLogInvalid);
+    }
 
     #[test]
     fn stderr_ansi_disabled_when_not_a_terminal() {
