@@ -2340,7 +2340,6 @@ dependencies = [
  "serial_test",
  "tempfile",
  "thiserror 2.0.18",
- "time",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

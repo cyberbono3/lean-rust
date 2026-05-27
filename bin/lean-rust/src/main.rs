@@ -126,10 +126,12 @@ fn file_sink(cli: &Cli) -> Result<Option<FileSink<'_>>> {
         return Ok(None);
     };
 
-    Ok(Some(FileSink {
+    // Daily rotation by default (see `LogRotation`): an operator who
+    // opted into `--log.dir.path` gets bounded per-file growth.
+    Ok(Some(FileSink::new(
         dir,
-        prefix: cli.log_dir_prefix.as_deref().unwrap_or(DEFAULT_LOG_PREFIX),
-    }))
+        cli.log_dir_prefix.as_deref().unwrap_or(DEFAULT_LOG_PREFIX),
+    )))
 }
 
 fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
