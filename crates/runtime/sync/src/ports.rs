@@ -77,9 +77,37 @@ pub trait Network: Send + Sync + 'static {
 /// [`Loop::start`](super::Loop::start) subscribes once. Closing the
 /// returned receiver shuts the watch task down cleanly; subsequent
 /// `Loop::status` calls report whether the task is still alive.
+///
+/// # Backpressure contract
+///
+/// The returned receiver is the watch loop's only intake. The loop
+/// processes one event at a time and, per event, may block on a
+/// `Semaphore` permit while up to `max_concurrent_peer_syncs` peer walks
+/// are already in flight (a walk can run for as long as the configured
+/// `request_timeout`). While the loop is saturated it does **not** call
+/// `recv`, so a bounded sender's `send().await` will park — this is the
+/// intended backpressure path and the reason the cap is safe against a
+/// flap storm.
+///
+/// Implementations therefore MUST:
+/// - use a **bounded** channel, so a misbehaving or flapping peer source
+///   cannot grow an unbounded backlog of pending `PeerId`s in memory;
+/// - apply backpressure to the event source (await `send`, or drop on a
+///   full channel) rather than spawning unbounded producers — the loop
+///   already dedups duplicate in-flight peers, so a dropped duplicate is
+///   harmless;
+/// - never block the runtime inside the producer while holding a slot
+///   that the loop needs to make progress.
+///
+/// The bounded channel + the loop's permit cap + per-`PeerId` dedup
+/// together bound both the queued-event memory and the concurrent-walk
+/// memory regardless of peer-connect event rate.
 #[async_trait]
 pub trait PeerEventProvider: Send + Sync + 'static {
     /// Subscribes to outbound peer-connect events.
+    ///
+    /// Returns a [`mpsc::Receiver`] that MUST be backed by a bounded
+    /// channel — see the trait-level "Backpressure contract".
     ///
     /// # Errors
     /// Subscription failures surface as [`SyncError::Subscription`].
