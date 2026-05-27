@@ -1,6 +1,7 @@
 //! Sync [`Loop`](crate::Loop) tunables.
 
 use core::num::NonZeroUsize;
+use core::time::Duration;
 
 use crate::error::SyncError;
 
@@ -49,6 +50,13 @@ pub struct Config {
     /// acquires a permit before spawning, so excess events backpressure
     /// instead of fanning out.
     pub max_concurrent_peer_syncs: NonZeroUsize,
+    /// Per-request budget for a single `BlocksByRoot` RPC during a walk.
+    /// A peer that accepts the substream but never answers would
+    /// otherwise keep the walk task — and its port `Arc` clones — alive
+    /// indefinitely; the timeout aborts that one walk without affecting
+    /// other peers. This is a local scheduling bound only — the
+    /// `BlocksByRoot` wire protocol is unchanged.
+    pub request_timeout: Duration,
 }
 
 impl Config {
@@ -62,6 +70,11 @@ impl Config {
     /// low cap bounds contention without slowing realistic convergence.
     pub const DEFAULT_MAX_CONCURRENT_PEER_SYNCS: NonZeroUsize = nz(4);
 
+    /// Default per-request `BlocksByRoot` timeout. Generous: a healthy
+    /// peer answers a single-root request in well under a second, so 10 s
+    /// only fires on a genuinely stuck substream.
+    pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
     /// Builds a configuration from a non-zero depth, defaulting the other
     /// fields.
     #[must_use]
@@ -69,6 +82,7 @@ impl Config {
         Self {
             max_sync_depth,
             max_concurrent_peer_syncs: Self::DEFAULT_MAX_CONCURRENT_PEER_SYNCS,
+            request_timeout: Self::DEFAULT_REQUEST_TIMEOUT,
         }
     }
 
@@ -87,6 +101,13 @@ impl Config {
         max_concurrent_peer_syncs: NonZeroUsize,
     ) -> Self {
         self.max_concurrent_peer_syncs = max_concurrent_peer_syncs;
+        self
+    }
+
+    /// Returns a copy with `request_timeout` overridden.
+    #[must_use]
+    pub const fn with_request_timeout(mut self, request_timeout: Duration) -> Self {
+        self.request_timeout = request_timeout;
         self
     }
 }
