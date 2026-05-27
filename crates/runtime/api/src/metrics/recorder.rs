@@ -3,7 +3,7 @@
 //! The recorder owns provider closures rather than concrete runtime
 //! service handles. A composition root can adapt chain, p2p, duties, or
 //! sync state into small closures without introducing compile-time
-//! dependencies from `runtime-api` back into those crates.
+//! dependencies from `lean-api` back into those crates.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

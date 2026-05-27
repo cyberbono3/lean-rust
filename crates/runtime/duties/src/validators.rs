@@ -55,7 +55,7 @@ pub struct ValidatorAssignments {
 impl ValidatorAssignments {
     /// Loads and validates a `validators.yaml` file from disk.
     ///
-    /// Repository-relative paths resolve against the `runtime-duties`
+    /// Repository-relative paths resolve against the `lean-duties`
     /// crate root (`CARGO_MANIFEST_DIR`); absolute paths are used
     /// verbatim.
     ///

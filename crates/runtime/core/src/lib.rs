@@ -11,10 +11,8 @@
 //! - [`NodeError`] — typed lifecycle errors with the offending slot
 //!   label preserved.
 //!
-//! - [`Server`] — shared HTTP shell that binds a TCP listener, serves an
-//!   `axum::Router`, and terminates on a `CancellationToken`. Reused by
-//!   `runtime/api` for the Lean HTTP API and Prometheus metrics.
-//!
+//! Tracing-subscriber setup lives in the sibling `lean-observability`
+//! crate; the shared axum-server shell lives in `lean-api::httpsvc`.
 //! Service implementations (and the leanlog formatter) land in later
 //! issues; this crate carries no business logic.
 
@@ -22,17 +20,11 @@
 
 mod config;
 mod error;
-mod httpsvc;
 mod lifecycle;
 mod node;
-mod observability;
 mod service;
 
 pub use config::{NodeConfig, DEFAULT_SHUTDOWN_TIMEOUT};
 pub use error::{NodeError, ServiceFailure};
-pub use httpsvc::{HttpsvcError, Server};
 pub use node::Node;
-pub use observability::{
-    init_tracing, FileSink, ParseVerbosityError, TracingGuard, TracingInitError, Verbosity,
-};
 pub use service::Service;

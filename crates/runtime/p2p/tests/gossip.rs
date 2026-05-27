@@ -12,29 +12,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::path::Path;
-
+use lean_core::Service;
+use lean_p2p_host::PublishError;
 use protocol::{SignedBlock, SignedVote};
-use runtime_core::Service;
-use runtime_p2p::{DevnetHost, HostOptions, P2pService, PublishError};
-use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
-fn options_in(dir: &Path) -> HostOptions {
-    HostOptions::try_new(
-        "/ip4/127.0.0.1/udp/0/quic-v1",
-        "test/0.1.0",
-        &dir.join("id"),
-        None,
-    )
-    .unwrap()
-}
-
-fn build_service() -> (tempfile::TempDir, P2pService) {
-    let dir = tempdir().unwrap();
-    let service = DevnetHost::build(options_in(dir.path())).unwrap();
-    (dir, service)
-}
+mod common;
+use common::build_service;
 
 #[tokio::test]
 async fn receivers_are_none_before_start() {

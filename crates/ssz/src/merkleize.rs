@@ -147,8 +147,15 @@ pub fn mix_in_selector(root: &[u8; 32], selector: u8) -> [u8; 32] {
 /// Returns the root of an all-zero Merkle subtree of `width_pow2` width.
 ///
 /// `width_pow2` must be a power of two; values `≤ 1` return [`ZERO_HASH`].
+/// A non-power-of-two input would silently produce a wrong root (the
+/// `width /= 2` loop is integer-divide, which rounds down); the
+/// `debug_assert!` guards the precondition in debug builds.
 #[must_use]
 pub fn zero_tree_root(width_pow2: usize) -> [u8; 32] {
+    debug_assert!(
+        width_pow2 <= 1 || width_pow2.is_power_of_two(),
+        "zero_tree_root: width_pow2 ({width_pow2}) must be a power of two",
+    );
     if width_pow2 <= 1 {
         return ZERO_HASH;
     }
@@ -164,13 +171,21 @@ pub fn zero_tree_root(width_pow2: usize) -> [u8; 32] {
 // -- Internal helpers (pub(crate) for testing) ---------------------------
 
 /// Returns the smallest power of two ≥ `x`. `x ≤ 1` returns `1`.
+///
+/// Saturates at `1 << (usize::BITS - 1)` (the largest representable power of
+/// two) to keep the public `merkleize_with_limit` panic-free when an
+/// attacker-influenced `limit` reaches the top half of the `usize` range —
+/// `power_of_two_ceil(usize::MAX)` would otherwise compute `bits = usize::BITS`
+/// and panic on `1_usize << usize::BITS`.
 #[must_use]
 pub(crate) fn power_of_two_ceil(x: usize) -> usize {
     if x <= 1 {
         return 1;
     }
-    // Number of significant bits in (x-1) gives the next power of two ≥ x.
     let bits = (usize::BITS - (x - 1).leading_zeros()) as usize;
+    if bits >= usize::BITS as usize {
+        return 1_usize << (usize::BITS - 1);
+    }
     1_usize << bits
 }
 

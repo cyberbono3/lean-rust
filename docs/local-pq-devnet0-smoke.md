@@ -2,14 +2,14 @@
 
 This report tracks Issue #13: run and record end-to-end smoke validation for
 the Docker `ream <-> lean-rust` local-pq devnet, and apply logging/tracing
-features that make pq-devnet-0 failures diagnosable.
+features that make fixtures failures diagnosable.
 
 ## Current Branch State
 
 | Field | Value |
 | --- | --- |
 | Branch | `test/run-record-e2e-devnet-smoke-validation` |
-| Merge state | Includes `pq-devnet-0` and logging/tracing features. |
+| Merge state | Includes `fixtures` and logging/tracing features. |
 | Reference | Ream `ethpandaops/ream:master-0bceaee` |
 | Latest result | Pass for two-node head convergence and cleanup; prior follow-ups addressed. |
 
@@ -44,7 +44,7 @@ features that make pq-devnet-0 failures diagnosable.
 ## Generated Artifacts
 
 `make devnet-genesis` writes Ream-compatible artifacts under
-`crates/pq-devnet-0/genesis/`: `config.yaml` with `GENESIS_TIME`,
+`crates/fixtures/genesis/`: `config.yaml` with `GENESIS_TIME`,
 `genesis.ssz` as the 145-byte Ream leanchain genesis state, `genesis.json` for
 inspection, `validators.yaml`, and `nodes.yaml`. lean-rust reads the same
 genesis state through a native SSZ decode first, then a Ream leanchain
@@ -153,9 +153,9 @@ other's blocks.
 
 ```sh
 cargo fmt --all
-bash -n crates/pq-devnet-0/scripts/core/check-cleanup.sh crates/pq-devnet-0/scripts/core/check-genesis-time.sh crates/pq-devnet-0/scripts/core/devnet-paths.sh crates/pq-devnet-0/scripts/core/setup-genesis.sh crates/pq-devnet-0/scripts/core/smoke-head-sample.sh crates/pq-devnet-0/scripts/core/status.sh
-cargo test -p beacon -p forkchoice -p runtime-p2p -p pq-devnet-0 -- --nocapture
-cargo clippy -p beacon -p forkchoice -p runtime-p2p -p pq-devnet-0 --all-targets -- -D warnings
+bash -n crates/fixtures/scripts/core/check-cleanup.sh crates/fixtures/scripts/core/check-genesis-time.sh crates/fixtures/scripts/core/devnet-paths.sh crates/fixtures/scripts/core/setup-genesis.sh crates/fixtures/scripts/core/smoke-head-sample.sh crates/fixtures/scripts/core/status.sh
+cargo test -p beacon -p forkchoice -p runtime-p2p -p fixtures -- --nocapture
+cargo clippy -p beacon -p forkchoice -p runtime-p2p -p fixtures --all-targets -- -D warnings
 make devnet-down
 FORCE=1 make devnet-build
 make devnet-genesis
@@ -166,12 +166,12 @@ curl --fail http://127.0.0.1:8080/metrics
 curl --fail http://127.0.0.1:8081/metrics
 make devnet-clean
 make devnet-clean-check
-cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
+cp crates/fixtures/.env.example crates/fixtures/.env
 make devnet-start
 make devnet-status
 make devnet-stop
 make devnet-clean
-rm -f crates/pq-devnet-0/.env
+rm -f crates/fixtures/.env
 make verify
 git diff --check
 ```

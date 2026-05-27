@@ -1,19 +1,19 @@
 //! Adapter that lets the sync [`Loop`](crate::Loop) drive
-//! [`runtime_chain::Service`] through the [`Chain`](crate::Chain)
+//! [`lean_chain::Service`] through the [`Chain`](crate::Chain)
 //! port.
 //!
-//! Lives in this crate (rather than `runtime-chain`) because the
+//! Lives in this crate (rather than `lean-chain`) because the
 //! orphan rule requires `impl Trait for Type` to be defined alongside
 //! either the trait or the type. The trait `Chain` is owned by
-//! `runtime-sync`; the type [`runtime_chain::Service`] is owned by
-//! `runtime-chain`. Putting the impl here keeps `runtime-chain` free
+//! `lean-sync`; the type [`lean_chain::Service`] is owned by
+//! `lean-chain`. Putting the impl here keeps `lean-chain` free
 //! of any sync dependency.
 
 use async_trait::async_trait;
-use engine::BlockImportResult;
-use networking::Status;
+use lean_chain::engine::BlockImportResult;
+use lean_chain::{ChainError, Service as ChainService};
+use lean_wire::Status;
 use protocol::SignedBlock;
-use runtime_chain::{ChainError, Service as ChainService};
 use types::Bytes32;
 
 use crate::ports::Chain;

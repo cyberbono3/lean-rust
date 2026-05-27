@@ -289,6 +289,18 @@ impl Store {
     pub fn validate_attestation(&self, sv: &SignedVote) -> Result<(), ForkchoiceError> {
         let vote = &sv.message;
 
+        // Bound validator_id against config.num_validators BEFORE any
+        // block lookups. The vote pool is keyed by validator id; without
+        // this gate a malicious peer can flood with arbitrary u64 ids
+        // (~4 KiB per pool entry) and OOM the process.
+        let vid = sv.validator_id.get();
+        if vid >= self.config.num_validators {
+            return Err(ForkchoiceError::ValidatorIndexOutOfRange {
+                validator_id: vid,
+                num_validators: self.config.num_validators,
+            });
+        }
+
         let source_block = self.lookup_block(vote.source.root, |root| {
             ForkchoiceError::UnknownSourceBlock { root }
         })?;

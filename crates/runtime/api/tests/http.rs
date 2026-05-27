@@ -1,4 +1,4 @@
-//! Integration tests for [`runtime_api::HttpService`].
+//! Integration tests for [`lean_api::HttpService`].
 //!
 //! Each test binds an ephemeral loopback port via the service lifecycle,
 //! reads `bound_addr()`, then drives a raw HTTP/1.1 request over
@@ -15,12 +15,12 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
-use protocol::{Checkpoint, Slot};
-use runtime_api::{
+use lean_api::{
     http::{ETH_V1_HEAD_PATH, FULL_HEAD_PATHS, HEAD_PATHS, LEAN_V0_HEAD_PATH},
     HttpService,
 };
-use runtime_core::Service;
+use lean_core::Service;
+use protocol::{Checkpoint, Slot};
 use storage::{HeadInfo, MemoryStore, Store};
 use tokio_util::sync::CancellationToken;
 use types::Bytes32;

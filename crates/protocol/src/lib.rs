@@ -56,6 +56,7 @@ pub mod checkpoint;
 pub mod error;
 pub mod slot;
 pub mod state;
+pub mod stf;
 pub mod validator;
 pub mod vote;
 

@@ -1,7 +1,7 @@
 //! Node-local bridge from decoded p2p gossip into the chain service.
 //!
-//! `runtime-p2p` owns wire decoding and exposes typed one-shot receivers.
-//! `runtime-chain` owns validation and persistence. This service is the
+//! `lean-p2p-host` owns wire decoding and exposes typed one-shot receivers.
+//! `lean-chain` owns validation and persistence. This service is the
 //! composition-layer glue that drains those receivers while the node is
 //! running.
 
@@ -9,11 +9,11 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use engine::{AttestationImportResult, BlockImportResult};
+use lean_chain::engine::{AttestationImportResult, BlockImportResult};
+use lean_chain::Service as ChainService;
+use lean_core::Service;
+use lean_p2p_host::{BlockReceiver, P2pService, VoteReceiver};
 use parking_lot::Mutex;
-use runtime_chain::Service as ChainService;
-use runtime_core::Service;
-use runtime_p2p::{BlockReceiver, P2pService, VoteReceiver};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};

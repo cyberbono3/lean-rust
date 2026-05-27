@@ -12,38 +12,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::path::Path;
 use std::sync::Arc;
 
-use networking::{BlocksByRootRequest, Status};
+use lean_core::Service;
+use lean_wire::{BlocksByRootRequest, Status};
+use p2p_rpc::{NoOpRpcProvider, RpcError, RpcProvider};
 use protocol::{Checkpoint, SignedBlock, Slot};
-use runtime_core::Service;
-use runtime_p2p::{DevnetHost, HostOptions, NoOpRpcProvider, P2pService, RpcError, RpcProvider};
-use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 use types::Bytes32;
 
-fn options_in(dir: &Path) -> HostOptions {
-    HostOptions::try_new(
-        "/ip4/127.0.0.1/udp/0/quic-v1",
-        "test/0.1.0",
-        &dir.join("id"),
-        None,
-    )
-    .unwrap()
-}
-
-fn build_service() -> (tempfile::TempDir, P2pService) {
-    let dir = tempdir().unwrap();
-    let service = DevnetHost::build(options_in(dir.path())).unwrap();
-    (dir, service)
-}
-
-fn build_service_with(provider: Arc<dyn RpcProvider>) -> (tempfile::TempDir, P2pService) {
-    let dir = tempdir().unwrap();
-    let service = DevnetHost::build_with_provider(options_in(dir.path()), provider).unwrap();
-    (dir, service)
-}
+mod common;
+use common::{build_service, build_service_with};
 
 #[tokio::test]
 async fn no_op_provider_drives_lifecycle_cleanly() {

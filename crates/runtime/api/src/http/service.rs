@@ -1,7 +1,7 @@
-//! [`HttpService`] — `runtime_core::Service` impl driving the Lean
+//! [`HttpService`] — `lean_core::Service` impl driving the Lean
 //! HTTP API.
 //!
-//! Lifecycle mirrors `runtime/p2p::P2pService`'s state machine: build
+//! Lifecycle mirrors `lean-p2p-host::P2pService`'s state machine: build
 //! → `Idle`, `start` binds the listener and spawns the serve task →
 //! `Running`, `stop` cancels the token and joins the task → `Stopped`.
 //! On a caller-supplied cancel deadline during `stop`, the join handle
@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::Router;
-use runtime_core::Service;
+use lean_core::Service;
 use storage::Store;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -59,7 +59,7 @@ impl HttpService {
 #[async_trait]
 impl Service for HttpService {
     fn name(&self) -> &'static str {
-        "runtime-api-http"
+        "lean-api-http"
     }
 
     #[instrument(name = "http.start", skip(self), fields(listen_addr = %self.server.listen_addr()))]

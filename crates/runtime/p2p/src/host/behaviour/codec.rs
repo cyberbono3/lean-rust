@@ -2,8 +2,8 @@
 //! `BlocksByRoot` protocols.
 //!
 //! Wire shape per message: `uvarint(ssz_len) || snappy_framed(ssz_bytes)`
-//! ([`networking::write_req_resp_frame`] /
-//! [`networking::read_req_resp_frame`]).
+//! ([`lean_wire::write_req_resp_frame`] /
+//! [`lean_wire::read_req_resp_frame`]).
 //! The substream half-closes after the sender finishes, so each codec
 //! method reads to EOF and decodes the resulting buffer in one shot.
 //!
@@ -16,12 +16,21 @@ use std::io::{self, Cursor};
 
 use async_trait::async_trait;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use libp2p::{request_response, StreamProtocol};
-use networking::{
+use lean_wire::{
     read_req_resp_frame, write_req_resp_frame, BlocksByRootRequest, BlocksByRootResponse, Status,
     BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
+use libp2p::{request_response, StreamProtocol};
 use protocol::SignedBlock;
+
+/// Defensive upper bound on a single inbound req/resp stream payload.
+///
+/// A malicious peer that holds the substream open and keeps sending bytes
+/// can OOM the process via `read_to_end` if no cap exists. Sized
+/// generously enough for a full `BlocksByRoot` response (≤ `MAX_REQUEST_BLOCKS`
+/// = 1024 `SignedBlock`s plus per-frame snappy / uvarint overhead) but
+/// tight enough to fault-stop an attacker.
+const MAX_RPC_STREAM_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Outbound or inbound request payload on one of the devnet0 req/resp
 /// protocols.
@@ -31,7 +40,7 @@ pub enum RpcRequest {
     /// checkpoints.
     Status(Status),
     /// Request a list of blocks by their tree roots; bounded at
-    /// [`networking::MAX_REQUEST_BLOCKS`] at decode time.
+    /// [`lean_wire::MAX_REQUEST_BLOCKS`] at decode time.
     BlocksByRoot(BlocksByRootRequest),
 }
 
@@ -146,8 +155,27 @@ async fn write_framed<T: AsyncWrite + Unpin + Send>(io: &mut T, bytes: &[u8]) ->
 }
 
 async fn read_to_end<T: AsyncRead + Unpin + Send>(io: &mut T) -> io::Result<Vec<u8>> {
+    // Cap inbound payload to prevent OOM from a peer that keeps the
+    // substream open and streams unbounded bytes. The frame-level uvarint
+    // limit is enforced separately inside decode_*_frame; this is the
+    // outer stream-level guard.
+    //
+    // `take(MAX + 1)` lets us distinguish a legitimate exact-cap read
+    // (rare but allowed) from a peer overrunning the limit. Reading
+    // strictly more than MAX bytes triggers the InvalidData error.
     let mut buf = Vec::new();
-    io.read_to_end(&mut buf).await?;
+    let read = io
+        .take(MAX_RPC_STREAM_BYTES + 1)
+        .read_to_end(&mut buf)
+        .await?;
+    if u64::try_from(read).unwrap_or(u64::MAX) > MAX_RPC_STREAM_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "inbound rpc stream exceeded MAX_RPC_STREAM_BYTES ({MAX_RPC_STREAM_BYTES} bytes)"
+            ),
+        ));
+    }
     Ok(buf)
 }
 
@@ -186,13 +214,15 @@ fn decode_blocks_by_root_response(buf: &[u8]) -> io::Result<BlocksByRootResponse
 fn decode_frames<T: ssz::Decode>(buf: &[u8]) -> io::Result<Vec<T>> {
     let mut cursor = Cursor::new(buf);
     let mut frames = Vec::new();
-    while let Some(ssz_bytes) = read_req_resp_frame(&mut cursor, None).map_err(networking_err)? {
+    while let Some(ssz_bytes) =
+        read_req_resp_frame(&mut cursor, Some(MAX_RPC_STREAM_BYTES)).map_err(networking_err)?
+    {
         frames.push(ssz::decode::<T>(&ssz_bytes).map_err(ssz_err)?);
     }
     Ok(frames)
 }
 
-fn networking_err(err: networking::NetworkingError) -> io::Error {
+fn networking_err(err: lean_wire::NetworkingError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err)
 }
 
@@ -219,8 +249,8 @@ fn protocol_mismatch(name: &str, kind: &'static str) -> io::Error {
 mod tests {
     use super::*;
     use futures::io::Cursor;
+    use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
     use libp2p::request_response::Codec;
-    use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
     use protocol::SignedBlock;
 
     fn status_proto() -> StreamProtocol {

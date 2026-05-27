@@ -3,7 +3,7 @@
 //! Following Decision 7 (Dependency Inversion): this module declares the
 //! trait surface; impls live elsewhere.
 //!
-//! - [`Chain`] is satisfied by [`runtime_chain::Service`] via the
+//! - [`Chain`] is satisfied by [`lean_chain::Service`] via the
 //!   adapter `impl` in [`crate::chain_adapter`]. Tests in this crate
 //!   use in-memory fakes.
 //! - [`Publisher`] has no in-crate impl. The `node` crate provides the
@@ -11,8 +11,8 @@
 //!   `MockPublisher` test double (defined in `tests/scheduler.rs`).
 
 use async_trait::async_trait;
+use lean_chain::ChainError;
 use protocol::{SignedBlock, SignedVote, Slot, ValidatorIndex};
-use runtime_chain::ChainError;
 use thiserror::Error;
 
 /// Failure surface for [`Publisher`] implementations.
@@ -38,7 +38,7 @@ pub struct PublishError(#[from] anyhow::Error);
 #[async_trait]
 pub trait Chain: Send + Sync + 'static {
     /// Builds a locally authored block for `slot` proposed by
-    /// `validator`. See [`runtime_chain::Service::produce_block`] for the
+    /// `validator`. See [`lean_chain::Service::produce_block`] for the
     /// concrete persistence + state-refresh contract.
     ///
     /// # Errors
@@ -50,7 +50,7 @@ pub trait Chain: Send + Sync + 'static {
     ) -> Result<SignedBlock, ChainError>;
 
     /// Builds a locally authored attestation for `slot` by `validator`.
-    /// See [`runtime_chain::Service::produce_attestation`] for the
+    /// See [`lean_chain::Service::produce_attestation`] for the
     /// concrete own-vote re-import contract.
     ///
     /// # Errors

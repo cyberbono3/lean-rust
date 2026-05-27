@@ -1,5 +1,5 @@
 [package]
-name          = "runtime-core"
+name          = "lean-core"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -11,20 +11,14 @@ description   = "Service trait, Node, lifecycle (Tier 5)."
 workspace = true
 
 [dependencies]
-tokio              = { workspace = true }
-tokio-util         = { workspace = true }
-async-trait        = { workspace = true }
-axum               = { workspace = true }
-tracing            = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing-appender   = { workspace = true }
-time               = { workspace = true }
-parking_lot        = { workspace = true }
-thiserror          = { workspace = true }
-anyhow             = { workspace = true }
+tokio       = { workspace = true }
+tokio-util  = { workspace = true }
+async-trait = { workspace = true }
+tracing     = { workspace = true }
+parking_lot = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
 
 [dev-dependencies]
 static_assertions = { workspace = true }
 tokio             = { workspace = true, features = ["test-util"] }
-tempfile          = { workspace = true }
-serial_test       = { workspace = true }

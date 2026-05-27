@@ -4,7 +4,7 @@
 //! [`STATUS_PROTOCOL_V1`] and [`BLOCKS_BY_ROOT_PROTOCOL_V1`]), identify,
 //! and ping into a single typed behaviour. The gossipsub message-id
 //! function is wired to the deterministic 20-byte primitive in
-//! [`networking::compute_gossipsub_message_id`].
+//! [`lean_wire::compute_gossipsub_message_id`].
 //!
 //! Request/response handler logic lives outside this crate; the codec
 //! is implemented in [`codec::SszSnappyCodec`] and dispatched per
@@ -12,6 +12,10 @@
 
 use std::{cell::RefCell, time::Duration};
 
+use lean_wire::{
+    compute_gossipsub_message_id, ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1,
+    MESSAGE_DOMAIN_INVALID_SNAPPY, MESSAGE_DOMAIN_VALID_SNAPPY, STATUS_PROTOCOL_V1,
+};
 use libp2p::{
     gossipsub, identify,
     identity::Keypair,
@@ -19,10 +23,6 @@ use libp2p::{
     request_response::{self, ProtocolSupport},
     swarm::NetworkBehaviour,
     StreamProtocol,
-};
-use networking::{
-    compute_gossipsub_message_id, ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1,
-    MESSAGE_DOMAIN_INVALID_SNAPPY, MESSAGE_DOMAIN_VALID_SNAPPY, STATUS_PROTOCOL_V1,
 };
 
 use crate::error::{HostError, HostResult};
@@ -163,7 +163,7 @@ fn is_valid_snappy(data: &[u8]) -> Option<usize> {
 }
 
 /// Resolves the snappy domain by attempting to decode `msg.data`, then
-/// delegates to [`networking::compute_gossipsub_message_id`]. Wired in
+/// delegates to [`lean_wire::compute_gossipsub_message_id`]. Wired in
 /// as the gossipsub `message_id_fn` at host build time.
 ///
 /// On a valid snappy payload, the decompressed bytes are snapshotted
@@ -214,8 +214,8 @@ pub(crate) fn take_decompressed_for(id: &gossipsub::MessageId) -> Option<Vec<u8>
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use lean_wire::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};
     use libp2p::gossipsub::{Message, TopicHash};
-    use networking::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};
 
     fn message(topic: &str, data: Vec<u8>) -> Message {
         Message {

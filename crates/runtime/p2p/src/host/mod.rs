@@ -40,11 +40,11 @@ pub(crate) enum HostCommand {
     /// [`crate::gossip::Host::publish_vote`].
     Publish {
         /// Pre-built libp2p topic (constructed from the canonical
-        /// [`networking::BLOCK_TOPIC_V1`] / [`networking::VOTE_TOPIC_V1`]
+        /// [`lean_wire::BLOCK_TOPIC_V1`] / [`lean_wire::VOTE_TOPIC_V1`]
         /// strings via [`gossipsub::IdentTopic::new`]).
         topic: gossipsub::IdentTopic,
         /// SSZ + Snappy-block-compressed payload — produced upstream by
-        /// [`networking::encode_gossip`] so the swarm task does not need
+        /// [`lean_wire::encode_gossip`] so the swarm task does not need
         /// to know the payload type.
         payload: Vec<u8>,
         /// One-shot reply channel — the swarm task forwards the libp2p

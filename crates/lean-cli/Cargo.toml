@@ -1,0 +1,28 @@
+[package]
+name          = "lean-cli"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Library surface for the lean-rust binary: CLI parsing, genesis builders, identity keygen."
+
+[lints]
+workspace = true
+
+[dependencies]
+lean-duties        = { path = "../runtime/duties" }
+lean-p2p-host      = { path = "../runtime/p2p" }
+lean-observability = { path = "../observability" }
+config             = { path = "../config" }
+protocol           = { path = "../protocol" }
+ssz                = { path = "../ssz" }
+anyhow             = { workspace = true }
+clap               = { workspace = true }
+libp2p             = { workspace = true }
+tracing            = { workspace = true }
+
+[dev-dependencies]
+fixtures = { path = "../fixtures" }
+tempfile = { workspace = true }
+hex      = { workspace = true }

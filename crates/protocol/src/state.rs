@@ -269,6 +269,16 @@ impl State {
             "justifications_validators",
         )?;
 
+        // The decoded variable-length fields are intentionally NOT
+        // copied into the returned State: this function is a
+        // validate-then-discard anchor-state producer, not a full
+        // legacy-shape reconstruction. It runs ream-format SSZ through
+        // the field-level parsers (so we surface malformed input as
+        // typed errors) and then returns the canonical slot-0 anchor
+        // shape (empty history, default bitlists) consistent with how
+        // the rest of the codebase treats imported anchor states. See
+        // lean-cli's loads_ream_legacy_local_pq_state_from_ssz test
+        // for the contract.
         Ok(Self {
             config,
             latest_block_header: BlockHeader {
@@ -1793,7 +1803,7 @@ mod slot_processing_tests {
 
     /// Minimal fixture: a non-default `State` whose `latest_block_header`
     /// commits to the empty `BlockBody`. Mirrors the slot-0 shape used by
-    /// `statetransition::genesis_state` without crossing the crate boundary.
+    /// `crate::stf::genesis_state` without going through the module path.
     fn fresh_state() -> State {
         State {
             latest_block_header: BlockHeader {
@@ -1937,22 +1947,8 @@ mod state_transition_tests {
 
     const GENESIS_TIME: u64 = 1_700_000_000;
 
-    /// Genesis-shape `State` for an `n`-validator chain whose
-    /// `latest_block_header` commits to the empty body. Inlined here to
-    /// avoid pulling `statetransition` into `protocol`'s test deps.
     fn genesis_state(num_validators: u64) -> State {
-        let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
-        State {
-            config: ProtocolConfig {
-                num_validators,
-                genesis_time: GENESIS_TIME,
-            },
-            latest_block_header: BlockHeader {
-                body_root,
-                ..BlockHeader::default()
-            },
-            ..State::default()
-        }
+        crate::stf::genesis_state(num_validators, GENESIS_TIME)
     }
 
     /// Two-phase build: produce a `SignedBlock` for `state` whose body is

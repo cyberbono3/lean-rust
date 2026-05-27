@@ -3,10 +3,10 @@
 //! Ports `lean-go/runtime/duties/`. Loads local validator assignments
 //! from YAML, schedules proposers at slot boundaries and attesters at
 //! the `vote_due_bps` deadline. Production goes through the [`Chain`]
-//! port (satisfied by [`runtime_chain::Service`] via an adapter in
+//! port (satisfied by [`lean_chain::Service`] via an adapter in
 //! [`chain_adapter`]); publish goes through the [`Publisher`] port
 //! whose impl lives in `node` per Decision 7 (Dependency Inversion).
-//! No `runtime-p2p` import lives in this crate.
+//! No `lean-p2p-host` import lives in this crate.
 //!
 //! Out of scope (deliberate, mirrors lean-go): aggregator duties,
 //! direct forkchoice mutation, optional metrics hooks.

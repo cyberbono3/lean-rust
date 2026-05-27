@@ -1,6 +1,6 @@
 //! LMD-GHOST fork choice + 4-phase interval ticking.
 //!
-//! Tier 3: depends on [`protocol`], [`statetransition`], [`config`], [`ssz`],
+//! Tier 3: depends on [`protocol`] (which owns `stf`), [`config`], [`ssz`],
 //! and [`types`]. No `tokio`, `tracing`, `libp2p`, `runtime`, `networking`,
 //! or `storage` imports.
 //!

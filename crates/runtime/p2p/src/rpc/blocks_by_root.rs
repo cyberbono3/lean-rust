@@ -6,8 +6,8 @@
 //! dropped — the resulting response is shorter than the request length
 //! when some roots are missing, and empty when all are.
 
+use lean_wire::{BlocksByRootRequest, BlocksByRootResponse};
 use libp2p::{request_response::ResponseChannel, PeerId, Swarm};
-use networking::{BlocksByRootRequest, BlocksByRootResponse};
 use tracing::{debug, warn};
 
 use super::{RpcProvider, RpcResponse};
@@ -25,7 +25,7 @@ pub(crate) fn build_response(
         .iter()
         .filter_map(|root| provider.get_block_by_root(root));
     // The `BlocksByRootResponse::new` constructor enforces the
-    // `networking::MAX_REQUEST_BLOCKS` cap. The request side is
+    // `lean_wire::MAX_REQUEST_BLOCKS` cap. The request side is
     // independently capped at SSZ-decode time and `filter_map` only
     // ever shrinks the iterator, so the cap is never exceeded here in
     // practice; the warn-and-default branch is defensive belt-and-
@@ -62,7 +62,7 @@ pub(crate) fn on_inbound(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use networking::Status;
+    use lean_wire::Status;
     use protocol::SignedBlock;
     use std::collections::HashMap;
     use types::Bytes32;

@@ -1,5 +1,5 @@
 [package]
-name          = "runtime-p2p"
+name          = "lean-p2p-host"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -11,8 +11,9 @@ description   = "libp2p QUIC-v1 host construction with gossipsub + request_respo
 workspace = true
 
 [dependencies]
-runtime-core      = { path = "../core" }
-networking        = { path = "../../networking" }
+lean-core         = { path = "../core" }
+p2p-rpc           = { path = "../p2p-rpc" }
+lean-wire         = { path = "../../networking" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }
 ssz               = { path = "../../ssz" }
@@ -35,6 +36,6 @@ futures           = { workspace = true }
 static_assertions = { workspace = true }
 
 [dev-dependencies]
-pq-devnet-0 = { path = "../../pq-devnet-0" }
+fixtures = { path = "../../fixtures" }
 tempfile    = { workspace = true }
 tokio       = { workspace = true, features = ["test-util"] }

@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use networking::Status;
+use lean_chain::Service as ChainService;
+use lean_wire::Status;
+use p2p_rpc::RpcProvider;
 use protocol::SignedBlock;
-use runtime_chain::Service as ChainService;
-use runtime_p2p::RpcProvider;
 use storage::Store;
 use tracing::warn;
 use types::Bytes32;
@@ -45,8 +45,8 @@ mod tests {
     use storage::{HeadInfo, MemoryStore};
 
     fn build_adapter() -> (RpcProviderAdapter, Arc<dyn Store>) {
-        let (state, block) = engine::test_fixtures::anchor_pair(4);
-        let engine = engine::Engine::from_anchor(state, block).unwrap();
+        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+        let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
         let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
         let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
         (RpcProviderAdapter::new(chain, Arc::clone(&store)), store)

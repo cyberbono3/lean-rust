@@ -6,7 +6,7 @@
 //! clock, and forwards production through the [`Chain`] port and
 //! publish through the [`Publisher`] port.
 //!
-//! Lifecycle mirrors [`runtime_sync::Loop`]: [`runtime_core::Service`]
+//! Lifecycle mirrors [`lean_sync::Loop`]: [`lean_core::Service`]
 //! impl with `start` / `stop` / `status`, cancellation-via-token, and
 //! best-effort drop cleanup.
 
@@ -61,7 +61,7 @@ pub struct Service {
 struct ServiceState {
     run: Option<RunHandle>,
     /// Most recent non-terminal scheduler error. Surfaced via
-    /// [`runtime_core::Service::status`]. Reset on each `start`.
+    /// [`lean_core::Service::status`]. Reset on each `start`.
     last_err: Option<DutiesError>,
 }
 
@@ -122,7 +122,7 @@ impl Service {
 
 impl Drop for Service {
     /// Best-effort cleanup if the service is dropped without going
-    /// through [`runtime_core::Service::stop`]: cancel the shared token
+    /// through [`lean_core::Service::stop`]: cancel the shared token
     /// so the worker exits on its next iteration. The handle detaches;
     /// cancellation guarantees the task does not loop holding `Arc`
     /// clones of the chain / publisher.
@@ -134,7 +134,7 @@ impl Drop for Service {
 }
 
 #[async_trait]
-impl runtime_core::Service for Service {
+impl lean_core::Service for Service {
     fn name(&self) -> &'static str {
         "duties"
     }
@@ -509,14 +509,14 @@ mod tests {
             &self,
             _slot: Slot,
             _validator: ValidatorIndex,
-        ) -> Result<SignedBlock, runtime_chain::ChainError> {
+        ) -> Result<SignedBlock, lean_chain::ChainError> {
             Ok(SignedBlock::default())
         }
         async fn produce_attestation(
             &self,
             _slot: Slot,
             _validator: ValidatorIndex,
-        ) -> Result<SignedVote, runtime_chain::ChainError> {
+        ) -> Result<SignedVote, lean_chain::ChainError> {
             Ok(SignedVote::default())
         }
     }
@@ -565,8 +565,6 @@ mod tests {
     #[tokio::test]
     async fn status_before_start_errors() {
         let svc = service();
-        assert!(<Service as runtime_core::Service>::status(&svc)
-            .await
-            .is_err());
+        assert!(<Service as lean_core::Service>::status(&svc).await.is_err());
     }
 }

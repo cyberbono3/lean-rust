@@ -1,0 +1,22 @@
+[package]
+name          = "lean-observability"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Tracing-subscriber setup: verbosity, EnvFilter directive, optional file sink."
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror          = { workspace = true }
+time               = { workspace = true }
+tracing            = { workspace = true }
+tracing-appender   = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile    = { workspace = true }
+serial_test = { workspace = true }

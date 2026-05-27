@@ -25,7 +25,7 @@ const fn nz(n: usize) -> NonZeroUsize {
 /// # Examples
 /// ```
 /// use core::num::NonZeroUsize;
-/// use runtime_sync::Config;
+/// use lean_sync::Config;
 ///
 /// let cfg = Config::try_from(32usize).unwrap();
 /// assert_eq!(cfg.max_sync_depth.get(), 32);

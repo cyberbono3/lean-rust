@@ -23,7 +23,7 @@ const GENESIS_TIME: u64 = 1_700_000_000;
 
 /// Genesis-shape `State` for an `n`-validator chain whose
 /// `latest_block_header` commits to the empty `BlockBody`. Inlined here
-/// rather than re-exported from `statetransition` so forkchoice tests stay
+/// rather than re-exported from `protocol::stf` so forkchoice tests stay
 /// independent of the genesis builder's evolution.
 fn genesis_state(num_validators: u64) -> State {
     let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();

@@ -8,7 +8,7 @@ The repo contains a crate-local Docker devnet for running one `ream` node and
 one `lean-rust` node against generated local-pq genesis state.
 
 ```sh
-cp crates/pq-devnet-0/.env.example crates/pq-devnet-0/.env
+cp crates/fixtures/.env.example crates/fixtures/.env
 make devnet-start
 make devnet-status
 make devnet-logs

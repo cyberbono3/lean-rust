@@ -18,14 +18,14 @@
 //! [`crate::host::behaviour::take_decompressed_for`] so the SSZ decode
 //! path can skip the second `decode_gossip` snappy round-trip. On a
 //! cache miss (rare in steady state) we fall back to
-//! [`networking::decode_gossip`].
+//! [`lean_wire::decode_gossip`].
 //!
 //! Decode failures and full receivers are logged at `warn` and dropped
 //! — gossipsub mesh replay covers transient loss, and the decode error
 //! path is non-fatal (peers may publish junk).
 
+use lean_wire::NetworkingError;
 use libp2p::gossipsub;
-use networking::NetworkingError;
 use protocol::{SignedBlock, SignedVote};
 use ssz::Decode;
 use tokio::sync::mpsc;
@@ -57,11 +57,11 @@ impl<T> GossipReceiver<T> {
 }
 
 /// Inbound channel for [`SignedBlock`] payloads received on
-/// [`networking::BLOCK_TOPIC_V1`].
+/// [`lean_wire::BLOCK_TOPIC_V1`].
 pub type BlockReceiver = GossipReceiver<SignedBlock>;
 
 /// Inbound channel for [`SignedVote`] payloads received on
-/// [`networking::VOTE_TOPIC_V1`].
+/// [`lean_wire::VOTE_TOPIC_V1`].
 pub type VoteReceiver = GossipReceiver<SignedVote>;
 
 /// Routes an inbound `gossipsub::Message` to the matching per-topic
@@ -90,10 +90,10 @@ pub(crate) fn route_gossipsub_message(
     let cached = take_decompressed_for(message_id);
     let topic_str = msg.topic.as_str();
     match topic_str {
-        networking::BLOCK_TOPIC_V1 => {
+        lean_wire::BLOCK_TOPIC_V1 => {
             forward::<SignedBlock>(&msg.data, cached.as_deref(), block_tx, "block");
         }
-        networking::VOTE_TOPIC_V1 => {
+        lean_wire::VOTE_TOPIC_V1 => {
             forward::<SignedVote>(&msg.data, cached.as_deref(), vote_tx, "vote");
         }
         _ => debug!(topic = %topic_str, "unknown gossip topic"),
@@ -112,7 +112,7 @@ fn forward<T>(
         // Cache hit: snappy already done by `gossipsub_message_id`.
         Some(bytes) => ssz::decode(bytes).map_err(Into::into),
         // Cache miss: run the full snappy + SSZ decode.
-        None => networking::decode_gossip::<T>(data),
+        None => lean_wire::decode_gossip::<T>(data),
     };
     match decoded {
         Ok(value) => {
@@ -154,10 +154,10 @@ mod tests {
         let (vote_tx, mut vote_rx) = mpsc::channel::<SignedVote>(8);
 
         let block = SignedBlock::default();
-        let payload = networking::encode_gossip(&block);
+        let payload = lean_wire::encode_gossip(&block);
         route_gossipsub_message(
             &dummy_id(),
-            &synth_message(networking::BLOCK_TOPIC_V1, payload),
+            &synth_message(lean_wire::BLOCK_TOPIC_V1, payload),
             &block_tx,
             &vote_tx,
         );
@@ -173,10 +173,10 @@ mod tests {
         let (vote_tx, mut vote_rx) = mpsc::channel::<SignedVote>(8);
 
         let vote = SignedVote::default();
-        let payload = networking::encode_gossip(&vote);
+        let payload = lean_wire::encode_gossip(&vote);
         route_gossipsub_message(
             &dummy_id(),
-            &synth_message(networking::VOTE_TOPIC_V1, payload),
+            &synth_message(lean_wire::VOTE_TOPIC_V1, payload),
             &block_tx,
             &vote_tx,
         );
@@ -212,10 +212,10 @@ mod tests {
 
         // Valid snappy frame, but the decompressed bytes are too short
         // to be a SignedBlock — decode_gossip returns NetworkingError::Ssz.
-        let payload = networking::encode_gossip_data(&[0_u8; 4]);
+        let payload = lean_wire::encode_gossip_data(&[0_u8; 4]);
         route_gossipsub_message(
             &dummy_id(),
-            &synth_message(networking::BLOCK_TOPIC_V1, payload),
+            &synth_message(lean_wire::BLOCK_TOPIC_V1, payload),
             &block_tx,
             &vote_tx,
         );
@@ -239,8 +239,8 @@ mod tests {
         let (vote_tx, mut vote_rx) = mpsc::channel::<SignedVote>(8);
 
         let block = SignedBlock::default();
-        let payload = networking::encode_gossip(&block);
-        let mut msg = synth_message(networking::BLOCK_TOPIC_V1, payload);
+        let payload = lean_wire::encode_gossip(&block);
+        let mut msg = synth_message(lean_wire::BLOCK_TOPIC_V1, payload);
         let id = gossipsub_message_id(&msg);
 
         // Corrupt the raw snappy bytes; a fallback would now fail.

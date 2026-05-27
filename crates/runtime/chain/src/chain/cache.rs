@@ -1,7 +1,7 @@
 //! `ChainSnapshot` — hot-read snapshot of engine state.
 //!
 //! Refreshed after each `Accepted` import and each tick. Non-writer
-//! services (`runtime/api`, `runtime/p2p`) read through a shared
+//! services (`lean-api`, `lean-p2p-host`) read through a shared
 //! `Arc<RwLock<ChainSnapshot>>` clone instead of contending on the
 //! engine mutex.
 //!
@@ -9,7 +9,7 @@
 //! the state observed at the most recent refresh, not the live state.
 //! Use [`Engine`] accessors directly when strong consistency matters.
 
-use engine::Engine;
+use crate::engine::Engine;
 use protocol::Checkpoint;
 use types::Bytes32;
 

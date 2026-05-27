@@ -1,21 +1,30 @@
 [package]
-name          = "runtime-chain"
+name          = "lean-chain"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Chain service: single engine writer + tick driver (Tier 6)."
+description   = "Chain service: engine (consensus execution boundary) + single-writer tick driver."
 
 [lints]
 workspace = true
 
+[features]
+# Exposes the in-crate engine fixture builders (`anchor_pair`,
+# `engine_at_genesis`, `produce_signed_block`) under
+# `lean_chain::engine::test_fixtures` so downstream crates
+# (`lean-sync`, `node`) can drive integration tests without
+# duplicating the genesis builders.
+test-fixtures = []
+
 [dependencies]
-runtime-core = { path = "../core" }
-engine       = { path = "../../engine" }
+lean-core    = { path = "../core" }
 storage      = { path = "../../storage" }
-networking   = { path = "../../networking" }
+lean-wire    = { path = "../../networking" }
+forkchoice   = { path = "../../forkchoice" }
 protocol     = { path = "../../protocol" }
+ssz          = { path = "../../ssz" }
 config       = { path = "../../config" }
 types        = { path = "../../types" }
 tokio        = { workspace = true }
@@ -27,8 +36,10 @@ thiserror    = { workspace = true }
 anyhow       = { workspace = true }
 
 [dev-dependencies]
-engine            = { path = "../../engine", features = ["test-fixtures"] }
-forkchoice        = { path = "../../forkchoice" }
-ssz               = { path = "../../ssz" }
+# Self-dep enables the `test-fixtures` feature for integration tests under
+# `tests/`. Cargo unifies features across the dep graph, so this turns the
+# in-crate `engine::test_fixtures` module on without changing the published
+# library surface.
+lean-chain        = { path = ".", features = ["test-fixtures"] }
 static_assertions = { workspace = true }
 tokio             = { workspace = true, features = ["test-util"] }

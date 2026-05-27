@@ -6,8 +6,8 @@
 //! parks the oneshot in its [`crate::rpc::outbound::OutboundTable`]
 //! until the matching libp2p response or failure event fires.
 
+use lean_wire::{BlocksByRootRequest, BlocksByRootResponse};
 use libp2p::PeerId;
-use networking::{BlocksByRootRequest, BlocksByRootResponse};
 use tokio::sync::oneshot;
 
 use super::{RpcError, RpcRequest, RpcResponse};

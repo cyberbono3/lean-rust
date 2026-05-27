@@ -4,11 +4,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
+use lean_api::{HttpService, MetricsService, Recorder};
+use lean_chain::Service as ChainService;
+use lean_core::{Node, NodeConfig};
+use lean_p2p_host::{DevnetHost, HostOptions};
+use p2p_rpc::RpcProvider;
 use protocol::{Block, Checkpoint, SignedBlock, Slot, State};
-use runtime_api::{HttpService, MetricsService, Recorder};
-use runtime_chain::Service as ChainService;
-use runtime_core::{Node, NodeConfig};
-use runtime_p2p::{DevnetHost, HostOptions, RpcProvider};
 use storage::{HeadInfo, MemoryStore, Store};
 use types::{Bytes32, Bytes4000};
 
@@ -32,7 +33,7 @@ pub struct Config {
     /// libp2p host options.
     pub p2p: HostOptions,
     /// Validator duty scheduler options.
-    pub duties: runtime_duties::Config,
+    pub duties: lean_duties::Config,
     /// HTTP API bind address.
     pub http_addr: SocketAddr,
     /// Prometheus metrics bind address.
@@ -46,7 +47,7 @@ pub struct Config {
 /// Builds a devnet [`Node`] with concrete runtime services.
 ///
 /// The current p2p surface does not yet expose the clean peer-event and
-/// status-request hooks required by `runtime-sync`, so peer backfill sync
+/// status-request hooks required by `lean-sync`, so peer backfill sync
 /// is left unwired here. Gossip ingestion still runs in the sync lifecycle
 /// slot so p2p-delivered blocks and votes reach the chain before duties
 /// begin producing local messages.
@@ -73,7 +74,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         message: genesis_block.clone(),
         signature: Bytes4000::default(),
     };
-    let engine = engine::Engine::from_anchor(genesis_state, genesis_block)?;
+    let engine = lean_chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
     let anchor_root = engine.head();
     let finalized = engine.latest_finalized();
     persist_anchor(
@@ -96,7 +97,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         Arc::clone(&chain),
     ));
 
-    let duties = Arc::new(runtime_duties::Service::new(
+    let duties = Arc::new(lean_duties::Service::new(
         duties,
         chain.clone(),
         Arc::new(PublisherAdapter::new(Arc::clone(&p2p))),
@@ -141,7 +142,7 @@ fn persist_anchor(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use runtime_duties::GenesisTimeUnix;
+    use lean_duties::GenesisTimeUnix;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -171,11 +172,11 @@ mod tests {
             None,
         )
         .unwrap();
-        let duties = runtime_duties::Config::default()
+        let duties = lean_duties::Config::default()
             .with_validators_path(validators_path())
             .unwrap()
             .with_genesis_time_unix(future_genesis());
-        let (genesis_state, genesis_block) = engine::test_fixtures::anchor_pair(4);
+        let (genesis_state, genesis_block) = lean_chain::engine::test_fixtures::anchor_pair(4);
 
         Config {
             node: NodeConfig::default(),
@@ -202,9 +203,9 @@ mod tests {
     #[test]
     fn persist_anchor_seeds_head_block_and_state() {
         let store = MemoryStore::default();
-        let (state, block) = engine::test_fixtures::anchor_pair(4);
+        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
         let slot = block.slot;
-        let engine = engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+        let engine = lean_chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
         let root = engine.head();
         let finalized = engine.latest_finalized();
         let signed = SignedBlock {

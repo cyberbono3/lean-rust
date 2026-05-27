@@ -4,7 +4,7 @@
 //! - [`DevnetHost::build`] / [`DevnetHost::build_with_provider`] —
 //!   assemble identity, transport, behaviour, and bootnodes into a
 //!   [`P2pService`] without starting it.
-//! - [`P2pService`] — [`runtime_core::Service`] implementation that
+//! - [`P2pService`] — [`lean_core::Service`] implementation that
 //!   binds the listener at `start`, drives the swarm under a tokio
 //!   task, and drains on `stop`.
 //! - [`Host`] — clone-friendly handle the rest of the node interacts

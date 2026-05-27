@@ -20,8 +20,7 @@ use std::sync::Arc;
 use static_assertions::{assert_impl_all, assert_obj_safe};
 use storage::{MemoryStore, Store};
 
-mod fixtures;
-use fixtures::{sample_head, sample_root, sample_signed_block, sample_state};
+use fixtures::storage::{sample_head, sample_root, sample_signed_block, sample_state};
 
 // =============================================================================
 // Generic contract — call from any adapter's integration test

@@ -18,16 +18,16 @@ Thumbs.db
 # Local environment overrides
 .env
 .env.local
-crates/pq-devnet-0/.env
+crates/fixtures/.env
 
 # pq-devnet generated state
-crates/pq-devnet-0/config/keys/*.key
-crates/pq-devnet-0/config.yaml
-crates/pq-devnet-0/genesis/config.yaml
-crates/pq-devnet-0/genesis/genesis.json
-crates/pq-devnet-0/genesis/genesis.ssz
-crates/pq-devnet-0/genesis/nodes.yaml
-crates/pq-devnet-0/genesis/validators.yaml
-crates/pq-devnet-0/genesis/validator-config.yaml
-crates/pq-devnet-0/genesis/bootnodes.rust.yaml
-crates/pq-devnet-0/logs/*.log
+crates/fixtures/config/keys/*.key
+crates/fixtures/config.yaml
+crates/fixtures/genesis/config.yaml
+crates/fixtures/genesis/genesis.json
+crates/fixtures/genesis/genesis.ssz
+crates/fixtures/genesis/nodes.yaml
+crates/fixtures/genesis/validators.yaml
+crates/fixtures/genesis/validator-config.yaml
+crates/fixtures/genesis/bootnodes.rust.yaml
+crates/fixtures/logs/*.log

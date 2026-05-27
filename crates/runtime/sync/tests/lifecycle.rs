@@ -13,13 +13,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use engine::BlockImportResult;
-use networking::{BlocksByRootRequest, BlocksByRootResponse, Status};
+use lean_chain::engine::BlockImportResult;
+use lean_chain::ChainError;
+use lean_core::Service as _;
+use lean_sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
+use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use parking_lot::Mutex;
 use protocol::SignedBlock;
-use runtime_chain::ChainError;
-use runtime_core::Service as _;
-use runtime_sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
 use static_assertions::assert_impl_all;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

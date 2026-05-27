@@ -8,11 +8,11 @@
 //!
 //! Per Decision 7 (Dependency Inversion), trait impls live elsewhere:
 //!
-//! - [`Chain`] is satisfied by [`runtime_chain::Service`] via the
+//! - [`Chain`] is satisfied by [`lean_chain::Service`] via the
 //!   adapter `impl` in [`chain_adapter`]. Tests in this crate use
 //!   in-memory fakes.
 //! - [`Network`] / [`PeerEventProvider`] have no in-crate impl. The
-//!   `runtime-p2p` / `node` crates provide the libp2p-backed
+//!   `lean-p2p-host` / `node` crates provide the libp2p-backed
 //!   adapters in later issues.
 //!
 //! The crate compiles with zero `libp2p` exposure on its dependency

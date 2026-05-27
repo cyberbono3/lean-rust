@@ -11,10 +11,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use engine::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
-use engine::{BlockImportResult, Engine};
+use lean_chain::engine::test_fixtures::{
+    engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS,
+};
+use lean_chain::engine::{BlockImportResult, Engine};
+use lean_chain::Service;
 use protocol::{Block, BlockBody, SignedBlock, Slot, ValidatorIndex};
-use runtime_chain::Service;
 use ssz::HashTreeRoot;
 use storage::{HeadInfo, MemoryStore, StorageError, Store};
 use types::{Bytes32, Bytes4000};

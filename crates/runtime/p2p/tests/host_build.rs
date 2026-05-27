@@ -1,4 +1,4 @@
-//! Integration tests for the `runtime-p2p` host lifecycle.
+//! Integration tests for the `lean-p2p-host` host lifecycle.
 //!
 //! Covers the construction → start → stop happy path, bind-failure
 //! fail-fast, idempotent stop, and the host-handle availability
@@ -15,8 +15,8 @@
 use std::path::Path;
 use std::time::Duration;
 
-use runtime_core::Service;
-use runtime_p2p::{DevnetHost, HostError, HostOptions, P2pService};
+use lean_core::Service;
+use lean_p2p_host::{DevnetHost, HostError, HostOptions, P2pService};
 use tempfile::TempDir;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;

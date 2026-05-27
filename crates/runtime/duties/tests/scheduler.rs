@@ -16,14 +16,14 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use lean_core::Service as _;
+use lean_duties::{
+    Chain as DutiesChain, Config as DutiesConfig, DutiesError, GenesisTimeUnix, PublishError,
+    Publisher, Service as DutiesService,
+};
 use parking_lot::Mutex;
 use protocol::{
     Block, BlockBody, BlockHeader, Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex, Vote,
-};
-use runtime_core::Service as _;
-use runtime_duties::{
-    Chain as DutiesChain, Config as DutiesConfig, DutiesError, GenesisTimeUnix, PublishError,
-    Publisher, Service as DutiesService,
 };
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -53,7 +53,7 @@ impl DutiesChain for FakeChain {
         &self,
         slot: Slot,
         validator: ValidatorIndex,
-    ) -> Result<SignedBlock, runtime_chain::ChainError> {
+    ) -> Result<SignedBlock, lean_chain::ChainError> {
         self.produced_blocks.lock().push((slot, validator));
         Ok(SignedBlock {
             message: Block {
@@ -70,7 +70,7 @@ impl DutiesChain for FakeChain {
         &self,
         slot: Slot,
         validator: ValidatorIndex,
-    ) -> Result<SignedVote, runtime_chain::ChainError> {
+    ) -> Result<SignedVote, lean_chain::ChainError> {
         self.produced_attestations.lock().push((slot, validator));
         let _ = BlockHeader::default(); // keep the import live
         Ok(SignedVote {
@@ -125,7 +125,7 @@ impl Publisher for MockPublisher {
     }
 }
 
-/// Repository-relative path resolved against the runtime-chain crate
+/// Repository-relative path resolved against the lean-chain crate
 /// root, mirroring how production callers feed `validators_path`.
 const FIXTURE_PATH: &str = "tests/fixtures/validators.yaml";
 const MALFORMED_PATH: &str = "tests/fixtures/validators_malformed.yaml";

@@ -1,4 +1,4 @@
-# runtime-chain
+# lean-chain
 
 The single engine writer at the Tier-6 chain layer.
 
@@ -12,7 +12,7 @@ The single engine writer at the Tier-6 chain layer.
 - [`ChainSnapshot`] — hot-read projection of engine state
   (`head_root`, `safe_target_root`, `current_slot`,
   `latest_finalized`). Refreshed after each `Accepted` import and
-  each tick; consumed by `runtime-api` / `runtime-p2p` through an
+  each tick; consumed by `lean-api` / `runtime-p2p` through an
   `Arc<RwLock<_>>` clone.
 - [`ChainError`] — infrastructure failures (storage, engine
   invariant violations, engine forkchoice / state-transition
@@ -29,16 +29,16 @@ Tier-6 services that drive it ship in sibling crates and host their
 own adapter `impl` blocks on [`Service`] (orphan rule — each trait
 is defined in its consumer crate):
 
-- [`runtime-sync`](../sync) — peer-driven `BlocksByRoot` backfill
+- [`lean-sync`](../sync) — peer-driven `BlocksByRoot` backfill
   loop. Calls `import_block` / `local_status` / `has_block`.
-- [`runtime-duties`](../duties) — proposer / attester scheduler.
+- [`lean-duties`](../duties) — proposer / attester scheduler.
   Calls `produce_block` / `produce_attestation`.
 
-The [`runtime-p2p`](../p2p) and [`runtime-api`](../api) crates
+The [`runtime-p2p`](../p2p) and [`lean-api`](../api) crates
 will consume the `ChainSnapshot` read path once they land.
 
 ## Tier and dependencies
 
-Tier 6. Depends on `runtime-core`, `engine`, `storage`,
+Tier 6. Depends on `lean-core`, `engine`, `storage`,
 `networking`, `protocol`, `config`, `types`, plus the standard
 async stack (`tokio`, `tokio-util`, `async-trait`, `tracing`).

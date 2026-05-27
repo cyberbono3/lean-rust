@@ -1,5 +1,5 @@
 [package]
-name          = "runtime-duties"
+name          = "lean-duties"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -11,8 +11,8 @@ description   = "Duties service: narrow devnet0 proposer / attester scheduler (T
 workspace = true
 
 [dependencies]
-runtime-core      = { path = "../core" }
-runtime-chain     = { path = "../chain" }
+lean-core      = { path = "../core" }
+lean-chain     = { path = "../chain" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }
 tokio             = { workspace = true }

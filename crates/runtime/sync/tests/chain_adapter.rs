@@ -12,11 +12,13 @@
 
 use std::sync::Arc;
 
-use engine::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
-use engine::BlockImportResult;
+use lean_chain::engine::test_fixtures::{
+    engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS,
+};
+use lean_chain::engine::BlockImportResult;
+use lean_chain::Service;
+use lean_sync::Chain as SyncChain;
 use protocol::{Slot, ValidatorIndex};
-use runtime_chain::Service;
-use runtime_sync::Chain as SyncChain;
 use ssz::HashTreeRoot;
 use storage::MemoryStore;
 use types::Bytes32;
@@ -62,6 +64,6 @@ async fn has_block_reports_true_after_import() {
 /// `Engine` access through the service requires a public hook; for tests
 /// we sidestep by producing the block via a fresh sibling engine at the
 /// same genesis (deterministic — no state divergence before import).
-fn sibling_engine() -> engine::Engine {
+fn sibling_engine() -> lean_chain::engine::Engine {
     engine_at_genesis(ENGINE_VALIDATORS)
 }

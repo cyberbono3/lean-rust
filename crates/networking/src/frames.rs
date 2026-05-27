@@ -159,6 +159,12 @@ fn read_one_byte<R: Read>(r: &mut R) -> Result<Option<u8>, NetworkingError> {
 // Snappy chunk parser
 // =============================================================================
 
+/// Upper bound on the number of Snappy framed chunks we'll consume for
+/// a single `read_snappy_frame_exact` call. A peer cannot keep us
+/// spinning indefinitely on zero-progress chunks (skippable padding,
+/// duplicate identifiers) without crossing this fault threshold.
+const MAX_SNAPPY_CHUNK_ITERATIONS: usize = 4096;
+
 /// Reads exactly `length` decoded bytes from `r` by walking Snappy framed
 /// chunks until the accumulated payload size equals `length`.
 fn read_snappy_frame_exact<R: Read>(r: &mut R, length: u64) -> Result<Vec<u8>, NetworkingError> {
@@ -168,14 +174,38 @@ fn read_snappy_frame_exact<R: Read>(r: &mut R, length: u64) -> Result<Vec<u8>, N
     let capacity = usize::try_from(length).map_err(|_| NetworkingError::MalformedFrame {
         reason: "uncompressed length exceeds usize",
     })?;
-    let mut decoded: Vec<u8> = Vec::with_capacity(capacity);
+    // try_reserve_exact maps a failed allocation to a typed error
+    // instead of aborting the process via the alloc-failure handler;
+    // critical when `capacity` comes from an attacker-supplied uvarint.
+    let mut decoded: Vec<u8> = Vec::new();
+    decoded
+        .try_reserve_exact(capacity)
+        .map_err(|_| NetworkingError::MalformedFrame {
+            reason: "snappy frame allocation exceeded available memory",
+        })?;
     let mut remaining = length;
     let mut seen_identifier = false;
+    let mut iterations: usize = 0;
 
     while remaining > 0 {
-        let (chunk_type, payload) = read_snappy_chunk(r)?;
+        iterations += 1;
+        if iterations > MAX_SNAPPY_CHUNK_ITERATIONS {
+            return Err(NetworkingError::MalformedFrame {
+                reason: "snappy chunk iteration cap exceeded",
+            });
+        }
+        // Each chunk read bounds its allocation against `remaining + chunk
+        // overhead` so a peer cannot keep declaring max-size chunks beyond
+        // what the outer length permits.
+        let read_budget = remaining.saturating_add(SNAPPY_CHECKSUM_LEN as u64);
+        let (chunk_type, payload) = read_snappy_chunk(r, read_budget)?;
         match chunk_type {
             SNAPPY_STREAM_IDENTIFIER => {
+                if seen_identifier {
+                    return Err(NetworkingError::MalformedFrame {
+                        reason: "duplicate snappy stream identifier",
+                    });
+                }
                 if payload.as_slice() != SNAPPY_STREAM_MAGIC {
                     return Err(NetworkingError::MalformedFrame {
                         reason: "invalid snappy stream identifier",
@@ -219,13 +249,30 @@ fn read_snappy_frame_exact<R: Read>(r: &mut R, length: u64) -> Result<Vec<u8>, N
 }
 
 /// Reads one Snappy framed chunk: 1-byte type, 3-byte LE length, payload.
-fn read_snappy_chunk<R: Read>(r: &mut R) -> Result<(u8, Vec<u8>), NetworkingError> {
+/// `max_payload_len` caps the per-chunk allocation against the caller's
+/// outer length budget, preventing a peer from declaring a 16 MiB chunk
+/// when only a few bytes are owed.
+fn read_snappy_chunk<R: Read>(
+    r: &mut R,
+    max_payload_len: u64,
+) -> Result<(u8, Vec<u8>), NetworkingError> {
     let mut header = [0_u8; SNAPPY_CHUNK_HEADER_LEN];
     r.read_exact(&mut header)?;
     let chunk_type = header[0];
     let len =
         usize::from(header[1]) | (usize::from(header[2]) << 8) | (usize::from(header[3]) << 16);
-    let mut payload = vec![0_u8; len];
+    if u64::try_from(len).unwrap_or(u64::MAX) > max_payload_len {
+        return Err(NetworkingError::MalformedFrame {
+            reason: "snappy chunk payload length exceeds caller budget",
+        });
+    }
+    let mut payload: Vec<u8> = Vec::new();
+    payload
+        .try_reserve_exact(len)
+        .map_err(|_| NetworkingError::MalformedFrame {
+            reason: "snappy chunk allocation exceeded available memory",
+        })?;
+    payload.resize(len, 0);
     r.read_exact(&mut payload)?;
     Ok((chunk_type, payload))
 }

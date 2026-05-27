@@ -6,29 +6,34 @@
 //! rules.
 //!
 //! # Scope
-//! - [`HttpService`] — [`runtime_core::Service`] implementation that
+//! - [`HttpService`] — [`lean_core::Service`] implementation that
 //!   serves head endpoints, backed by an
 //!   `Arc<dyn storage::Store>` injected at construction.
 //! - [`http::HEAD_PATHS`] — mounted head endpoint paths.
 //! - [`HttpError`] — public error surface returned to clients.
-//! - [`MetricsService`] — [`runtime_core::Service`] implementation that
+//! - [`MetricsService`] — [`lean_core::Service`] implementation that
 //!   serves Prometheus text exposition on `/metrics`, backed by
 //!   injected provider closures.
 //!
 //! # Architecture
 //! Runtime data sources stay injected through narrow traits or
-//! closures. There are no compile-time references to `engine`,
-//! `forkchoice`, `statetransition`, `runtime/chain`, or `runtime/p2p` —
-//! composition happens at the `node` crate (Issue #37).
+//! closures. There are no compile-time references to `forkchoice`,
+//! `lean-chain`, or `lean-p2p-host` — composition happens at the
+//! `node` crate.
+//!
+//! [`httpsvc`] hosts the shared axum-server shell (bind + cancel-driven
+//! serve loop) that both [`HttpService`] and [`MetricsService`] reuse.
 
 #![forbid(unsafe_code)]
 
 mod server;
 
 pub mod http;
+pub mod httpsvc;
 pub mod metrics;
 
 pub use http::{HttpError, HttpService};
+pub use httpsvc::{HttpsvcError, Server};
 pub use metrics::{
     GaugeProvider, LabeledGaugeProvider, LabeledGaugeSamples, MetricsError, MetricsService,
     Recorder,

@@ -1,6 +1,6 @@
 //! Chain [`Service`] — the single engine writer.
 //!
-//! Wraps [`engine::Engine`] + [`storage::Store`] and exposes async
+//! Wraps [`crate::engine::Engine`] + [`storage::Store`] and exposes async
 //! `import_block` / `import_attestation`. Spawns a background tick loop
 //! on `start` that advances the forkchoice clock every
 //! `config::SECONDS_PER_INTERVAL`.
@@ -10,10 +10,10 @@
 
 use std::sync::Arc;
 
+use crate::engine::{AttestationImportResult, BlockImportResult, Engine};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use engine::{AttestationImportResult, BlockImportResult, Engine};
-use networking::Status;
+use lean_wire::Status;
 use parking_lot::{Mutex, RwLock};
 use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
 use storage::HeadInfo;
@@ -66,7 +66,7 @@ impl Service {
 
     /// Returns a shared handle to the hot-read snapshot.
     ///
-    /// Non-writer services (`runtime/api`, `runtime/p2p`) clone this
+    /// Non-writer services (`lean-api`, `lean-p2p-host`) clone this
     /// handle and read through it instead of contending on the engine
     /// mutex.
     #[must_use]
@@ -169,6 +169,13 @@ impl Service {
             message: produced.block,
             signature: Bytes4000::new([0; 4000]),
         };
+        // Capture (head_root, post_state, head_slot, finalized) under a
+        // single engine-lock acquisition so the HeadInfo we persist below
+        // comes from one consistent snapshot. Previously head_root was
+        // read via a separate engine.head() call AND persist_accepted
+        // re-acquired the lock twice more — concurrent imports could
+        // shift the head between acquisitions and write a HeadInfo whose
+        // root and slot came from different store states.
         let head_root = self.engine.head();
         self.persist_accepted(produced.root, head_root, signed.clone())?;
         self.refresh_snapshot();
@@ -190,7 +197,7 @@ impl Service {
     /// The local re-import is load-bearing: without it, this validator's
     /// own attestations only reach peers via gossip, and the next produced
     /// block would omit them — quorum on a small devnet can stall. Mirror
-    /// of the upstream Go fix at `lean-go/runtime/chain/service.go`
+    /// of the upstream Go fix at `lean-go/lean-chain/service.go`
     /// (`PR105 Phase 8`).
     ///
     /// # Errors
@@ -293,7 +300,11 @@ impl Service {
             )
         });
         let post_state = post_state_opt.ok_or(ChainError::PostStateMissing { block_root })?;
-        let head_slot = head_slot_opt.unwrap_or(Slot::ZERO);
+        // The previous `unwrap_or(Slot::ZERO)` silently wrote a corrupt
+        // HeadInfo when the engine's head_root pointed at a block no
+        // longer in the store (head/track race or invariant violation).
+        // Refusing the persist keeps the on-disk state consistent.
+        let head_slot = head_slot_opt.ok_or(ChainError::HeadBlockMissing { head_root })?;
 
         self.store.save_block(block_root, signed)?;
         self.store.save_state(block_root, post_state)?;
@@ -307,7 +318,7 @@ impl Service {
 
 impl Drop for Service {
     /// Best-effort cleanup if a caller drops the service without going
-    /// through [`runtime_core::Service::stop`]: cancel the tick token so
+    /// through [`lean_core::Service::stop`]: cancel the tick token so
     /// the spawned task exits on its next iteration. We cannot await the
     /// join here, so the task detaches; cancellation guarantees it does
     /// not loop forever holding `Arc` clones of the snapshot and engine.
@@ -320,7 +331,7 @@ impl Drop for Service {
 }
 
 #[async_trait]
-impl runtime_core::Service for Service {
+impl lean_core::Service for Service {
     fn name(&self) -> &'static str {
         "chain"
     }
@@ -380,5 +391,5 @@ impl runtime_core::Service for Service {
 // Adapter `impl` blocks for the Tier-6 services that drive this
 // chain Service live in the consuming crates (orphan rule: each
 // trait is defined in the same crate as its adapter):
-//   - `runtime-sync::chain_adapter`    impl sync::Chain for Service
-//   - `runtime-duties::chain_adapter`  impl duties::Chain for Service
+//   - `lean-sync::chain_adapter`    impl sync::Chain for Service
+//   - `lean-duties::chain_adapter`  impl duties::Chain for Service

@@ -39,6 +39,14 @@ use crate::error::NetworkingError;
 const INFALLIBLE_VEC_WRITE: &str = "io::Write into Vec<u8> is infallible";
 const INFALLIBLE_SNAPPY_BLOCK: &str = "Snappy block encoder rejects only >4 GiB inputs";
 
+/// Hard cap on the decoded payload size for the one-shot Snappy
+/// transformers below. Matches the streaming side's
+/// `MAX_SNAPPY_DECOMPRESSED` in `lean-p2p-host/src/host/behaviour.rs`.
+/// A peer crafting a small-compressed / huge-decompressed payload
+/// (decompression bomb) is rejected with `NetworkingError::DecodedTooLarge`
+/// instead of allocating multi-GB.
+pub const MAX_DECODED_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+
 // =============================================================================
 // req/resp framed wire
 // =============================================================================
@@ -57,14 +65,28 @@ pub fn encode_req_resp_wire(ssz_bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Unwraps Snappy framed stream bytes into the underlying SSZ bytes.
+/// Caps decoded output at [`MAX_DECODED_PAYLOAD_BYTES`] to prevent a
+/// decompression-bomb attack where a small compressed input expands to
+/// multi-GB.
 ///
 /// # Errors
-/// [`NetworkingError::Snappy`] if `wire` is not a valid Snappy framed stream.
+/// [`NetworkingError::Snappy`] if `wire` is not a valid Snappy framed
+/// stream; [`NetworkingError::MalformedFrame`] if the decoded payload
+/// exceeds the cap.
 pub fn decode_req_resp_wire(wire: &[u8]) -> Result<Vec<u8>, NetworkingError> {
-    let mut out = Vec::with_capacity(wire.len());
+    let mut out = Vec::new();
+    // `take(MAX + 1)` lets us distinguish "exactly at the cap"
+    // (legitimate) from "overran the cap" (attacker payload).
+    let cap = MAX_DECODED_PAYLOAD_BYTES;
     FrameDecoder::new(wire)
+        .take(cap as u64 + 1)
         .read_to_end(&mut out)
         .map_err(snap_or_io)?;
+    if out.len() > cap {
+        return Err(NetworkingError::MalformedFrame {
+            reason: "snappy framed decode exceeded MAX_DECODED_PAYLOAD_BYTES",
+        });
+    }
     Ok(out)
 }
 
@@ -104,10 +126,23 @@ pub fn encode_gossip_data(ssz_bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Snappy-block-decompresses gossipsub data into the underlying SSZ bytes.
+/// Caps decoded output at [`MAX_DECODED_PAYLOAD_BYTES`] to prevent a
+/// decompression bomb: Snappy block format embeds the decoded length in
+/// the first varint of `data`, which an attacker can declare as multi-GB.
+/// Checked BEFORE calling into `decompress_vec` so the bomb never
+/// allocates.
 ///
 /// # Errors
-/// [`NetworkingError::Snappy`] if `data` is not valid Snappy block output.
+/// [`NetworkingError::Snappy`] if `data` is not valid Snappy block output;
+/// [`NetworkingError::MalformedFrame`] if the declared decoded length
+/// exceeds the cap.
 pub fn decode_gossip_data(data: &[u8]) -> Result<Vec<u8>, NetworkingError> {
+    let declared = raw::decompress_len(data).map_err(NetworkingError::Snappy)?;
+    if declared > MAX_DECODED_PAYLOAD_BYTES {
+        return Err(NetworkingError::MalformedFrame {
+            reason: "snappy block decoded length exceeds MAX_DECODED_PAYLOAD_BYTES",
+        });
+    }
     raw::Decoder::new()
         .decompress_vec(data)
         .map_err(NetworkingError::Snappy)

@@ -1,4 +1,4 @@
-# runtime-core
+# lean-core
 
 Lifecycle spine for the runtime shell (Tier 5).
 
@@ -16,7 +16,7 @@ Lifecycle spine for the runtime shell (Tier 5).
   the offending slot label preserved.
 - [`Server`] — shared HTTP shell that binds a TCP listener, serves
   an `axum::Router`, and terminates on a `CancellationToken`. Reused
-  by `runtime-api` for the Lean HTTP API and Prometheus metrics.
+  by `lean-api` for the Lean HTTP API and Prometheus metrics.
 - Observability helpers: [`init_tracing`], [`FileSink`],
   [`Verbosity`], [`TracingGuard`].
 
@@ -34,8 +34,8 @@ Lifecycle spine for the runtime shell (Tier 5).
 ## What this crate is not
 
 No business logic. No engine, no networking, no validator state.
-Service implementations land in their own crates (`runtime-chain`,
-`runtime-duties`, etc.); this crate carries the bare lifecycle
+Service implementations land in their own crates (`lean-chain`,
+`lean-duties`, etc.); this crate carries the bare lifecycle
 contract they implement.
 
 ## Tier and dependencies

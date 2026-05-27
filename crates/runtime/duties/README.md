@@ -1,16 +1,16 @@
-# runtime-duties
+# lean-duties
 
 Narrow devnet0 validator-duty scheduler (Tier 6).
 
 Loads validator assignments from YAML, schedules proposers at slot
 boundaries and attesters at the `vote_due_bps` deadline. Production
-goes through a [`Chain`] port satisfied by `runtime-chain`; publish
+goes through a [`Chain`] port satisfied by `lean-chain`; publish
 goes through a [`Publisher`] port whose impl lives in `node`.
 
 ## Scope
 
 - [`Service`] — proposer / attester scheduler. Implements
-  [`runtime_core::Service`] (start / stop / status). Owns one
+  [`lean_core::Service`] (start / stop / status). Owns one
   worker task driven by `tokio::time`.
 - [`Config`] — `validators_path`, `validator_group`,
   `genesis_time_unix`. Always-valid by construction:
@@ -18,7 +18,7 @@ goes through a [`Publisher`] port whose impl lives in `node`.
   non-empty inputs; [`GenesisTimeUnix`] is a typed wrapper.
 - [`Chain`] / [`Publisher`] — narrow port traits declared here per
   Decision 7 (Dependency Inversion). `Chain` is satisfied by
-  [`runtime_chain::Service`] via [`chain_adapter`]; `Publisher`
+  [`lean_chain::Service`] via [`chain_adapter`]; `Publisher`
   has no in-crate impl (the `node` crate provides the libp2p
   adapter in Issue #37).
 - [`ValidatorAssignments`] — YAML loader for the canonical devnet0
@@ -46,7 +46,7 @@ narrow devnet0 surface — nothing more.
 
 ## Tier and dependencies
 
-Tier 6. Depends on `runtime-core`, `runtime-chain`, `protocol`,
+Tier 6. Depends on `lean-core`, `lean-chain`, `protocol`,
 `config`, plus the async / serde stack (`tokio`, `tokio-util`,
 `async-trait`, `serde`, `serde_yaml`, `tracing`).
 
@@ -55,11 +55,11 @@ from Issue #30:
 
 ```bash
 cargo metadata --format-version=1 \
-  | jq -r '.packages[] | select(.name == "runtime-duties") | .dependencies[].name' \
+  | jq -r '.packages[] | select(.name == "lean-duties") | .dependencies[].name' \
   | grep -v '^runtime-p2p$'
 ```
 
-## Why a separate crate (vs. a module of `runtime-chain`)
+## Why a separate crate (vs. a module of `lean-chain`)
 
 - Mirrors lean-go layout (`runtime/duties/` is its own package).
 - The `Publisher` port has its concrete impl in `node`, not in
@@ -70,5 +70,5 @@ cargo metadata --format-version=1 \
 
 ## Issue reference
 
-Implements Issue #30. The previous in-`runtime-chain` module was
+Implements Issue #30. The previous in-`lean-chain` module was
 extracted to its own crate when the surface stabilized.

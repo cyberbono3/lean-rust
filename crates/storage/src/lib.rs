@@ -1,7 +1,7 @@
 //! Narrow persistence layer for the consensus runtime.
 //!
-//! Tier 4: depends on [`protocol`] and [`types`] only. No `statetransition`,
-//! `forkchoice`, `engine`, or `runtime` imports.
+//! Depends on [`protocol`] and [`types`] only. No `forkchoice` or
+//! runtime imports.
 //!
 //! # Public surface
 //! - [`Store`] — object-safe persistence contract.
