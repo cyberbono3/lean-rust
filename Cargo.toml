@@ -32,6 +32,9 @@ repository    = "https://github.com/cyberbono3/lean-rust"
 [workspace.lints.rust]
 unsafe_code  = "deny"
 missing_docs = "warn"
+# `loom` is an opt-in concurrency-model cfg (see lean-chain tests/loom_import.rs);
+# register it so the default `-D warnings` build does not flag it as unexpected.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [workspace.lints.clippy]
 all         = { level = "deny", priority = -1 }

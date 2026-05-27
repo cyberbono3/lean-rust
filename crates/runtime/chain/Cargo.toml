@@ -45,6 +45,12 @@ static_assertions = { workspace = true }
 tokio             = { workspace = true, features = ["test-util"] }
 criterion         = { workspace = true }
 
+# loom is pulled ONLY under `--cfg loom`; the default test/clippy build never
+# sees it, so VERIFY is unaffected. Opt-in concurrency models live in
+# `tests/loom_import.rs` (gated `#![cfg(loom)]`).
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7"
+
 [[bench]]
 name    = "engine_import"
 harness = false
