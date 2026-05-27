@@ -124,13 +124,7 @@ where `RUST_LOG` is unset.
 LEAN_RUST_RUST_LOG=trace make devnet-up
 ```
 
-## Relationship To Loopback Interop
-
-This Docker devnet is independent of `make interop-devnet0`. The loopback
-flow runs `lean-rust` against a sibling client over direct loopback processes
-using checked-in fixtures and is intended for fast protocol interop checks.
 This crate's devnet validates the repo-local local-pq flow, ream image
 compatibility, generated genesis, Docker topology, and the `/lean/v0/head`
 compatibility route. See
-[`docs/local-pq-devnet0.md`](../../docs/local-pq-devnet0.md) §
-"Relationship To Loopback Interop".
+[`docs/local-pq-devnet0.md`](../../docs/local-pq-devnet0.md).

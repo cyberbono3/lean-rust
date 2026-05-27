@@ -207,20 +207,6 @@ The check refuses to run when existing generated state is present, creates only
 sentinel generated files, runs `make devnet-clean` with Docker cleanup skipped,
 and verifies scaffold files remain.
 
-## Relationship To Loopback Interop
-
-This Docker devnet is separate from `make interop-devnet0`.
-
-| Flow | Clients | Transport | State source | Main use |
-| --- | --- | --- | --- | --- |
-| `make interop-devnet0` | `lean-go <-> lean-rust` | direct loopback processes | checked-in Go fixture plus generated run artifacts | fast protocol interop checks between Go and Rust |
-| local-pq devnet | `ream <-> lean-rust` | Docker Compose bridge network | generated local-pq genesis under `crates/fixtures` | operator-like ream/Rust devnet validation |
-
-Use loopback interop when testing Rust/Go networking behavior without Docker.
-Use this devnet when validating the repo-local local-pq flow, ream image
-compatibility, generated genesis, Docker topology, and `/lean/v0/head`
-compatibility route.
-
 ## Troubleshooting
 
 ### Genesis Decode Failure
