@@ -32,3 +32,8 @@ static_assertions = { workspace = true }
 [dev-dependencies]
 types = { path = "../../types" }
 tokio = { workspace = true, features = ["test-util"] }
+criterion = { workspace = true }
+
+[[bench]]
+name    = "local_proposer"
+harness = false

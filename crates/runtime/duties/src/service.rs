@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use protocol::{is_proposer, Slot, ValidatorIndex};
+use protocol::{Slot, ValidatorIndex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep_until, Instant};
 use tokio_util::sync::CancellationToken;
@@ -25,6 +25,7 @@ use tracing::{debug, info, instrument, warn};
 use super::config::{Config, GenesisTimeUnix};
 use super::error::{DutiesError, DutiesResult};
 use super::ports::{Chain, Publisher};
+use super::proposer::LocalProposers;
 use super::validators::ValidatorAssignments;
 
 /// Handle to the running scheduler worker: the spawned `JoinHandle` and
@@ -234,7 +235,7 @@ impl lean_core::Service for Service {
             chain: Arc::clone(&self.chain),
             publisher: Arc::clone(&self.publisher),
             validators: local.into(),
-            total_validators: assignments.total_validators(),
+            proposers: LocalProposers::new(local.iter().copied(), assignments.total_validators()),
             slot_duration: self.slot_duration,
             vote_due_offset: self.vote_due_offset,
             genesis: Genesis::new(self.config.genesis_time_unix()),
@@ -389,7 +390,9 @@ struct Worker {
     /// drops the unused `capacity` field — idiomatic Rust for
     /// "shared immutable list."
     validators: Arc<[ValidatorIndex]>,
-    total_validators: u64,
+    /// O(1) proposer lookup over the local set (replaces the prior
+    /// linear `is_proposer` scan).
+    proposers: LocalProposers,
     slot_duration: Duration,
     vote_due_offset: Duration,
     genesis: Genesis,
@@ -489,7 +492,7 @@ impl Worker {
     }
 
     async fn run_proposer(&self, slot: Slot) -> DutiesResult<()> {
-        let Some(validator) = self.proposer_for_slot(slot) else {
+        let Some(validator) = self.proposers.proposer_for_slot(slot) else {
             debug!(slot = slot.get(), "duties proposer slot not assigned");
             return Ok(());
         };
@@ -554,17 +557,6 @@ impl Worker {
                 }
             }
         }
-    }
-
-    fn proposer_for_slot(&self, slot: Slot) -> Option<ValidatorIndex> {
-        // `is_proposer` only errors when `total_validators == 0`, which
-        // `ValidatorAssignments` already rules out at load time. Treat
-        // the surprising-error case as "not assigned" rather than
-        // panicking — the scheduler tolerates an idle slot.
-        self.validators
-            .iter()
-            .copied()
-            .find(|&validator| is_proposer(validator, slot, self.total_validators).unwrap_or(false))
     }
 }
 

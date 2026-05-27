@@ -17,6 +17,7 @@ mod chain_adapter;
 mod config;
 mod error;
 mod ports;
+mod proposer;
 mod service;
 mod validators;
 mod wiring;
@@ -27,5 +28,6 @@ pub use config::{
 };
 pub use error::{DutiesError, DutiesResult};
 pub use ports::{Chain, PublishError, Publisher};
+pub use proposer::LocalProposers;
 pub use service::Service;
 pub use validators::ValidatorAssignments;
