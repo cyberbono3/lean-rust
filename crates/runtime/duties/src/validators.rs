@@ -10,7 +10,7 @@
 //! ```
 //!
 //! The alternative `assignments: [{node_name, validators}, ...]` shape
-//! used by some lean-go fixtures is intentionally out of scope: the
+//! used by some upstream fixtures is intentionally out of scope: the
 //! devnet0 fixture used here is canonical, and supporting both shapes
 //! would expand the loader surface beyond what Issue #30 requires.
 //!
@@ -19,8 +19,8 @@
 //! - non-empty group map
 //! - non-empty per-group validator list
 //! - no duplicate validator index across groups
-//! - validator indices cover `0..total` contiguously (matches lean-go
-//!   `buildAssignments` invariant)
+//! - validator indices cover `0..total` contiguously (matches the
+//!   upstream `buildAssignments` invariant)
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -190,7 +190,7 @@ fn resolve_path(raw: &Path) -> PathBuf {
         return raw.to_path_buf();
     }
     // `CARGO_MANIFEST_DIR` resolves to the crate root at build time,
-    // matching lean-go's `goruntime.Caller`-based repo-root probe.
+    // the Rust counterpart to a `runtime.Caller`-based repo-root probe.
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(raw)
 }
 

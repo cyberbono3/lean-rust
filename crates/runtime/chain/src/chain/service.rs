@@ -202,9 +202,8 @@ impl Service {
     ///
     /// The local re-import is load-bearing: without it, this validator's
     /// own attestations only reach peers via gossip, and the next produced
-    /// block would omit them — quorum on a small devnet can stall. Mirror
-    /// of the upstream Go fix at `lean-go/lean-chain/service.go`
-    /// (`PR105 Phase 8`).
+    /// block would omit them — quorum on a small devnet can stall. Mirrors
+    /// the upstream chain-service fix for the same stall.
     ///
     /// # Errors
     /// [`ChainError::Engine`] if [`Engine::produce_attestation_vote`]
@@ -224,8 +223,8 @@ impl Service {
         // Best-effort re-import: when `latest_justified` is still the
         // zero-sentinel (e.g. fresh anchor before the first justified
         // checkpoint), the produced vote's source.root is unresolvable
-        // and the engine returns `Rejected`. lean-go behaves the same and
-        // warn-logs; we mirror that and continue.
+        // and the engine returns `Rejected`. The upstream client behaves the
+        // same and warn-logs; we mirror that and continue.
         let outcome = self.engine.import_attestation(signed.clone());
         match &outcome {
             AttestationImportResult::Accepted { head_root, .. } => {

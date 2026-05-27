@@ -1,7 +1,7 @@
 //! [`Engine::import_block`] and [`Engine::import_attestation`] — the network
 //! side of the engine surface.
 //!
-//! Ports the flow shape of lean-go `consensus/engine/importer.go` but uses
+//! Follows the upstream importer flow shape but uses
 //! Rust sum-type results: failures land inside the `Rejected` variant of
 //! the returned outcome instead of an `(outcome, error)` pair.
 //!

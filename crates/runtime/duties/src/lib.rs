@@ -1,6 +1,6 @@
 //! Duties service — the narrow devnet0 validator-duty scheduler.
 //!
-//! Ports `lean-go/runtime/duties/`. Loads local validator assignments
+//! Loads local validator assignments
 //! from YAML, schedules proposers at slot boundaries and attesters at
 //! the `vote_due_bps` deadline. Production goes through the [`Chain`]
 //! port (satisfied by [`lean_chain::Service`] via an adapter in
@@ -8,7 +8,7 @@
 //! whose impl lives in `node` per Decision 7 (Dependency Inversion).
 //! No `lean-p2p-host` import lives in this crate.
 //!
-//! Out of scope (deliberate, mirrors lean-go): aggregator duties,
+//! Out of scope (deliberate): aggregator duties,
 //! direct forkchoice mutation, optional metrics hooks.
 
 #![forbid(unsafe_code)]
