@@ -21,10 +21,10 @@ use std::sync::Arc;
 
 use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
 use parking_lot::{Mutex, MutexGuard};
-use protocol::{Block, Checkpoint, Slot, State, ValidatorIndex};
+use protocol::{Block, Checkpoint, SignedBlock, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
-use types::Bytes32;
+use types::{Bytes32, Bytes4000};
 
 use super::error::EngineError;
 
@@ -165,6 +165,55 @@ impl Engine {
         }
     }
 
+    /// Produces a block and captures its persist inputs under a single lock
+    /// acquisition, so no concurrent writer can shift the head or post-state
+    /// between production and capture (the produce-path counterpart to
+    /// [`Self::import_block_capturing`]).
+    ///
+    /// Returns the [`SignedBlock`] to gossip plus an optional [`PersistPlan`].
+    /// The plan is `None` only on the unreachable invariant violation where the
+    /// just-produced block's post-state or the head block is absent; the caller
+    /// maps that to a storage-layer error.
+    ///
+    /// # Errors
+    /// Forwards every variant raised by [`Store::produce_block`] via
+    /// [`EngineError::Forkchoice`].
+    pub(crate) fn produce_block_capturing(
+        &self,
+        slot: Slot,
+        validator: ValidatorIndex,
+    ) -> Result<(SignedBlock, Option<PersistPlan>), EngineError> {
+        let mut store = self.lock();
+        let produced = match store.produce_block(slot, validator) {
+            Ok(produced) => produced,
+            Err(err) => {
+                warn!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    %err,
+                    "engine block production failed",
+                );
+                return Err(EngineError::from(err));
+            }
+        };
+        info!(
+            slot = slot.get(),
+            validator = validator.get(),
+            parent_root = %produced.parent_root.to_hex(),
+            block_root = %produced.root.to_hex(),
+            post_state_root = %produced.post_state_root.to_hex(),
+            attestations = produced.block.body.attestations.len(),
+            "engine block produced",
+        );
+        let signed = SignedBlock {
+            message: produced.block,
+            signature: Bytes4000::new([0; 4000]),
+        };
+        let head_root = store.head();
+        let plan = capture_persist_plan(&store, produced.root, head_root, signed.clone());
+        Ok((signed, plan))
+    }
+
     /// Delegates to [`Store::produce_attestation_vote`].
     ///
     /// # Errors
@@ -236,6 +285,63 @@ impl Engine {
     pub(crate) fn lock(&self) -> MutexGuard<'_, Store> {
         self.store.lock()
     }
+}
+
+/// Persist inputs for an accepted or produced block, captured atomically
+/// while the engine lock is held and threaded to the storage layer after the
+/// lock is released.
+///
+/// Holds only engine/protocol types (no `storage` dependency): the chain
+/// service decomposes it via [`Self::into_parts`] and builds the storage
+/// `HeadInfo` itself. `#[must_use]` because dropping a plan silently loses
+/// the imported block + post-state that the engine already committed
+/// in-memory.
+#[must_use = "PersistPlan carries imported state to storage; dropping it loses that write"]
+pub(crate) struct PersistPlan {
+    block_root: Bytes32,
+    head: Checkpoint,
+    finalized: Checkpoint,
+    state: State,
+    block: SignedBlock,
+}
+
+impl PersistPlan {
+    /// Consumes the plan into its owned parts:
+    /// `(block_root, block, post_state, head_checkpoint, finalized_checkpoint)`.
+    /// The caller passes these to `storage::Store::save_accepted`, building the
+    /// `HeadInfo` from the two checkpoints.
+    pub(crate) fn into_parts(self) -> (Bytes32, SignedBlock, State, Checkpoint, Checkpoint) {
+        (
+            self.block_root,
+            self.block,
+            self.state,
+            self.head,
+            self.finalized,
+        )
+    }
+}
+
+/// Captures the persist inputs for `block_root` from a locked store guard.
+///
+/// Returns `None` if the post-state of `block_root` or the block at
+/// `head_root` is absent — both unreachable after a successful accept/produce
+/// (the block was just tracked and the head points at a tracked block), but
+/// surfaced as `None` rather than a panic so the caller decides the policy.
+pub(super) fn capture_persist_plan(
+    store: &Store,
+    block_root: Bytes32,
+    head_root: Bytes32,
+    block: SignedBlock,
+) -> Option<PersistPlan> {
+    let state = store.state(&block_root).cloned()?;
+    let head_slot = store.block(&head_root).map(|b| b.slot)?;
+    Some(PersistPlan {
+        block_root,
+        head: Checkpoint::new(head_root, head_slot),
+        finalized: store.latest_finalized(),
+        state,
+        block,
+    })
 }
 
 #[cfg(test)]

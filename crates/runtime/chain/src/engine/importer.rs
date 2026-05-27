@@ -21,7 +21,7 @@ use ssz::HashTreeRoot;
 use types::Bytes32;
 
 use super::error::EngineError;
-use super::handle::Engine;
+use super::handle::{capture_persist_plan, Engine, PersistPlan};
 use super::results::{AttestationImportResult, BlockImportResult};
 
 impl Engine {
@@ -58,6 +58,66 @@ impl Engine {
                 parent_root,
                 error,
             },
+        }
+    }
+
+    /// Imports `signed_block` and, on [`BlockImportResult::Accepted`], captures
+    /// its persist inputs under the same lock acquisition. This closes the
+    /// window between accept and capture that the two-call
+    /// `import_block` + separate `with_store` capture left open: a concurrent
+    /// writer could shift the head or finalized checkpoint between the two
+    /// acquisitions.
+    ///
+    /// Returns the structured outcome plus an optional [`PersistPlan`]. The plan
+    /// is `Some` only on `Accepted`; it is `None` for the non-accept outcomes,
+    /// and (unreachably) `None` if a post-accept invariant is violated — the
+    /// caller maps that to a storage-layer error.
+    pub(crate) fn import_block_capturing(
+        &self,
+        signed_block: SignedBlock,
+    ) -> (BlockImportResult, Option<PersistPlan>) {
+        let block_root: Bytes32 = signed_block.message.hash_tree_root().into();
+        let parent_root = signed_block.message.parent_root;
+        let mut store = self.lock();
+
+        if store.has_block(&block_root) {
+            return (BlockImportResult::DuplicateBlock { block_root }, None);
+        }
+        let Some(parent_state) = store.state(&parent_root).cloned() else {
+            return (
+                BlockImportResult::MissingParent {
+                    block_root,
+                    parent_root,
+                },
+                None,
+            );
+        };
+
+        // Clone the block once for the plan before `transition_and_track`
+        // consumes it; the clone is dropped on the rejected path.
+        let block_for_plan = signed_block.clone();
+        match transition_and_track(&mut store, signed_block, parent_state) {
+            Ok(post_state_root) => {
+                let head_root = store.head();
+                let plan = capture_persist_plan(&store, block_root, head_root, block_for_plan);
+                (
+                    BlockImportResult::Accepted {
+                        block_root,
+                        parent_root,
+                        post_state_root,
+                        head_root,
+                    },
+                    plan,
+                )
+            }
+            Err(error) => (
+                BlockImportResult::Rejected {
+                    block_root,
+                    parent_root,
+                    error,
+                },
+                None,
+            ),
         }
     }
 
@@ -189,6 +249,42 @@ mod tests {
             engine_b.import_block(signed),
             BlockImportResult::DuplicateBlock { block_root: r } if r == block_root
         ));
+    }
+
+    // -- import_block_capturing: captures plan on accept -------------------
+
+    #[test]
+    fn import_block_capturing_accepts_and_captures_plan() {
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
+        let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        let block_root: Bytes32 = signed.message.hash_tree_root().into();
+
+        let importer = engine_at_genesis(ENGINE_VALIDATORS);
+        let (outcome, plan) = importer.import_block_capturing(signed);
+
+        assert!(
+            matches!(outcome, BlockImportResult::Accepted { block_root: r, .. } if r == block_root)
+        );
+        let plan = plan.expect("Accepted import must capture a persist plan");
+        let (root, block, _state, head, _finalized) = plan.into_parts();
+        assert_eq!(root, block_root);
+        let persisted_root: Bytes32 = block.message.hash_tree_root().into();
+        assert_eq!(persisted_root, block_root);
+        // Head checkpoint captured under the same lock matches the live head.
+        assert_eq!(head.root, importer.head());
+    }
+
+    #[test]
+    fn import_block_capturing_yields_no_plan_on_duplicate() {
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
+        let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+
+        let importer = engine_at_genesis(ENGINE_VALIDATORS);
+        let _ = importer.import_block_capturing(signed.clone());
+        let (outcome, plan) = importer.import_block_capturing(signed);
+
+        assert!(matches!(outcome, BlockImportResult::DuplicateBlock { .. }));
+        assert!(plan.is_none(), "duplicate import must not capture a plan");
     }
 
     // -- import_block: missing parent does not mutate ----------------------

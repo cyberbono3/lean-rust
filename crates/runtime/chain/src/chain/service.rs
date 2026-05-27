@@ -16,12 +16,13 @@
 
 use std::sync::Arc;
 
-use crate::engine::{AttestationImportResult, BlockImportResult, Engine};
+use crate::engine::{AttestationImportResult, BlockImportResult, Engine, PersistPlan};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use lean_wire::Status;
 use parking_lot::{Mutex, RwLock};
 use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
+use ssz::HashTreeRoot;
 use storage::HeadInfo;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -101,8 +102,10 @@ impl Service {
     #[instrument(level = "debug", skip_all, fields(slot = signed.message.slot.get()), err)]
     pub async fn import_block(&self, signed: SignedBlock) -> Result<BlockImportResult, ChainError> {
         let slot = signed.message.slot;
-        let to_persist = signed.clone();
-        let outcome = self.engine.import_block(signed);
+        // Import and capture the persist inputs under one engine-lock
+        // acquisition, so no concurrent writer can shift the head/finalized
+        // checkpoint between accept and capture.
+        let (outcome, plan) = self.engine.import_block_capturing(signed);
 
         if let BlockImportResult::Accepted {
             block_root,
@@ -110,7 +113,10 @@ impl Service {
             ..
         } = &outcome
         {
-            self.persist_accepted(*block_root, *head_root, to_persist)?;
+            let plan = plan.ok_or(ChainError::PostStateMissing {
+                block_root: *block_root,
+            })?;
+            self.persist_plan(plan)?;
             self.refresh_snapshot();
             debug!(
                 slot = slot.get(),
@@ -170,26 +176,19 @@ impl Service {
         slot: Slot,
         validator: ValidatorIndex,
     ) -> Result<SignedBlock, ChainError> {
-        let produced = self.engine.produce_block(slot, validator)?;
-        let signed = SignedBlock {
-            message: produced.block,
-            signature: Bytes4000::new([0; 4000]),
-        };
-        // Capture (head_root, post_state, head_slot, finalized) under a
-        // single engine-lock acquisition so the HeadInfo we persist below
-        // comes from one consistent snapshot. Previously head_root was
-        // read via a separate engine.head() call AND persist_accepted
-        // re-acquired the lock twice more — concurrent imports could
-        // shift the head between acquisitions and write a HeadInfo whose
-        // root and slot came from different store states.
-        let head_root = self.engine.head();
-        self.persist_accepted(produced.root, head_root, signed.clone())?;
+        // Produce and capture the persist inputs under one engine-lock
+        // acquisition: the block, its post-state, the head, and the finalized
+        // checkpoint all come from one consistent store snapshot, instead of
+        // the prior three separate acquisitions (produce, head(), persist).
+        let (signed, plan) = self.engine.produce_block_capturing(slot, validator)?;
+        let block_root: Bytes32 = signed.message.hash_tree_root().into();
+        let plan = plan.ok_or(ChainError::PostStateMissing { block_root })?;
+        self.persist_plan(plan)?;
         self.refresh_snapshot();
         debug!(
             slot = slot.get(),
             validator = validator.get(),
-            block_root = %produced.root.to_hex(),
-            head_root = %head_root.to_hex(),
+            block_root = %block_root.to_hex(),
             "chain produced block persisted",
         );
         Ok(signed)
@@ -287,37 +286,21 @@ impl Service {
         *self.snapshot.write() = ChainSnapshot::from_engine(&self.engine);
     }
 
-    /// One-shot persistence sweep for an accepted block. Block, post-state,
-    /// and head commit through a single [`storage::Store::save_accepted`]
-    /// call, so a partial failure cannot leave the head ahead of its payload.
-    fn persist_accepted(
-        &self,
-        block_root: Bytes32,
-        head_root: Bytes32,
-        signed: SignedBlock,
-    ) -> Result<(), ChainError> {
-        let (post_state_opt, head_slot_opt, finalized) = self.engine.with_store(|s| {
-            (
-                s.state(&block_root).cloned(),
-                s.block(&head_root).map(|b| b.slot),
-                s.latest_finalized(),
-            )
-        });
-        let post_state = post_state_opt.ok_or(ChainError::PostStateMissing { block_root })?;
-        // The previous `unwrap_or(Slot::ZERO)` silently wrote a corrupt
-        // HeadInfo when the engine's head_root pointed at a block no
-        // longer in the store (head/track race or invariant violation).
-        // Refusing the persist keeps the on-disk state consistent.
-        let head_slot = head_slot_opt.ok_or(ChainError::HeadBlockMissing { head_root })?;
-
-        // Single atomic writer: block + post-state + head commit together, so
-        // a mid-persist failure can never strand the head ahead of its block
-        // or state (closes the prior three-call TOCTOU window).
+    /// Commits an engine-captured [`PersistPlan`] to storage.
+    ///
+    /// The plan was materialized atomically under the engine lock (head,
+    /// post-state, and finalized checkpoint from one consistent snapshot), so
+    /// this method only decomposes it and issues the single atomic
+    /// [`storage::Store::save_accepted`] write: block + post-state + head
+    /// commit together, and a mid-persist failure can never strand the head
+    /// ahead of its block or state.
+    fn persist_plan(&self, plan: PersistPlan) -> Result<(), ChainError> {
+        let (block_root, block, post_state, head, finalized) = plan.into_parts();
         self.store.save_accepted(
             block_root,
-            signed,
+            block,
             post_state,
-            HeadInfo::new(Checkpoint::new(head_root, head_slot), finalized),
+            HeadInfo::new(head, finalized),
         )?;
         Ok(())
     }
