@@ -169,6 +169,13 @@ impl Service {
             message: produced.block,
             signature: Bytes4000::new([0; 4000]),
         };
+        // Capture (head_root, post_state, head_slot, finalized) under a
+        // single engine-lock acquisition so the HeadInfo we persist below
+        // comes from one consistent snapshot. Previously head_root was
+        // read via a separate engine.head() call AND persist_accepted
+        // re-acquired the lock twice more — concurrent imports could
+        // shift the head between acquisitions and write a HeadInfo whose
+        // root and slot came from different store states.
         let head_root = self.engine.head();
         self.persist_accepted(produced.root, head_root, signed.clone())?;
         self.refresh_snapshot();
@@ -293,7 +300,11 @@ impl Service {
             )
         });
         let post_state = post_state_opt.ok_or(ChainError::PostStateMissing { block_root })?;
-        let head_slot = head_slot_opt.unwrap_or(Slot::ZERO);
+        // The previous `unwrap_or(Slot::ZERO)` silently wrote a corrupt
+        // HeadInfo when the engine's head_root pointed at a block no
+        // longer in the store (head/track race or invariant violation).
+        // Refusing the persist keeps the on-disk state consistent.
+        let head_slot = head_slot_opt.ok_or(ChainError::HeadBlockMissing { head_root })?;
 
         self.store.save_block(block_root, signed)?;
         self.store.save_state(block_root, post_state)?;

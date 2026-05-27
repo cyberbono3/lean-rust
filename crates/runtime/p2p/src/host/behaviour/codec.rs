@@ -159,9 +159,16 @@ async fn read_to_end<T: AsyncRead + Unpin + Send>(io: &mut T) -> io::Result<Vec<
     // substream open and streams unbounded bytes. The frame-level uvarint
     // limit is enforced separately inside decode_*_frame; this is the
     // outer stream-level guard.
+    //
+    // `take(MAX + 1)` lets us distinguish a legitimate exact-cap read
+    // (rare but allowed) from a peer overrunning the limit. Reading
+    // strictly more than MAX bytes triggers the InvalidData error.
     let mut buf = Vec::new();
-    let read = io.take(MAX_RPC_STREAM_BYTES).read_to_end(&mut buf).await?;
-    if u64::try_from(read).unwrap_or(u64::MAX) >= MAX_RPC_STREAM_BYTES {
+    let read = io
+        .take(MAX_RPC_STREAM_BYTES + 1)
+        .read_to_end(&mut buf)
+        .await?;
+    if u64::try_from(read).unwrap_or(u64::MAX) > MAX_RPC_STREAM_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(

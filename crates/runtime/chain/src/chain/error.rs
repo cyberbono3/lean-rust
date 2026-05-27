@@ -37,4 +37,15 @@ pub enum ChainError {
     /// state-transition) — duties callers warn-log and continue.
     #[error("engine: {0}")]
     Engine(#[from] EngineError),
+
+    /// The engine's claimed head root resolved to no block on the
+    /// immediate follow-up read inside the persist sweep. Indicates a
+    /// head/track race or invariant violation; refusing the persist
+    /// (rather than silently writing `HeadInfo { slot: 0 }`) keeps the
+    /// on-disk state consistent with the engine.
+    #[error("engine claimed head root has no corresponding block: head_root={}", head_root.to_hex())]
+    HeadBlockMissing {
+        /// Root the engine returned from `head()` but had no block for.
+        head_root: Bytes32,
+    },
 }

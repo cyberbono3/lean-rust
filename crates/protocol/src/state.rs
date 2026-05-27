@@ -269,6 +269,16 @@ impl State {
             "justifications_validators",
         )?;
 
+        // The decoded variable-length fields are intentionally NOT
+        // copied into the returned State: this function is a
+        // validate-then-discard anchor-state producer, not a full
+        // legacy-shape reconstruction. It runs ream-format SSZ through
+        // the field-level parsers (so we surface malformed input as
+        // typed errors) and then returns the canonical slot-0 anchor
+        // shape (empty history, default bitlists) consistent with how
+        // the rest of the codebase treats imported anchor states. See
+        // beacon-cli's loads_ream_legacy_local_pq_state_from_ssz test
+        // for the contract.
         Ok(Self {
             config,
             latest_block_header: BlockHeader {
