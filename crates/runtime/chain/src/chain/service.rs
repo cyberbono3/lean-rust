@@ -282,10 +282,9 @@ impl Service {
         *self.snapshot.write() = ChainSnapshot::from_engine(&self.engine);
     }
 
-    /// One-shot persistence sweep for an accepted block. All three
-    /// `save_*` calls run before the snapshot refresh so a partial
-    /// failure leaves storage maximally consistent with what was
-    /// recorded.
+    /// One-shot persistence sweep for an accepted block. Block, post-state,
+    /// and head commit through a single [`storage::Store::save_accepted`]
+    /// call, so a partial failure cannot leave the head ahead of its payload.
     fn persist_accepted(
         &self,
         block_root: Bytes32,
@@ -306,12 +305,15 @@ impl Service {
         // Refusing the persist keeps the on-disk state consistent.
         let head_slot = head_slot_opt.ok_or(ChainError::HeadBlockMissing { head_root })?;
 
-        self.store.save_block(block_root, signed)?;
-        self.store.save_state(block_root, post_state)?;
-        self.store.save_head(HeadInfo::new(
-            Checkpoint::new(head_root, head_slot),
-            finalized,
-        ))?;
+        // Single atomic writer: block + post-state + head commit together, so
+        // a mid-persist failure can never strand the head ahead of its block
+        // or state (closes the prior three-call TOCTOU window).
+        self.store.save_accepted(
+            block_root,
+            signed,
+            post_state,
+            HeadInfo::new(Checkpoint::new(head_root, head_slot), finalized),
+        )?;
         Ok(())
     }
 }

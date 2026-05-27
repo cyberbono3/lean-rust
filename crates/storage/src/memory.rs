@@ -60,6 +60,23 @@ impl Store for MemoryStore {
         Ok(())
     }
 
+    /// Atomic override: block, state, and head all land under one `write()`
+    /// acquisition, so concurrent readers never observe a head that points at
+    /// a not-yet-inserted block or state.
+    fn save_accepted(
+        &self,
+        block_root: Bytes32,
+        block: SignedBlock,
+        state: State,
+        head: HeadInfo,
+    ) -> Result<(), StorageError> {
+        let mut inner = self.inner.write();
+        inner.blocks.insert(block_root, block);
+        inner.states.insert(block_root, state);
+        inner.head = Some(head);
+        Ok(())
+    }
+
     fn has_block(&self, root: &Bytes32) -> Result<bool, StorageError> {
         Ok(self.inner.read().blocks.contains_key(root))
     }

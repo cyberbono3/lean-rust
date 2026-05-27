@@ -65,6 +65,38 @@ pub trait Store: Send + Sync {
     /// Backend-specific failures via [`StorageError`].
     fn save_head(&self, info: HeadInfo) -> Result<(), StorageError>;
 
+    /// Atomically persists an accepted block, its post-state (both keyed by
+    /// `block_root`), and the updated canonical `head` in one call.
+    ///
+    /// The head record is written only after the block and state succeed, so
+    /// a mid-call backend failure never leaves [`Self::load_head`] pointing at
+    /// a block or state that is absent from the store. This collapses the
+    /// previous three-call `save_block` → `save_state` → `save_head` sequence
+    /// (whose interleaving window let a crash strand the head ahead of its
+    /// payload) into a single contract method.
+    ///
+    /// The default implementation performs the three writes in
+    /// `block` → `state` → `head` order, propagating the first error with `?`.
+    /// Adapters whose backend supports a single transaction (or a single lock,
+    /// like [`crate::MemoryStore`]) SHOULD override this so all three writes
+    /// commit together with no torn intermediate state observable to readers.
+    ///
+    /// # Errors
+    /// Backend-specific failures via [`StorageError`]. On error the head
+    /// record is guaranteed unchanged.
+    fn save_accepted(
+        &self,
+        block_root: Bytes32,
+        block: SignedBlock,
+        state: State,
+        head: HeadInfo,
+    ) -> Result<(), StorageError> {
+        self.save_block(block_root, block)?;
+        self.save_state(block_root, state)?;
+        self.save_head(head)?;
+        Ok(())
+    }
+
     /// Reports whether `root` is currently tracked.
     ///
     /// Adapters that can answer existence without materializing the full
