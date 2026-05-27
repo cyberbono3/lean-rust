@@ -15,7 +15,6 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use lean_core::Service as _;
 use lean_duties::{
     Chain as DutiesChain, Config as DutiesConfig, DutiesError, GenesisTimeUnix, PublishError,
@@ -47,7 +46,6 @@ impl FakeChain {
     }
 }
 
-#[async_trait]
 impl DutiesChain for FakeChain {
     async fn produce_block(
         &self,
@@ -121,7 +119,6 @@ impl MockPublisher {
     }
 }
 
-#[async_trait]
 impl Publisher for MockPublisher {
     async fn publish_block(&self, block: SignedBlock) -> Result<(), PublishError> {
         if self.should_fail() {
@@ -168,14 +165,16 @@ fn config(group: &str) -> DutiesConfig {
         .with_genesis_time_unix(GenesisTimeUnix::new(now_unix))
 }
 
-fn build(group: &str) -> (DutiesService, Arc<FakeChain>, Arc<MockPublisher>) {
+fn build(
+    group: &str,
+) -> (
+    DutiesService<FakeChain, MockPublisher>,
+    Arc<FakeChain>,
+    Arc<MockPublisher>,
+) {
     let chain = Arc::new(FakeChain::default());
     let publisher = Arc::new(MockPublisher::default());
-    let service = DutiesService::new(
-        config(group),
-        Arc::clone(&chain) as Arc<dyn DutiesChain>,
-        Arc::clone(&publisher) as Arc<dyn Publisher>,
-    );
+    let service = DutiesService::new(config(group), Arc::clone(&chain), Arc::clone(&publisher));
     (service, chain, publisher)
 }
 

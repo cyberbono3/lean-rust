@@ -42,10 +42,15 @@ struct RunHandle {
 /// Construct via [`Service::new`]; supply impls of [`Chain`] (the chain
 /// service in production, an in-memory fake in tests) and [`Publisher`]
 /// (the `node`-level libp2p adapter in production, a mock in tests).
-pub struct Service {
+///
+/// Generic over the concrete `Chain` / `Publisher` impls (`Arc<C>` /
+/// `Arc<P>`, not trait objects) so the native `async fn` ports avoid a
+/// boxed-future allocation per call (#27). The composition root stores
+/// the constructed `Service<C, P>` behind `Arc<dyn lean_core::Service>`.
+pub struct Service<C: Chain, P: Publisher> {
     config: Config,
-    chain: Arc<dyn Chain>,
-    publisher: Arc<dyn Publisher>,
+    chain: Arc<C>,
+    publisher: Arc<P>,
     /// Cached `(slot_duration, vote_due_offset)` derived from
     /// `config::DEVNET_CONFIG`. Cached so the scheduler doesn't
     /// re-multiply on every iteration.
@@ -125,7 +130,7 @@ impl PublishHealth {
     }
 }
 
-impl core::fmt::Debug for Service {
+impl<C: Chain, P: Publisher> core::fmt::Debug for Service<C, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let state = self.state.lock();
         f.debug_struct("Service")
@@ -138,7 +143,7 @@ impl core::fmt::Debug for Service {
     }
 }
 
-impl Service {
+impl<C: Chain, P: Publisher> Service<C, P> {
     /// Builds a duties service. [`Config`] is already validated at
     /// construction (parse-don't-validate), so this method is
     /// infallible at the field level — it cannot reject a malformed
@@ -146,7 +151,7 @@ impl Service {
     /// [`Service::start`], not here, so a missing fixture file does
     /// not prevent service composition.
     #[must_use]
-    pub fn new(config: Config, chain: Arc<dyn Chain>, publisher: Arc<dyn Publisher>) -> Self {
+    pub fn new(config: Config, chain: Arc<C>, publisher: Arc<P>) -> Self {
         let slot_duration_ms = config.slot_duration_ms().get();
         let slot_duration = Duration::from_millis(slot_duration_ms);
         // Integer math: slot_duration_ms * bps / 10_000. The
@@ -181,7 +186,7 @@ impl Service {
     }
 }
 
-impl Drop for Service {
+impl<C: Chain, P: Publisher> Drop for Service<C, P> {
     /// Best-effort cleanup if the service is dropped without going
     /// through [`lean_core::Service::stop`]: cancel the shared token
     /// so the worker exits on its next iteration. The handle detaches;
@@ -195,7 +200,7 @@ impl Drop for Service {
 }
 
 #[async_trait]
-impl lean_core::Service for Service {
+impl<C: Chain, P: Publisher> lean_core::Service for Service<C, P> {
     fn name(&self) -> &'static str {
         "duties"
     }
@@ -383,9 +388,9 @@ impl Progress {
     }
 }
 
-struct Worker {
-    chain: Arc<dyn Chain>,
-    publisher: Arc<dyn Publisher>,
+struct Worker<C: Chain, P: Publisher> {
+    chain: Arc<C>,
+    publisher: Arc<P>,
     /// Shared immutable slice of locally assigned validators.
     /// `Arc<[T]>` (vs `Arc<Vec<T>>`) keeps one heap allocation and
     /// drops the unused `capacity` field — idiomatic Rust for
@@ -405,7 +410,7 @@ struct Worker {
     health: HealthSink,
 }
 
-impl Worker {
+impl<C: Chain, P: Publisher> Worker<C, P> {
     #[instrument(level = "debug", name = "duties.worker", skip_all)]
     async fn run(mut self) {
         loop {
@@ -627,7 +632,6 @@ mod tests {
     /// construction-time tests below.
     struct NoopChain;
 
-    #[async_trait]
     impl Chain for NoopChain {
         async fn produce_block(
             &self,
@@ -647,7 +651,6 @@ mod tests {
 
     struct NoopPublisher;
 
-    #[async_trait]
     impl Publisher for NoopPublisher {
         async fn publish_block(&self, _b: SignedBlock) -> Result<(), PublishError> {
             Ok(())
@@ -657,7 +660,7 @@ mod tests {
         }
     }
 
-    fn service() -> Service {
+    fn service() -> Service<NoopChain, NoopPublisher> {
         Service::new(
             Config::default(),
             Arc::new(NoopChain),
@@ -689,7 +692,7 @@ mod tests {
     #[tokio::test]
     async fn status_before_start_errors() {
         let svc = service();
-        assert!(<Service as lean_core::Service>::status(&svc).await.is_err());
+        assert!(lean_core::Service::status(&svc).await.is_err());
     }
 
     // -- PublishHealth ------------------------------------------------------

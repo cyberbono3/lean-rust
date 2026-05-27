@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use lean_duties::{PublishError, Publisher};
 use lean_p2p_host::P2pService;
 use protocol::{SignedBlock, SignedVote};
@@ -28,7 +27,6 @@ impl PublisherAdapter {
     }
 }
 
-#[async_trait]
 impl Publisher for PublisherAdapter {
     async fn publish_block(&self, block: SignedBlock) -> Result<(), PublishError> {
         self.host()?
