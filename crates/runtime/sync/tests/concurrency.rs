@@ -199,3 +199,43 @@ async fn concurrent_walks_capped_at_max_concurrent_peer_syncs() {
     network.release(PEERS);
     lp.stop(CancellationToken::new()).await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_peer_flap_yields_single_walk() {
+    const FLAPS: usize = 100;
+
+    let chain = Arc::new(StubChain);
+    let network = Arc::new(GatedNetwork::new());
+    let peers = ChannelPeers::new();
+
+    let lp = Loop::new(
+        Config::default(),
+        chain as Arc<dyn Chain>,
+        Arc::clone(&network) as Arc<dyn Network>,
+        peers.clone() as Arc<dyn PeerEventProvider>,
+    );
+    lp.start().await.unwrap();
+
+    // The first event spawns a walk that blocks in send_status; the
+    // remaining 99 same-peer events are deduped while it is in flight.
+    let sender = peers.sender();
+    for _ in 0..FLAPS {
+        sender.send(PeerId::new("peer-a").unwrap()).await.unwrap();
+    }
+
+    assert!(
+        poll_until(500, || network.status_calls.load(Ordering::SeqCst) >= 1).await,
+        "expected the single walk to start",
+    );
+    // Let any (incorrectly) un-deduped walks also reach send_status.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let calls = network.status_calls.load(Ordering::SeqCst);
+    assert_eq!(
+        calls, 1,
+        "a flapping peer must yield exactly one walk, got {calls}"
+    );
+
+    network.release(FLAPS);
+    lp.stop(CancellationToken::new()).await.unwrap();
+}

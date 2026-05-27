@@ -11,6 +11,7 @@
 //! finds a known block) is the expected outcome and is resolved on a
 //! future peer-connect or via gossip.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -195,13 +196,15 @@ impl lean_core::Service for Loop {
     }
 }
 
-/// Drains peer-connect events until cancellation or sender close. Each
-/// event acquires a [`Semaphore`] permit (capping concurrent walks at
-/// `max_concurrent_peer_syncs`), then spawns an independent
+/// Drains peer-connect events until cancellation or sender close.
+///
+/// Per event: reap completed walks, dedup against any in-flight walk for
+/// the same `PeerId` (a flap-storming peer yields exactly one walk),
+/// acquire a [`Semaphore`] permit (capping concurrent walks at
+/// `max_concurrent_peer_syncs`), then spawn an independent
 /// [`PeerWorker::handle`] task tracked by `tracker`. The permit is held
-/// for the task's lifetime and released on completion. Acquiring before
-/// the spawn means a flap storm backpressures the event drain rather
-/// than fanning out unbounded tasks.
+/// for the task's lifetime; acquiring before the spawn means a flap
+/// storm backpressures the event drain rather than fanning out.
 #[instrument(level = "trace", name = "sync.watch", skip_all)]
 async fn watch_loop(
     worker: PeerWorker,
@@ -210,6 +213,10 @@ async fn watch_loop(
     semaphore: Arc<Semaphore>,
 ) {
     let cancel = worker.cancel.clone();
+    // In-flight walk per peer. A peer can re-sync only once its prior
+    // walk completes (reaped below); a duplicate event while a walk is
+    // running is dropped.
+    let mut in_flight: HashMap<PeerId, JoinHandle<()>> = HashMap::new();
     loop {
         tokio::select! {
             // `biased`: cancellation has priority over event delivery.
@@ -217,6 +224,13 @@ async fn watch_loop(
             () = cancel.cancelled() => break,
             maybe_peer = events.recv() => {
                 let Some(peer) = maybe_peer else { break };
+                // Reap finished walks so their peers can sync again.
+                in_flight.retain(|_, handle| !handle.is_finished());
+                // Dedup: a walk for this peer is already running.
+                if in_flight.contains_key(&peer) {
+                    debug!(%peer, "sync walk already in flight; dropping duplicate peer event");
+                    continue;
+                }
                 // Acquire a permit before spawning. Cancellation still
                 // wins while we wait for a free permit.
                 let permit = tokio::select! {
@@ -230,7 +244,8 @@ async fn watch_loop(
                     },
                 };
                 let worker = worker.clone();
-                tracker.spawn(
+                let key = peer.clone();
+                let handle = tracker.spawn(
                     async move {
                         // Hold the permit for the walk's lifetime.
                         let _permit = permit;
@@ -238,6 +253,7 @@ async fn watch_loop(
                     }
                     .instrument(Span::current()),
                 );
+                in_flight.insert(key, handle);
             }
         }
     }
