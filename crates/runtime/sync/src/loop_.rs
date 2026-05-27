@@ -20,6 +20,7 @@ use parking_lot::Mutex;
 use protocol::SignedBlock;
 use ssz::HashTreeRoot;
 use tokio::sync::mpsc;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -135,7 +136,11 @@ impl lean_core::Service for Loop {
             network: Arc::clone(&self.network),
             cancel: cancel.clone(),
         };
-        let watch = tokio::spawn(watch_loop(worker, events, tracker.clone()));
+        // One permit per allowed concurrent peer walk. The watch loop
+        // acquires before spawning, so a flap storm backpressures here
+        // instead of fanning out unbounded tasks.
+        let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent_peer_syncs.get()));
+        let watch = tokio::spawn(watch_loop(worker, events, tracker.clone(), semaphore));
         *slot = Some(RunHandle {
             watch,
             peers: tracker,
@@ -191,10 +196,19 @@ impl lean_core::Service for Loop {
 }
 
 /// Drains peer-connect events until cancellation or sender close. Each
-/// event spawns an independent [`PeerWorker::handle`] task tracked by
-/// `tracker`.
+/// event acquires a [`Semaphore`] permit (capping concurrent walks at
+/// `max_concurrent_peer_syncs`), then spawns an independent
+/// [`PeerWorker::handle`] task tracked by `tracker`. The permit is held
+/// for the task's lifetime and released on completion. Acquiring before
+/// the spawn means a flap storm backpressures the event drain rather
+/// than fanning out unbounded tasks.
 #[instrument(level = "trace", name = "sync.watch", skip_all)]
-async fn watch_loop(worker: PeerWorker, mut events: mpsc::Receiver<PeerId>, tracker: TaskTracker) {
+async fn watch_loop(
+    worker: PeerWorker,
+    mut events: mpsc::Receiver<PeerId>,
+    tracker: TaskTracker,
+    semaphore: Arc<Semaphore>,
+) {
     let cancel = worker.cancel.clone();
     loop {
         tokio::select! {
@@ -203,7 +217,27 @@ async fn watch_loop(worker: PeerWorker, mut events: mpsc::Receiver<PeerId>, trac
             () = cancel.cancelled() => break,
             maybe_peer = events.recv() => {
                 let Some(peer) = maybe_peer else { break };
-                tracker.spawn(worker.clone().handle(peer).instrument(Span::current()));
+                // Acquire a permit before spawning. Cancellation still
+                // wins while we wait for a free permit.
+                let permit = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    permit = Arc::clone(&semaphore).acquire_owned() => match permit {
+                        Ok(permit) => permit,
+                        // The semaphore is never closed while the loop
+                        // runs; a closed semaphore means shutdown.
+                        Err(_) => break,
+                    },
+                };
+                let worker = worker.clone();
+                tracker.spawn(
+                    async move {
+                        // Hold the permit for the walk's lifetime.
+                        let _permit = permit;
+                        worker.handle(peer).await;
+                    }
+                    .instrument(Span::current()),
+                );
             }
         }
     }
