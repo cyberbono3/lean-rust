@@ -296,10 +296,13 @@ impl Service {
     /// ahead of its block or state.
     fn persist_plan(&self, plan: PersistPlan) -> Result<(), ChainError> {
         let (block_root, block, post_state, head, finalized) = plan.into_parts();
+        // The engine lock is already released here, so unwrapping the Arc (and
+        // deep-cloning only if the store still shares it) happens off the hot
+        // path — the under-lock cost was just the refcount bump in capture.
         self.store.save_accepted(
             block_root,
             block,
-            post_state,
+            Arc::unwrap_or_clone(post_state),
             HeadInfo::new(head, finalized),
         )?;
         Ok(())

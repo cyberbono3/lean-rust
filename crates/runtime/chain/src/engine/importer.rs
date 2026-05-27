@@ -39,7 +39,10 @@ impl Engine {
         if store.has_block(&block_root) {
             return BlockImportResult::DuplicateBlock { block_root };
         }
-        let Some(parent_state) = store.state(&parent_root).cloned() else {
+        // Deep-clone the parent post-state: the state transition mutates an
+        // owned copy. (The post-state *capture* for persistence is the cheap
+        // Arc bump; this parent clone is inherent to running the STF.)
+        let Some(parent_state) = store.state(&parent_root).map(|s| State::clone(s)) else {
             return BlockImportResult::MissingParent {
                 block_root,
                 parent_root,
@@ -83,7 +86,10 @@ impl Engine {
         if store.has_block(&block_root) {
             return (BlockImportResult::DuplicateBlock { block_root }, None);
         }
-        let Some(parent_state) = store.state(&parent_root).cloned() else {
+        // Deep-clone the parent post-state: the state transition mutates an
+        // owned copy. (The post-state *capture* for persistence is the cheap
+        // Arc bump; this parent clone is inherent to running the STF.)
+        let Some(parent_state) = store.state(&parent_root).map(|s| State::clone(s)) else {
             return (
                 BlockImportResult::MissingParent {
                     block_root,

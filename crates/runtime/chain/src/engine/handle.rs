@@ -20,6 +20,8 @@
 use std::sync::Arc;
 
 use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
+// `State` is re-exported below via `protocol`; `Arc<State>` flows from the
+// store's post-state map into the captured persist plan as a refcount bump.
 use parking_lot::{Mutex, MutexGuard};
 use protocol::{Block, Checkpoint, SignedBlock, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
@@ -301,7 +303,7 @@ pub(crate) struct PersistPlan {
     block_root: Bytes32,
     head: Checkpoint,
     finalized: Checkpoint,
-    state: State,
+    state: Arc<State>,
     block: SignedBlock,
 }
 
@@ -309,8 +311,10 @@ impl PersistPlan {
     /// Consumes the plan into its owned parts:
     /// `(block_root, block, post_state, head_checkpoint, finalized_checkpoint)`.
     /// The caller passes these to `storage::Store::save_accepted`, building the
-    /// `HeadInfo` from the two checkpoints.
-    pub(crate) fn into_parts(self) -> (Bytes32, SignedBlock, State, Checkpoint, Checkpoint) {
+    /// `HeadInfo` from the two checkpoints. The post-state is the `Arc` captured
+    /// under the engine lock; the caller unwraps it (deep-cloning only if still
+    /// shared) after the lock has been released.
+    pub(crate) fn into_parts(self) -> (Bytes32, SignedBlock, Arc<State>, Checkpoint, Checkpoint) {
         (
             self.block_root,
             self.block,
