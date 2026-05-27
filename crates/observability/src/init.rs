@@ -3,6 +3,7 @@
 //! [`tracing_appender`].
 
 use std::io;
+use std::io::IsTerminal;
 use std::path::Path;
 
 use thiserror::Error;
@@ -148,7 +149,12 @@ pub fn init_tracing(
 ) -> Result<TracingGuard, TracingInitError> {
     let filter = env_filter(verbosity);
 
-    let stderr_layer = fmt::layer().with_writer(io::stderr);
+    // Emit ANSI color escapes only when stderr is a real terminal.
+    // Piped stderr (`lean-rust 2> file.log`) otherwise gets literal
+    // escape bytes mixed into the log.
+    let stderr_layer = fmt::layer()
+        .with_ansi(stderr_ansi_enabled())
+        .with_writer(io::stderr);
 
     let (file_layer, file_worker) = match file_sink {
         Some(FileSink {
@@ -205,10 +211,23 @@ fn env_filter(verbosity: Verbosity) -> EnvFilter {
     EnvFilter::builder().parse_lossy(source)
 }
 
+/// Whether the stderr `fmt` layer should emit ANSI color escapes:
+/// only when stderr is connected to a terminal.
+fn stderr_ansi_enabled() -> bool {
+    io::stderr().is_terminal()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_ansi_disabled_when_not_a_terminal() {
+        // Under the test harness stderr is captured (piped), so ANSI
+        // must be gated off — no escape bytes leak into redirected logs.
+        assert!(!stderr_ansi_enabled());
+    }
 
     #[test]
     fn rotation_defaults_to_daily() {
