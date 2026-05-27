@@ -155,11 +155,11 @@ mod tests {
 
     #[test]
     fn log_file_name_has_expected_shape() {
-        let name = log_file_name("lean-beacon");
-        // "lean-beacon-YYYYMMDDThhmmssZ.log" = 11 + 1 + 16 + 4 = 32 chars
-        assert!(name.starts_with("lean-beacon-"), "got {name}");
+        let name = log_file_name("lean-rust");
+        // "lean-rust-YYYYMMDDThhmmssZ.log" = 9 + 1 + 16 + 4 = 30 chars
+        assert!(name.starts_with("lean-rust-"), "got {name}");
         let extension = std::path::Path::new(&name).extension();
         assert_eq!(extension.and_then(|e| e.to_str()), Some("log"));
-        assert_eq!(name.len(), "lean-beacon-".len() + 16 + ".log".len());
+        assert_eq!(name.len(), "lean-rust-".len() + 16 + ".log".len());
     }
 }

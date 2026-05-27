@@ -1,4 +1,4 @@
-//! `lean-beacon` binary entry point.
+//! `lean-rust` binary entry point.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -13,10 +13,10 @@ use tracing::{info, warn};
 use lean_cli::cli::{Cli, Command};
 use lean_cli::{genesis, keygen};
 
-const AGENT_VERSION: &str = concat!("lean-beacon/", env!("CARGO_PKG_VERSION"));
+const AGENT_VERSION: &str = concat!("lean-rust/", env!("CARGO_PKG_VERSION"));
 const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:5052";
 const DEFAULT_IDENTITY_PATH: &str = "p2p_priv_key";
-const DEFAULT_LOG_PREFIX: &str = "lean-beacon";
+const DEFAULT_LOG_PREFIX: &str = "lean-rust";
 const DEFAULT_METRICS_ADDR: &str = "127.0.0.1:9090";
 const DEFAULT_VALIDATORS_PATH: &str = "crates/runtime/duties/tests/fixtures/validators.yaml";
 
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn build_devnet_config_synthesizes_genesis_when_state_is_absent() {
-        let cli = Cli::try_parse_from(["lean-beacon"]).expect("parse defaults");
+        let cli = Cli::try_parse_from(["lean-rust"]).expect("parse defaults");
 
         let config = build_devnet_config(&cli).expect("build config");
 
@@ -297,7 +297,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("create temp dir");
         let validators_path = write_validator_registry(dir.path());
         let cli = Cli::try_parse_from([
-            "lean-beacon",
+            "lean-rust",
             "--validator-registry-path",
             parse_path(&validators_path),
             "--node-id",
@@ -316,7 +316,7 @@ mod tests {
     fn build_devnet_config_uses_data_dir_for_default_identity_path() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let data_dir = dir.path().join("node-data");
-        let cli = Cli::try_parse_from(["lean-beacon", "--data-dir", parse_path(&data_dir)])
+        let cli = Cli::try_parse_from(["lean-rust", "--data-dir", parse_path(&data_dir)])
             .expect("parse data dir");
 
         let config = build_devnet_config(&cli).expect("build config");
@@ -333,7 +333,7 @@ mod tests {
         let data_dir = dir.path().join("node-data");
         let private_key_path = dir.path().join("keys/node1.key");
         let cli = Cli::try_parse_from([
-            "lean-beacon",
+            "lean-rust",
             "--data-dir",
             parse_path(&data_dir),
             "--private-key-path",
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn build_devnet_config_wires_http_and_metrics_addresses() {
         let cli = Cli::try_parse_from([
-            "lean-beacon",
+            "lean-rust",
             "--http-address",
             "0.0.0.0",
             "--http-port",
@@ -374,9 +374,9 @@ mod tests {
     #[test]
     fn build_devnet_config_metrics_flag_is_compatibility_noop() {
         let without_metrics =
-            Cli::try_parse_from(["lean-beacon"]).expect("parse without metrics flag");
+            Cli::try_parse_from(["lean-rust"]).expect("parse without metrics flag");
         let with_metrics =
-            Cli::try_parse_from(["lean-beacon", "--metrics"]).expect("parse with metrics flag");
+            Cli::try_parse_from(["lean-rust", "--metrics"]).expect("parse with metrics flag");
 
         let without_metrics =
             build_devnet_config(&without_metrics).expect("build config without metrics flag");
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn file_sink_rejects_prefix_without_path() {
-        let cli = Cli::try_parse_from(["lean-beacon", "--log.dir.prefix", "lean"])
+        let cli = Cli::try_parse_from(["lean-rust", "--log.dir.prefix", "lean"])
             .expect("parse log prefix");
 
         let err = file_sink(&cli).expect_err("log prefix without log path must fail");

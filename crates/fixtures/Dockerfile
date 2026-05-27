@@ -5,7 +5,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY bin ./bin
 
-RUN cargo build -p lean-beacon --release
+RUN cargo build -p lean-rust --release
 
 FROM debian:bookworm-slim AS runtime
 
@@ -17,7 +17,7 @@ RUN apt-get update \
     && groupadd --system --gid 10001 lean \
     && useradd --system --uid 10001 --gid lean --home-dir /home/lean --create-home lean
 
-COPY --from=builder --chown=lean:lean /workspace/target/release/lean-beacon /usr/local/bin/lean-beacon
+COPY --from=builder --chown=lean:lean /workspace/target/release/lean-rust /usr/local/bin/lean-rust
 
 # Pre-create writable mount points so volume-backed dirs land with lean
 # ownership (the compose mounts ./logs:/var/lean-logs and ./config / ./genesis
@@ -30,4 +30,4 @@ EXPOSE 9000/udp
 EXPOSE 5052/tcp
 EXPOSE 8080/tcp
 
-ENTRYPOINT ["/usr/local/bin/lean-beacon"]
+ENTRYPOINT ["/usr/local/bin/lean-rust"]

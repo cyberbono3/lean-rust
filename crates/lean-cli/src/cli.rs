@@ -1,4 +1,4 @@
-//! Command-line interface for `lean-beacon`.
+//! Command-line interface for `lean-rust`.
 
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -9,9 +9,9 @@ use lean_observability::Verbosity;
 /// Default libp2p QUIC-v1 listen address for devnet nodes.
 pub const DEFAULT_DEVNET_LISTEN_ADDRESS: &str = "/ip4/0.0.0.0/udp/9000/quic-v1";
 
-/// Parsed `lean-beacon` CLI.
+/// Parsed `lean-rust` CLI.
 #[derive(Debug, Parser)]
-#[command(name = "lean-beacon", version, about = "Lean Ethereum devnet0 client")]
+#[command(name = "lean-rust", version, about = "Lean Ethereum devnet0 client")]
 pub struct Cli {
     /// Root directory for node data.
     #[arg(long)]
@@ -92,7 +92,7 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
-/// `lean-beacon` subcommands.
+/// `lean-rust` subcommands.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum Command {
     /// Print the canonical lean-rust devnet0 chain config YAML.
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn parses_generate_private_key_subcommand() {
         let cli = Cli::try_parse_from([
-            "lean-beacon",
+            "lean-rust",
             "generate-private-key",
             "--output-path",
             "/tmp/key.pb",
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn parses_devnet_config_subcommand() {
-        let cli = Cli::try_parse_from(["lean-beacon", "devnet-config"])
+        let cli = Cli::try_parse_from(["lean-rust", "devnet-config"])
             .expect("parse devnet-config subcommand");
 
         assert_eq!(cli.command, Some(Command::DevnetConfig));
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn parses_peer_id_subcommand() {
         let cli = Cli::try_parse_from([
-            "lean-beacon",
+            "lean-rust",
             "peer-id",
             "--private-key-path",
             "/tmp/node.key",
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn parses_root_flags() {
         let cli = Cli::try_parse_from([
-            "lean-beacon",
+            "lean-rust",
             "--data-dir",
             "data",
             "--devnet-listen-addresses",
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn parses_network_alias_for_genesis_config() {
-        let cli = Cli::try_parse_from(["lean-beacon", "--network", "config.yaml"])
+        let cli = Cli::try_parse_from(["lean-rust", "--network", "config.yaml"])
             .expect("parse network alias");
 
         assert_eq!(cli.genesis_config, Some(PathBuf::from("config.yaml")));
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn parses_bootnodes_alias_for_devnet_bootnodes() {
-        let cli = Cli::try_parse_from(["lean-beacon", "--bootnodes", "bootnodes.yaml"])
+        let cli = Cli::try_parse_from(["lean-rust", "--bootnodes", "bootnodes.yaml"])
             .expect("parse bootnodes alias");
 
         assert_eq!(cli.devnet_bootnodes, Some(PathBuf::from("bootnodes.yaml")));
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn parses_bare_http_allow_origin_as_wildcard() {
-        let cli = Cli::try_parse_from(["lean-beacon", "--http-allow-origin"])
+        let cli = Cli::try_parse_from(["lean-rust", "--http-allow-origin"])
             .expect("parse bare http allow origin");
 
         assert_eq!(cli.http_allow_origin.as_deref(), Some("*"));
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn parses_planned_local_pq_compose_command() {
         let cli = Cli::try_parse_from([
-            "lean-beacon",
+            "lean-rust",
             "--data-dir=/data",
             "--network=/genesis/config.yaml",
             "--genesis-state=/genesis/genesis.ssz",
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn debug_forces_trace_verbosity() {
-        let cli = Cli::try_parse_from(["lean-beacon", "--log-level", "error", "--debug"])
+        let cli = Cli::try_parse_from(["lean-rust", "--log-level", "error", "--debug"])
             .expect("parse debug flag");
 
         assert_eq!(cli.verbosity(), Verbosity::Trace);

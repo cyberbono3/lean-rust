@@ -35,7 +35,7 @@ GO_VALIDATORS="${GO_VALIDATORS:-$GO_FIXTURE_DIR/local_pq_validators.yaml}"
 GO_GENESIS_TIME="${GO_GENESIS_TIME:-1777370673}"
 GO_VALIDATOR_COUNT="${GO_VALIDATOR_COUNT:-6}"
 
-RUST_BIN="${RUST_BIN:-$REPO_ROOT/target/release/lean-beacon}"
+RUST_BIN="${RUST_BIN:-$REPO_ROOT/target/release/lean-rust}"
 GO_BIN="${GO_BIN:-$ARTIFACT_DIR/lean-go-beacon}"
 
 GO_LOG="$ARTIFACT_DIR/go.log"
@@ -322,7 +322,7 @@ EOF
   assert_udp_port_free "$RUST_P2P_PORT"
 
   echo "building lean-rust beacon"
-  (cd "$REPO_ROOT" && cargo build -p beacon --release)
+  (cd "$REPO_ROOT" && cargo build -p lean-rust --release)
 
   echo "building lean-go beacon"
   (cd "$LEAN_GO_DIR" && go build -o "$GO_BIN" ./cmd/lean-beacon)

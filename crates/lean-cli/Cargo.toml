@@ -5,7 +5,7 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Library surface for the lean-beacon binary: CLI parsing, genesis builders, identity keygen."
+description   = "Library surface for the lean-rust binary: CLI parsing, genesis builders, identity keygen."
 
 [lints]
 workspace = true

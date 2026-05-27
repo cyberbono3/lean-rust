@@ -19,7 +19,7 @@ members = [
     "crates/node",
     "crates/lean-cli",
     "crates/fixtures",
-    "bin/lean-beacon",
+    "bin/lean-rust",
 ]
 
 [workspace.package]

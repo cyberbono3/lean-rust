@@ -1,14 +1,14 @@
 [package]
-name          = "lean-beacon"
+name          = "lean-rust"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "`lean-beacon` binary entry-point: wires CLI + genesis + keygen into the runtime composition root."
+description   = "`lean-rust` binary entry-point: wires CLI + genesis + keygen into the runtime composition root."
 
 [[bin]]
-name = "lean-beacon"
+name          = "lean-rust"
 path = "src/main.rs"
 
 [lints]

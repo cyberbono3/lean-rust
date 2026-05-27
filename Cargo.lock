@@ -2142,26 +2142,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lean-beacon"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "config",
- "fixtures",
- "lean-cli",
- "lean-core",
- "lean-duties",
- "lean-observability",
- "lean-p2p-host",
- "node",
- "ssz",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "lean-chain"
 version = "0.1.0"
 dependencies = [
@@ -2278,6 +2258,26 @@ dependencies = [
  "tokio-util",
  "tracing",
  "types",
+]
+
+[[package]]
+name = "lean-rust"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "config",
+ "fixtures",
+ "lean-cli",
+ "lean-core",
+ "lean-duties",
+ "lean-observability",
+ "lean-p2p-host",
+ "node",
+ "ssz",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

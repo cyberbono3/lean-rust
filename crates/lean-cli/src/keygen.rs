@@ -1,4 +1,4 @@
-//! libp2p private-key generation for `lean-beacon`.
+//! libp2p private-key generation for `lean-rust`.
 
 use std::fs;
 use std::io::Write;
