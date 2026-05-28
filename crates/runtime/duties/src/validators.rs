@@ -201,19 +201,23 @@ impl ValidatorAssignments {
 fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
     use std::io::Read;
 
-    let file = std::fs::File::open(path).map_err(|source| DutiesError::YamlRead {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let file = std::fs::File::open(path).map_err(|source| yaml_read_err(path, source))?;
     let mut bytes = Vec::new();
     file.take(MAX_VALIDATORS_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|source| DutiesError::YamlRead {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        .map_err(|source| yaml_read_err(path, source))?;
     check_file_size(bytes.len() as u64)?;
     Ok(bytes)
+}
+
+/// Builds the [`DutiesError::YamlRead`] for `path`. One constructor for both
+/// the open and the read in [`read_capped`], so the path / source wrapping
+/// cannot drift between them.
+fn yaml_read_err(path: &Path, source: std::io::Error) -> DutiesError {
+    DutiesError::YamlRead {
+        path: path.to_path_buf(),
+        source,
+    }
 }
 
 /// Rejects a file whose byte length exceeds
