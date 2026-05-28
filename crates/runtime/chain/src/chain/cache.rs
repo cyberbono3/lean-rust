@@ -22,6 +22,10 @@ pub struct ChainSnapshot {
     pub safe_target_root: Bytes32,
     /// Forkchoice clock — slot index.
     pub current_slot: u64,
+    /// Latest justified checkpoint. Consumed by
+    /// `node::devnet::register_chain_gauges` (the `lean_chain_justified_slot`
+    /// gauge); no in-crate reader, hence the cross-crate note.
+    pub latest_justified: Checkpoint,
     /// Latest finalized checkpoint.
     pub latest_finalized: Checkpoint,
 }
@@ -30,12 +34,13 @@ impl ChainSnapshot {
     /// Captures a fresh snapshot under a single engine-mutex acquisition.
     #[must_use]
     pub(super) fn from_engine(engine: &Engine) -> Self {
-        let (head_root, safe_target_root, current_slot, latest_finalized) =
+        let (head_root, safe_target_root, current_slot, latest_justified, latest_finalized) =
             engine.with_store(|s| {
                 (
                     s.head(),
                     s.safe_target(),
                     s.current_slot(),
+                    s.latest_justified(),
                     s.latest_finalized(),
                 )
             });
@@ -43,6 +48,7 @@ impl ChainSnapshot {
             head_root,
             safe_target_root,
             current_slot,
+            latest_justified,
             latest_finalized,
         }
     }

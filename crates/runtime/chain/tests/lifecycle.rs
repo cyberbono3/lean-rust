@@ -60,6 +60,35 @@ async fn tick_loop_advances_engine_clock() {
     service.stop(CancellationToken::new()).await.unwrap();
 }
 
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn drop_terminates_tick_task() {
+    let engine = engine_at_genesis(ENGINE_VALIDATORS);
+    let service = build(engine.clone());
+    service.start().await.unwrap();
+    tokio::task::yield_now().await;
+
+    let slot_before = engine.with_store(forkchoice::Store::current_slot);
+    let interval_before = engine.with_store(forkchoice::Store::current_interval);
+
+    // Drop without going through stop(): the task must be terminated, not
+    // left ticking the shared engine clock.
+    drop(service);
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(config::SECONDS_PER_INTERVAL * 4)).await;
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        engine.with_store(forkchoice::Store::current_slot),
+        slot_before,
+        "tick task advanced the slot after the service was dropped",
+    );
+    assert_eq!(
+        engine.with_store(forkchoice::Store::current_interval),
+        interval_before,
+        "tick task advanced the interval after the service was dropped",
+    );
+}
+
 #[tokio::test]
 async fn start_stop_cycle_returns_cleanly() {
     let service = build(engine_at_genesis(ENGINE_VALIDATORS));

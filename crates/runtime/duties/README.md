@@ -13,9 +13,12 @@ goes through a [`Publisher`] port whose impl lives in `node`.
   [`lean_core::Service`] (start / stop / status). Owns one
   worker task driven by `tokio::time`.
 - [`Config`] — `validators_path`, `validator_group`,
-  `genesis_time_unix`. Always-valid by construction:
-  [`ValidatorsPath`] and [`ValidatorGroup`] newtypes guarantee
-  non-empty inputs; [`GenesisTimeUnix`] is a typed wrapper.
+  `genesis_time_unix`, `slot_duration_ms`. Always-valid by
+  construction: [`ValidatorsPath`] and [`ValidatorGroup`] newtypes
+  guarantee non-empty inputs; [`GenesisTimeUnix`] is a typed wrapper;
+  `slot_duration_ms` is a `NonZeroU64` (no divide-by-zero in the slot
+  math). `Config::ensure_runnable` rejects epoch genesis at start, and
+  `ValidatorAssignments::load` caps the YAML file at 1 MiB.
 - [`Chain`] / [`Publisher`] — narrow port traits declared here per
   Decision 7 (Dependency Inversion). `Chain` is satisfied by
   [`lean_chain::Service`] via [`chain_adapter`]; `Publisher`
@@ -40,7 +43,7 @@ goes through a [`Publisher`] port whose impl lives in `node`.
 
 ## Out of scope
 
-Mirrors lean-go `runtime/duties/`: aggregator duties, direct
+Mirrors the upstream `runtime/duties/` package: aggregator duties, direct
 forkchoice mutation, post-MVP metrics hooks. The scheduler is the
 narrow devnet0 surface — nothing more.
 
@@ -61,7 +64,7 @@ cargo metadata --format-version=1 \
 
 ## Why a separate crate (vs. a module of `lean-chain`)
 
-- Mirrors lean-go layout (`runtime/duties/` is its own package).
+- Mirrors the upstream layout (`runtime/duties/` is its own package).
 - The `Publisher` port has its concrete impl in `node`, not in
   this crate — the crate boundary makes the dependency-inversion
   story explicit.

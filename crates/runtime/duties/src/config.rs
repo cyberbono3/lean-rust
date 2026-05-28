@@ -12,6 +12,7 @@
 //! `max_sync_depth` is a [`core::num::NonZeroUsize`].
 
 use std::fmt;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -24,6 +25,20 @@ pub const DEFAULT_VALIDATORS_PATH: &str = "internal/testdata/devnet0/validators.
 
 /// Default local validator group selector for devnet0.
 pub const DEFAULT_VALIDATOR_GROUP: &str = "ream";
+
+/// Default slot duration in milliseconds, sourced from the canonical
+/// devnet0 preset (`config::DEVNET_CONFIG.slot_duration_ms` = 4000).
+///
+/// Modelled as a [`NonZeroU64`] so the scheduler's `elapsed /
+/// slot_duration` math can never divide by zero. The `const` `match`
+/// fires a compile-time panic if the preset is ever set to zero —
+/// `NonZeroU64::new(0)` is `None`, which is unreachable for a valid
+/// devnet config.
+pub(crate) const DEFAULT_SLOT_DURATION_MS: NonZeroU64 =
+    match NonZeroU64::new(config::DEVNET_CONFIG.slot_duration_ms) {
+        Some(v) => v,
+        None => panic!("DEVNET_CONFIG.slot_duration_ms must be non-zero"),
+    };
 
 // ============================================================================
 // GenesisTimeUnix — always-valid Unix-epoch wrapper
@@ -236,12 +251,17 @@ pub struct Config {
     validators_path: ValidatorsPath,
     validator_group: ValidatorGroup,
     genesis_time_unix: GenesisTimeUnix,
+    /// Slot duration in milliseconds. [`NonZeroU64`] so the scheduler
+    /// cannot divide by zero. Defaults to [`DEFAULT_SLOT_DURATION_MS`];
+    /// override through [`Config::with_slot_duration_ms`].
+    slot_duration_ms: NonZeroU64,
 }
 
 impl Config {
     /// Builds a configuration from pre-typed inputs. Infallible: every
-    /// argument is an always-valid newtype, so no further checks fire
-    /// at this layer.
+    /// argument is an always-valid newtype. `slot_duration_ms` is seeded
+    /// to [`DEFAULT_SLOT_DURATION_MS`]; override via
+    /// [`Self::with_slot_duration_ms`].
     #[must_use = "building a Config without using it discards the construction"]
     pub const fn new(
         validators_path: ValidatorsPath,
@@ -252,6 +272,7 @@ impl Config {
             validators_path,
             validator_group,
             genesis_time_unix,
+            slot_duration_ms: DEFAULT_SLOT_DURATION_MS,
         }
     }
 
@@ -292,6 +313,30 @@ impl Config {
         self.genesis_time_unix
     }
 
+    /// Returns the configured slot duration in milliseconds.
+    #[must_use]
+    pub const fn slot_duration_ms(&self) -> NonZeroU64 {
+        self.slot_duration_ms
+    }
+
+    /// Validates the cross-field invariants that cannot be encoded in
+    /// the field newtypes alone — currently that genesis time has been
+    /// set away from the Unix epoch. Called by
+    /// [`super::Service::start`] before the scheduler spawns.
+    ///
+    /// `slot_duration_ms` needs no check here: it is a [`NonZeroU64`],
+    /// so the zero case is unrepresentable.
+    ///
+    /// # Errors
+    /// [`DutiesError::GenesisTimeUnset`] when `genesis_time_unix` is
+    /// still [`GenesisTimeUnix::EPOCH`].
+    pub fn ensure_runnable(&self) -> DutiesResult<()> {
+        if self.genesis_time_unix == GenesisTimeUnix::EPOCH {
+            return Err(DutiesError::GenesisTimeUnset);
+        }
+        Ok(())
+    }
+
     /// Returns a copy with `validators_path` overridden, routing the
     /// input through [`ValidatorsPath::new`] so the invariant survives.
     ///
@@ -320,6 +365,22 @@ impl Config {
     pub const fn with_genesis_time_unix(mut self, genesis_time_unix: GenesisTimeUnix) -> Self {
         self.genesis_time_unix = genesis_time_unix;
         self
+    }
+
+    /// Returns a copy with `slot_duration_ms` overridden, rejecting a
+    /// zero value at the loose-input boundary (the stored field is a
+    /// [`NonZeroU64`]).
+    ///
+    /// Accepts any non-zero value — in particular the spec's devnet0
+    /// value of `4000`. Only `0` is rejected.
+    ///
+    /// # Errors
+    /// [`DutiesError::ZeroSlotDuration`] when `slot_duration_ms` is `0`.
+    #[must_use = "builder returns a new Config — discarding it drops your override"]
+    pub fn with_slot_duration_ms(mut self, slot_duration_ms: u64) -> DutiesResult<Self> {
+        self.slot_duration_ms =
+            NonZeroU64::new(slot_duration_ms).ok_or(DutiesError::ZeroSlotDuration)?;
+        Ok(self)
     }
 }
 
@@ -577,6 +638,48 @@ mod tests {
     fn with_genesis_time_unix_is_infallible() {
         let cfg = Config::default().with_genesis_time_unix(GenesisTimeUnix::new(42));
         assert_eq!(cfg.genesis_time_unix().as_secs(), 42);
+    }
+
+    // -- slot_duration_ms ---------------------------------------------------
+
+    #[test]
+    fn default_slot_duration_is_devnet_value() {
+        assert_eq!(Config::default().slot_duration_ms().get(), 4_000);
+        assert_eq!(DEFAULT_SLOT_DURATION_MS.get(), 4_000);
+    }
+
+    #[test]
+    fn with_slot_duration_ms_accepts_spec_value() {
+        // Spec guardrail: 4000 ms must be accepted, not rejected.
+        let cfg = Config::default().with_slot_duration_ms(4_000).unwrap();
+        assert_eq!(cfg.slot_duration_ms().get(), 4_000);
+    }
+
+    #[test]
+    fn with_slot_duration_ms_accepts_arbitrary_non_zero() {
+        let cfg = Config::default().with_slot_duration_ms(1).unwrap();
+        assert_eq!(cfg.slot_duration_ms().get(), 1);
+    }
+
+    #[test]
+    fn with_slot_duration_ms_rejects_zero() {
+        let err = Config::default().with_slot_duration_ms(0).unwrap_err();
+        assert!(matches!(err, DutiesError::ZeroSlotDuration), "got {err:?}");
+    }
+
+    // -- ensure_runnable (genesis guard) ------------------------------------
+
+    #[test]
+    fn ensure_runnable_rejects_epoch_genesis() {
+        // `Config::default()` seeds `GenesisTimeUnix::EPOCH`.
+        let err = Config::default().ensure_runnable().unwrap_err();
+        assert!(matches!(err, DutiesError::GenesisTimeUnset), "got {err:?}");
+    }
+
+    #[test]
+    fn ensure_runnable_accepts_real_genesis() {
+        let cfg = Config::default().with_genesis_time_unix(GenesisTimeUnix::new(1_700_000_000));
+        cfg.ensure_runnable().unwrap();
     }
 
     #[test]

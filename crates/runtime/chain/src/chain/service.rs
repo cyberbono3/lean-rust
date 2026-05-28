@@ -8,14 +8,21 @@
 //! See [`Service::import_block`] for the storage / engine divergence
 //! contract on persistence failure.
 
+// The tick slot is a `parking_lot::Mutex`; `start`/`stop` are serialized by
+// the `lean_core::Node` lifecycle so the guard never crosses an await today.
+// Deny `await_holding_lock` so any future edit that parks the guard across an
+// `.await` (which would stall the tokio worker thread) fails the build.
+#![deny(clippy::await_holding_lock)]
+
 use std::sync::Arc;
 
-use crate::engine::{AttestationImportResult, BlockImportResult, Engine};
+use crate::engine::{AttestationImportResult, BlockImportResult, Engine, PersistPlan};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use lean_wire::Status;
 use parking_lot::{Mutex, RwLock};
 use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
+use ssz::HashTreeRoot;
 use storage::HeadInfo;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -95,8 +102,10 @@ impl Service {
     #[instrument(level = "debug", skip_all, fields(slot = signed.message.slot.get()), err)]
     pub async fn import_block(&self, signed: SignedBlock) -> Result<BlockImportResult, ChainError> {
         let slot = signed.message.slot;
-        let to_persist = signed.clone();
-        let outcome = self.engine.import_block(signed);
+        // Import and capture the persist inputs under one engine-lock
+        // acquisition, so no concurrent writer can shift the head/finalized
+        // checkpoint between accept and capture.
+        let (outcome, plan) = self.engine.import_block_capturing(signed);
 
         if let BlockImportResult::Accepted {
             block_root,
@@ -104,7 +113,10 @@ impl Service {
             ..
         } = &outcome
         {
-            self.persist_accepted(*block_root, *head_root, to_persist)?;
+            let plan = plan.ok_or(ChainError::PostStateMissing {
+                block_root: *block_root,
+            })?;
+            self.persist_plan(plan)?;
             self.refresh_snapshot();
             debug!(
                 slot = slot.get(),
@@ -164,26 +176,19 @@ impl Service {
         slot: Slot,
         validator: ValidatorIndex,
     ) -> Result<SignedBlock, ChainError> {
-        let produced = self.engine.produce_block(slot, validator)?;
-        let signed = SignedBlock {
-            message: produced.block,
-            signature: Bytes4000::new([0; 4000]),
-        };
-        // Capture (head_root, post_state, head_slot, finalized) under a
-        // single engine-lock acquisition so the HeadInfo we persist below
-        // comes from one consistent snapshot. Previously head_root was
-        // read via a separate engine.head() call AND persist_accepted
-        // re-acquired the lock twice more — concurrent imports could
-        // shift the head between acquisitions and write a HeadInfo whose
-        // root and slot came from different store states.
-        let head_root = self.engine.head();
-        self.persist_accepted(produced.root, head_root, signed.clone())?;
+        // Produce and capture the persist inputs under one engine-lock
+        // acquisition: the block, its post-state, the head, and the finalized
+        // checkpoint all come from one consistent store snapshot, instead of
+        // the prior three separate acquisitions (produce, head(), persist).
+        let (signed, plan) = self.engine.produce_block_capturing(slot, validator)?;
+        let block_root: Bytes32 = signed.message.hash_tree_root().into();
+        let plan = plan.ok_or(ChainError::PostStateMissing { block_root })?;
+        self.persist_plan(plan)?;
         self.refresh_snapshot();
         debug!(
             slot = slot.get(),
             validator = validator.get(),
-            block_root = %produced.root.to_hex(),
-            head_root = %head_root.to_hex(),
+            block_root = %block_root.to_hex(),
             "chain produced block persisted",
         );
         Ok(signed)
@@ -196,9 +201,8 @@ impl Service {
     ///
     /// The local re-import is load-bearing: without it, this validator's
     /// own attestations only reach peers via gossip, and the next produced
-    /// block would omit them — quorum on a small devnet can stall. Mirror
-    /// of the upstream Go fix at `lean-go/lean-chain/service.go`
-    /// (`PR105 Phase 8`).
+    /// block would omit them — quorum on a small devnet can stall. Mirrors
+    /// the upstream chain-service fix for the same stall.
     ///
     /// # Errors
     /// [`ChainError::Engine`] if [`Engine::produce_attestation_vote`]
@@ -218,8 +222,8 @@ impl Service {
         // Best-effort re-import: when `latest_justified` is still the
         // zero-sentinel (e.g. fresh anchor before the first justified
         // checkpoint), the produced vote's source.root is unresolvable
-        // and the engine returns `Rejected`. lean-go behaves the same and
-        // warn-logs; we mirror that and continue.
+        // and the engine returns `Rejected`. The upstream client behaves the
+        // same and warn-logs; we mirror that and continue.
         let outcome = self.engine.import_attestation(signed.clone());
         match &outcome {
             AttestationImportResult::Accepted { head_root, .. } => {
@@ -282,50 +286,42 @@ impl Service {
         *self.snapshot.write() = ChainSnapshot::from_engine(&self.engine);
     }
 
-    /// One-shot persistence sweep for an accepted block. All three
-    /// `save_*` calls run before the snapshot refresh so a partial
-    /// failure leaves storage maximally consistent with what was
-    /// recorded.
-    fn persist_accepted(
-        &self,
-        block_root: Bytes32,
-        head_root: Bytes32,
-        signed: SignedBlock,
-    ) -> Result<(), ChainError> {
-        let (post_state_opt, head_slot_opt, finalized) = self.engine.with_store(|s| {
-            (
-                s.state(&block_root).cloned(),
-                s.block(&head_root).map(|b| b.slot),
-                s.latest_finalized(),
-            )
-        });
-        let post_state = post_state_opt.ok_or(ChainError::PostStateMissing { block_root })?;
-        // The previous `unwrap_or(Slot::ZERO)` silently wrote a corrupt
-        // HeadInfo when the engine's head_root pointed at a block no
-        // longer in the store (head/track race or invariant violation).
-        // Refusing the persist keeps the on-disk state consistent.
-        let head_slot = head_slot_opt.ok_or(ChainError::HeadBlockMissing { head_root })?;
-
-        self.store.save_block(block_root, signed)?;
-        self.store.save_state(block_root, post_state)?;
-        self.store.save_head(HeadInfo::new(
-            Checkpoint::new(head_root, head_slot),
-            finalized,
-        ))?;
+    /// Commits an engine-captured [`PersistPlan`] to storage.
+    ///
+    /// The plan was materialized atomically under the engine lock (head,
+    /// post-state, and finalized checkpoint from one consistent snapshot), so
+    /// this method only decomposes it and issues the single atomic
+    /// [`storage::Store::save_accepted`] write: block + post-state + head
+    /// commit together, and a mid-persist failure can never strand the head
+    /// ahead of its block or state.
+    fn persist_plan(&self, plan: PersistPlan) -> Result<(), ChainError> {
+        let (block_root, block, post_state, head, finalized) = plan.into_parts();
+        // The engine lock is already released here, so unwrapping the Arc (and
+        // deep-cloning only if the store still shares it) happens off the hot
+        // path — the under-lock cost was just the refcount bump in capture.
+        self.store.save_accepted(
+            block_root,
+            block,
+            Arc::unwrap_or_clone(post_state),
+            HeadInfo::new(head, finalized),
+        )?;
         Ok(())
     }
 }
 
 impl Drop for Service {
     /// Best-effort cleanup if a caller drops the service without going
-    /// through [`lean_core::Service::stop`]: cancel the tick token so
-    /// the spawned task exits on its next iteration. We cannot await the
-    /// join here, so the task detaches; cancellation guarantees it does
-    /// not loop forever holding `Arc` clones of the snapshot and engine.
+    /// through [`lean_core::Service::stop`]. We cannot await the join here,
+    /// so the task detaches; aborting it deterministically terminates the
+    /// loop at its next poll, releasing the `Arc` clones of the snapshot and
+    /// engine immediately rather than after up to one more tick period.
     fn drop(&mut self) {
         // `get_mut` skips locking: `&mut self` proves no aliasing.
         if let Some(handle) = self.tick.get_mut().take() {
+            // Cancel the token (graceful signal) and abort the join handle so
+            // termination does not wait on the in-flight tick interval.
             handle.cancel.cancel();
+            handle.task.abort();
         }
     }
 }
@@ -367,10 +363,18 @@ impl lean_core::Service for Service {
             biased;
             () = cancel.cancelled() => {
                 task.abort();
-                // Drain so the task fully transitions; the `JoinError::Cancelled`
-                // it produces here is expected and discarded.
-                let _ = task.await;
-                Err(anyhow!("chain tick task did not stop within shutdown budget"))
+                // Drain so the task fully transitions, then distinguish the
+                // outcome instead of reporting one generic error: a panic and a
+                // budget-exceeded abort are different failures to an operator.
+                match task.await {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.is_panic() => {
+                        Err(anyhow!("chain tick task panicked during shutdown"))
+                    }
+                    Err(_) => {
+                        Err(anyhow!("chain tick task did not stop within shutdown budget"))
+                    }
+                }
             }
             join = &mut task => {
                 join.context("chain tick task panicked")?;

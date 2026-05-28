@@ -10,7 +10,7 @@
 //! ```
 //!
 //! The alternative `assignments: [{node_name, validators}, ...]` shape
-//! used by some lean-go fixtures is intentionally out of scope: the
+//! used by some upstream fixtures is intentionally out of scope: the
 //! devnet0 fixture used here is canonical, and supporting both shapes
 //! would expand the loader surface beyond what Issue #30 requires.
 //!
@@ -19,8 +19,8 @@
 //! - non-empty group map
 //! - non-empty per-group validator list
 //! - no duplicate validator index across groups
-//! - validator indices cover `0..total` contiguously (matches lean-go
-//!   `buildAssignments` invariant)
+//! - validator indices cover `0..total` contiguously (matches the
+//!   upstream `buildAssignments` invariant)
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -34,6 +34,15 @@ use super::error::{DutiesError, DutiesResult};
 /// `serde_yaml::from_slice` deserializes directly into this; no
 /// wrapper struct needed since the shape is already a stdlib map.
 type RawAssignments = BTreeMap<String, Vec<u64>>;
+
+/// Maximum accepted size of a `validators.yaml` file, in bytes.
+///
+/// devnet0's file is <100 bytes; mainnet validator registries are
+/// larger but still well under 1 MiB. The cap bounds the disk read so
+/// an operator-supplied (or symlinked) huge file cannot OOM the process
+/// before YAML parsing starts — the same `Metadata::len` pattern used
+/// for the genesis-SSZ read.
+pub(crate) const MAX_VALIDATORS_FILE_BYTES: u64 = 1 << 20;
 
 /// Sentinel path surfaced inside [`DutiesError::YamlParse`] when the
 /// parse came from [`ValidatorAssignments::from_bytes`] rather than a
@@ -76,13 +85,11 @@ impl ValidatorAssignments {
             return Err(DutiesError::EmptyValidatorsPath);
         }
         let resolved = resolve_path(raw);
-        // Clone on the IO-error branch so the resolved path is still
-        // available to wrap a subsequent parse error. Both branches are
-        // rare; the extra `PathBuf` clone is bounded by error frequency.
-        let bytes = std::fs::read(&resolved).map_err(|source| DutiesError::YamlRead {
-            path: resolved.clone(),
-            source,
-        })?;
+        // Bound the read at the cap: a capped read rejects an oversized file
+        // (including one that grew, or whose symlink target was swapped, after
+        // any earlier stat) without slurping unbounded bytes — no check-to-use
+        // window. A missing file surfaces uniformly as `YamlRead`.
+        let bytes = read_capped(&resolved)?;
         let parsed: RawAssignments =
             serde_yaml::from_slice(&bytes).map_err(|source| DutiesError::YamlParse {
                 path: resolved,
@@ -185,12 +192,53 @@ impl ValidatorAssignments {
     }
 }
 
+/// Reads `path` into memory, bounding the read at one byte past
+/// [`MAX_VALIDATORS_FILE_BYTES`]. Reading that extra byte lets
+/// [`check_file_size`] reject an oversized file without ever allocating its
+/// full contents, and because the bound is on the read itself (not a prior
+/// `Metadata::len` probe) it closes the TOCTOU / symlink-swap window: a file
+/// that grows after a stat cannot slurp unbounded memory here.
+fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).map_err(|source| yaml_read_err(path, source))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_VALIDATORS_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| yaml_read_err(path, source))?;
+    check_file_size(bytes.len() as u64)?;
+    Ok(bytes)
+}
+
+/// Builds the [`DutiesError::YamlRead`] for `path`. One constructor for both
+/// the open and the read in [`read_capped`], so the path / source wrapping
+/// cannot drift between them.
+fn yaml_read_err(path: &Path, source: std::io::Error) -> DutiesError {
+    DutiesError::YamlRead {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+/// Rejects a file whose byte length exceeds
+/// [`MAX_VALIDATORS_FILE_BYTES`]. Extracted so the boundary logic is
+/// unit-testable without writing a multi-megabyte fixture to disk.
+fn check_file_size(len: u64) -> DutiesResult<()> {
+    if len > MAX_VALIDATORS_FILE_BYTES {
+        return Err(DutiesError::ValidatorsFileTooLarge {
+            size: len,
+            cap: MAX_VALIDATORS_FILE_BYTES,
+        });
+    }
+    Ok(())
+}
+
 fn resolve_path(raw: &Path) -> PathBuf {
     if raw.is_absolute() {
         return raw.to_path_buf();
     }
     // `CARGO_MANIFEST_DIR` resolves to the crate root at build time,
-    // matching lean-go's `goruntime.Caller`-based repo-root probe.
+    // the Rust counterpart to a `runtime.Caller`-based repo-root probe.
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(raw)
 }
 
@@ -296,6 +344,27 @@ quadrivium: [2, 5, 8, 11, 14, 17, 20, 23, 26, 29]
         assert!(
             display.contains(IN_MEMORY_SENTINEL),
             "expected '{IN_MEMORY_SENTINEL}' in error display, got {display}",
+        );
+    }
+
+    #[test]
+    fn check_file_size_accepts_at_and_below_cap() {
+        check_file_size(0).unwrap();
+        check_file_size(MAX_VALIDATORS_FILE_BYTES).unwrap();
+    }
+
+    #[test]
+    fn check_file_size_rejects_above_cap() {
+        // A 2 MiB file is over the 1 MiB cap.
+        let two_mib = 2 * MAX_VALIDATORS_FILE_BYTES;
+        let err = check_file_size(two_mib).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DutiesError::ValidatorsFileTooLarge { size, cap }
+                    if size == two_mib && cap == MAX_VALIDATORS_FILE_BYTES
+            ),
+            "got {err:?}",
         );
     }
 

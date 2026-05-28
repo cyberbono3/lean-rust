@@ -104,7 +104,9 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     ));
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));
-    let metrics = Arc::new(MetricsService::new(metrics_addr, Recorder::new()));
+    let mut recorder = Recorder::new();
+    register_chain_gauges(&mut recorder, &chain);
+    let metrics = Arc::new(MetricsService::new(metrics_addr, recorder.freeze()?));
 
     Ok(Node::new(node)
         .with_chain(chain)
@@ -113,6 +115,38 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         .with_duties(duties)
         .with_http(http)
         .with_metrics(metrics))
+}
+
+/// Registers chain-state gauges that read the chain service's hot
+/// snapshot (`Arc<RwLock<ChainSnapshot>>`). Each closure takes a read
+/// lock per scrape — cheap, and decoupled from the engine mutex. Closes
+/// the fixture §8 gap where `/metrics` exposed only the two baseline
+/// process gauges.
+///
+/// A connected-peer gauge is intentionally not wired here: the p2p host
+/// exposes no synchronous connected-peer count today, so that gauge is
+/// deferred to a p2p-touching change that adds the counter.
+fn register_chain_gauges(recorder: &mut Recorder, chain: &Arc<ChainService>) {
+    let head = chain.snapshot();
+    recorder.gauge(
+        "lean_chain_slot",
+        "Current forkchoice slot (clock).",
+        move || head.read().current_slot,
+    );
+
+    let justified = chain.snapshot();
+    recorder.gauge(
+        "lean_chain_justified_slot",
+        "Slot of the latest justified checkpoint.",
+        move || justified.read().latest_justified.slot.get(),
+    );
+
+    let finalized = chain.snapshot();
+    recorder.gauge(
+        "lean_chain_finalized_slot",
+        "Slot of the latest finalized checkpoint.",
+        move || finalized.read().latest_finalized.slot.get(),
+    );
 }
 
 fn persist_anchor(
@@ -129,11 +163,13 @@ fn persist_anchor(
     store
         .save_state(anchor_root, anchor_state)
         .context("persist genesis anchor state")?;
+    // Validate the anchor head at the deser seam: genesis (finalized == head
+    // at slot 0) is accepted; a finalized checkpoint ahead of the head is
+    // refused before it reaches storage.
+    let head = HeadInfo::try_new(Checkpoint::new(anchor_root, anchor_slot), finalized)
+        .context("validate genesis anchor head")?;
     store
-        .save_head(HeadInfo::new(
-            Checkpoint::new(anchor_root, anchor_slot),
-            finalized,
-        ))
+        .save_head(head)
         .context("persist genesis anchor head")?;
     Ok(())
 }
@@ -198,6 +234,20 @@ mod tests {
         node.start().await.unwrap();
         node.status().await.unwrap();
         node.stop().await.unwrap();
+    }
+
+    #[test]
+    fn register_chain_gauges_freezes_without_collision() {
+        // The wired chain gauges must not collide with each other or the
+        // baseline gauges, so `freeze` succeeds.
+        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+        let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+        let chain = Arc::new(ChainService::new(engine, store));
+
+        let mut recorder = Recorder::new();
+        register_chain_gauges(&mut recorder, &chain);
+        assert!(recorder.freeze().is_ok());
     }
 
     #[test]

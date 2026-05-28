@@ -24,9 +24,11 @@ use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use parking_lot::Mutex;
 use protocol::{Block, BlockBody, Checkpoint, SignedBlock, Slot, ValidatorIndex};
 use ssz::HashTreeRoot;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use types::{Bytes32, Bytes4000};
+
+mod common;
+use common::{poll_until, ChannelPeers};
 
 // ---- Helpers --------------------------------------------------------------
 
@@ -197,44 +199,6 @@ impl Network for FakeNetwork {
     }
 }
 
-// ---- ChannelPeers ---------------------------------------------------------
-
-struct ChannelPeers {
-    tx: Mutex<Option<mpsc::Sender<PeerId>>>,
-    /// `Sender` clone surfaced to the test so it can push events after
-    /// `start` and close the channel by dropping it.
-    handle: Mutex<Option<mpsc::Sender<PeerId>>>,
-}
-
-impl ChannelPeers {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            tx: Mutex::new(None),
-            handle: Mutex::new(None),
-        })
-    }
-
-    fn sender(&self) -> mpsc::Sender<PeerId> {
-        self.handle
-            .lock()
-            .as_ref()
-            .expect("subscribe before sender")
-            .clone()
-    }
-}
-
-#[async_trait]
-impl PeerEventProvider for ChannelPeers {
-    async fn subscribe_outbound_connected_peers(
-        &self,
-    ) -> Result<mpsc::Receiver<PeerId>, SyncError> {
-        let (tx, rx) = mpsc::channel(8);
-        *self.tx.lock() = Some(tx.clone());
-        *self.handle.lock() = Some(tx);
-        Ok(rx)
-    }
-}
-
 // ---- Drive helper ---------------------------------------------------------
 
 /// Spawns the loop, pushes one peer event, polls until the chain
@@ -261,15 +225,9 @@ async fn drive_once(
         .await
         .unwrap();
 
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
-    while tokio::time::Instant::now() < deadline {
-        if until(&chain, &network) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(2)).await;
-    }
+    let observed = poll_until(200, || until(&chain, &network)).await;
     assert!(
-        until(&chain, &network),
+        observed,
         "drive_once timed out: status_calls={}, request_calls={}, imported={:?}",
         network.status_call_count(),
         network.request_call_count(),

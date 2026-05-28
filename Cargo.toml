@@ -32,6 +32,9 @@ repository    = "https://github.com/cyberbono3/lean-rust"
 [workspace.lints.rust]
 unsafe_code  = "deny"
 missing_docs = "warn"
+# `loom` is an opt-in concurrency-model cfg (see lean-chain tests/loom_import.rs);
+# register it so the default `-D warnings` build does not flag it as unexpected.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [workspace.lints.clippy]
 all         = { level = "deny", priority = -1 }
@@ -103,6 +106,9 @@ tokio-test        = "0.4"
 static_assertions = "1"
 tempfile          = "3"
 serial_test       = "3"
+# bench — default-features off drops the heavy plotters/rayon graph; we only
+# need the timing harness + criterion_group/main macros.
+criterion         = { version = "0.5", default-features = false }
 
 [profile.release]
 lto           = "thin"

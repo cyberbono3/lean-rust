@@ -48,6 +48,11 @@
 #![forbid(unsafe_code)]
 
 mod internal;
+// Cross-client genesis interop: holds the decoder for the compact
+// "leanchain" state SSZ shared with the ream client. Private module — it
+// only adds the inherent `State::from_ream_legacy_ssz_bytes` method, which
+// stays reachable on `State` regardless of module visibility.
+mod ream;
 #[cfg(test)]
 mod test_fixtures;
 

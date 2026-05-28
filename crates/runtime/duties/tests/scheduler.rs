@@ -15,7 +15,6 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use lean_core::Service as _;
 use lean_duties::{
     Chain as DutiesChain, Config as DutiesConfig, DutiesError, GenesisTimeUnix, PublishError,
@@ -47,7 +46,6 @@ impl FakeChain {
     }
 }
 
-#[async_trait]
 impl DutiesChain for FakeChain {
     async fn produce_block(
         &self,
@@ -93,6 +91,8 @@ struct MockPublisher {
     blocks: Mutex<Vec<SignedBlock>>,
     attestations: Mutex<Vec<SignedVote>>,
     fail_next: Mutex<bool>,
+    fail_always: Mutex<bool>,
+    block_attestations: Mutex<bool>,
 }
 
 impl MockPublisher {
@@ -105,19 +105,35 @@ impl MockPublisher {
     fn fail_once(&self) {
         *self.fail_next.lock() = true;
     }
+    fn fail_all(&self) {
+        *self.fail_always.lock() = true;
+    }
+    fn block_attestations(&self) {
+        *self.block_attestations.lock() = true;
+    }
+    fn should_fail(&self) -> bool {
+        *self.fail_always.lock() || std::mem::replace(&mut *self.fail_next.lock(), false)
+    }
+    fn should_block(&self) -> bool {
+        *self.block_attestations.lock()
+    }
 }
 
-#[async_trait]
 impl Publisher for MockPublisher {
     async fn publish_block(&self, block: SignedBlock) -> Result<(), PublishError> {
-        if std::mem::replace(&mut *self.fail_next.lock(), false) {
+        if self.should_fail() {
             return Err(anyhow!("test publish failure").into());
         }
         self.blocks.lock().push(block);
         Ok(())
     }
     async fn publish_attestation(&self, vote: SignedVote) -> Result<(), PublishError> {
-        if std::mem::replace(&mut *self.fail_next.lock(), false) {
+        if self.should_block() {
+            // Park forever (paused clock never advances): the test fires
+            // a cancel mid-pass and asserts shutdown does not wait on us.
+            std::future::pending::<()>().await;
+        }
+        if self.should_fail() {
             return Err(anyhow!("test publish failure").into());
         }
         self.attestations.lock().push(vote);
@@ -131,24 +147,34 @@ const FIXTURE_PATH: &str = "tests/fixtures/validators.yaml";
 const MALFORMED_PATH: &str = "tests/fixtures/validators_malformed.yaml";
 
 fn config(group: &str) -> DutiesConfig {
+    // Genesis at the current wall-clock second. Under `start_paused`,
+    // `SystemTime::now()` is still the real clock, so mapping genesis ≈
+    // now onto the frozen tokio `Instant` makes the anchor land at
+    // `Instant::now()` — the worker fires at slot 0 immediately, same
+    // as the old `GenesisTimeUnix::new(0)`. A non-epoch value is
+    // required now that `Config::ensure_runnable` rejects epoch genesis.
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_secs();
     DutiesConfig::default()
         .with_validators_path(FIXTURE_PATH)
         .unwrap()
         .with_validator_group(group)
         .unwrap()
-        // Genesis at tokio's current "epoch" so the worker fires
-        // immediately once we advance time.
-        .with_genesis_time_unix(GenesisTimeUnix::new(0))
+        .with_genesis_time_unix(GenesisTimeUnix::new(now_unix))
 }
 
-fn build(group: &str) -> (DutiesService, Arc<FakeChain>, Arc<MockPublisher>) {
+fn build(
+    group: &str,
+) -> (
+    DutiesService<FakeChain, MockPublisher>,
+    Arc<FakeChain>,
+    Arc<MockPublisher>,
+) {
     let chain = Arc::new(FakeChain::default());
     let publisher = Arc::new(MockPublisher::default());
-    let service = DutiesService::new(
-        config(group),
-        Arc::clone(&chain) as Arc<dyn DutiesChain>,
-        Arc::clone(&publisher) as Arc<dyn Publisher>,
-    );
+    let service = DutiesService::new(config(group), Arc::clone(&chain), Arc::clone(&publisher));
     (service, chain, publisher)
 }
 
@@ -233,17 +259,35 @@ async fn unknown_validator_group_is_rejected_at_start() {
 async fn malformed_yaml_is_rejected_at_start() {
     let chain = Arc::new(FakeChain::default());
     let publisher = Arc::new(MockPublisher::default());
-    let cfg = DutiesConfig::default()
-        .with_validators_path(MALFORMED_PATH)
-        .unwrap()
-        .with_validator_group("ream")
-        .unwrap();
+    // Genesis must be set (non-epoch) so `start` reaches the YAML load
+    // rather than short-circuiting on the genesis guard.
+    let cfg = config("ream").with_validators_path(MALFORMED_PATH).unwrap();
     let service = DutiesService::new(cfg, chain, publisher);
     let err = service.start().await.unwrap_err();
     let formatted = format!("{err:?}").to_lowercase();
     assert!(
         formatted.contains("yaml") || formatted.contains("parse"),
         "expected YAML parse error, got {formatted}",
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn epoch_genesis_is_rejected_at_start() {
+    // `DutiesConfig::default()` leaves genesis at the Unix epoch; the
+    // service must refuse to start rather than schedule fictitious slots.
+    let chain = Arc::new(FakeChain::default());
+    let publisher = Arc::new(MockPublisher::default());
+    let cfg = DutiesConfig::default()
+        .with_validators_path(FIXTURE_PATH)
+        .unwrap()
+        .with_validator_group("ream")
+        .unwrap();
+    let service = DutiesService::new(cfg, chain, publisher);
+    let err = service.start().await.unwrap_err();
+    let formatted = format!("{err:?}");
+    assert!(
+        formatted.contains("GenesisTimeUnset") || formatted.contains("genesis_time_unix"),
+        "expected GenesisTimeUnset, got {formatted}",
     );
 }
 
@@ -287,6 +331,57 @@ async fn publisher_error_does_not_stop_scheduler() {
         "expected slot-1 attestations to publish after failure, got {}",
         publisher.attestation_count(),
     );
+
+    let cancel = CancellationToken::new();
+    service.stop(cancel).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn status_flips_to_err_after_consecutive_publish_failures() {
+    // A publisher that always fails: the slot-0 attester pass publishes
+    // ten attestations, all failing, which crosses the K=3 consecutive
+    // threshold. status() must then report degraded publish health —
+    // the old `last_err` slot never recorded publish failures at all.
+    let (service, _chain, publisher) = build("ream");
+    publisher.fail_all();
+    service.start().await.unwrap();
+    yield_runtime().await;
+    // status starts Ok (no failures yet).
+    service.status().await.unwrap();
+
+    let (_, vote_due_offset) = service.timing();
+    time::advance(vote_due_offset).await;
+    yield_runtime().await;
+
+    let err = service
+        .status()
+        .await
+        .expect_err("publish failures must degrade status");
+    assert!(
+        err.to_string().contains("publish degraded"),
+        "expected degraded publish status, got {err}",
+    );
+
+    let cancel = CancellationToken::new();
+    service.stop(cancel).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_cancels_inflight_attestation_duties() {
+    // A publisher that parks forever on every attestation. Once the
+    // slot-0 attester pass spawns its concurrent duties, they all block
+    // in publish. `stop` fires the worker's cancel token, which the
+    // drive loop's `select!` observes and breaks on — shutdown must not
+    // wait on the stuck duties. If cancellation regressed, the worker
+    // would never join and this test would hang.
+    let (service, _chain, publisher) = build("ream");
+    publisher.block_attestations();
+    service.start().await.unwrap();
+    yield_runtime().await;
+
+    let (_, vote_due_offset) = service.timing();
+    time::advance(vote_due_offset).await;
+    yield_runtime().await;
 
     let cancel = CancellationToken::new();
     service.stop(cancel).await.unwrap();

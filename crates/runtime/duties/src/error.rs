@@ -6,10 +6,13 @@ use thiserror::Error;
 
 use lean_chain::ChainError;
 
+use super::ports::PublishError;
+
 /// Failures raised by the duties service.
 ///
 /// Per-slot production / publish errors are *not* terminal: they are
-/// warn-logged and recorded in `last_err` by the scheduler. The variants
+/// warn-logged and folded into the scheduler's publish-health counter
+/// (see [`super::Service`]). The variants
 /// below cover construction (invalid config, missing group) and the YAML
 /// loader.
 #[derive(Debug, Error)]
@@ -59,6 +62,44 @@ pub enum DutiesError {
         total: u64,
     },
 
+    /// A `slot_duration_ms` of zero was supplied to a config builder.
+    /// Modelled as a [`core::num::NonZeroU64`] at the type level so the
+    /// divide-by-zero in the scheduler's slot math is unreachable; this
+    /// variant surfaces the rejection at the loose-input boundary.
+    #[error("duties slot_duration_ms must be non-zero")]
+    ZeroSlotDuration,
+
+    /// `genesis_time_unix` was left at [`super::GenesisTimeUnix::EPOCH`]
+    /// (the Unix epoch). Running with epoch genesis makes every slot
+    /// fall in the deep past, so the operator sees a "running" node that
+    /// schedules fictitious slots. The service refuses to start until a
+    /// real genesis time is configured.
+    #[error("duties genesis_time_unix must be set (not the Unix epoch)")]
+    GenesisTimeUnset,
+
+    /// The validator-assignment file exceeds the configured size cap.
+    /// Bounds the read so an operator-supplied (or symlinked) huge file
+    /// cannot OOM the process before YAML parsing starts.
+    #[error("duties validators file is {size} bytes, exceeds cap of {cap} bytes")]
+    ValidatorsFileTooLarge {
+        /// Observed file size in bytes.
+        size: u64,
+        /// Configured maximum in bytes.
+        cap: u64,
+    },
+
+    /// A per-validator attestation duty (produce + publish) did not
+    /// complete within its slot budget and was cancelled by the
+    /// per-future timeout. Recorded in publish health like any other
+    /// duty failure.
+    #[error("duties attestation for validator {validator} timed out after {timeout_ms} ms")]
+    DutyTimeout {
+        /// Validator whose duty timed out.
+        validator: u64,
+        /// Per-validator budget in milliseconds.
+        timeout_ms: u64,
+    },
+
     /// `Service::start` was called twice.
     #[error("duties service already started")]
     AlreadyStarted,
@@ -93,6 +134,14 @@ pub enum DutiesError {
     /// `"storage: ..."` / `"engine: ..."` without a redundant prefix.
     #[error(transparent)]
     Chain(#[from] ChainError),
+
+    /// Publishing a produced block / attestation failed. Recorded in
+    /// the scheduler's [`super::Service`] publish-health counter rather
+    /// than terminating the worker — a single transport flake is not a
+    /// service-terminal condition. Display forwards the inner
+    /// [`PublishError`] verbatim.
+    #[error(transparent)]
+    Publish(#[from] PublishError),
 }
 
 /// Convenience alias for `Result<T, DutiesError>`. Mirrors the

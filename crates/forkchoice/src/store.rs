@@ -22,6 +22,7 @@
 //! through [`Store::process_attestation`] and the phase hooks.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use config::INTERVALS_PER_SLOT;
 use protocol::{Block, Checkpoint, ProtocolConfig, SignedVote, Slot, State, ValidatorIndex};
@@ -58,7 +59,10 @@ pub struct Store {
     latest_justified: Checkpoint,
     latest_finalized: Checkpoint,
     blocks: HashMap<Bytes32, Block>,
-    states: HashMap<Bytes32, State>,
+    // Post-states are `Arc`-wrapped so the hot import path can capture a
+    // post-state for persistence with a refcount bump instead of a deep clone
+    // under the engine mutex (see lean-chain `capture_persist_plan`).
+    states: HashMap<Bytes32, Arc<State>>,
     block_order: Vec<Bytes32>,
     latest_known_votes: HashMap<ValidatorIndex, SignedVote>,
     latest_new_votes: HashMap<ValidatorIndex, SignedVote>,
@@ -175,8 +179,12 @@ impl Store {
 
     /// Resolves a tracked post-state by block root. Returns `None` if the
     /// root is unknown to the store.
+    ///
+    /// Returns the `Arc`-wrapped state: `.clone()` on the result is a refcount
+    /// bump, not a deep copy. Callers needing an owned, mutable `State` (e.g.
+    /// to run a state transition) deref-clone via `(**arc).clone()`.
     #[must_use]
-    pub fn state(&self, root: &Bytes32) -> Option<&State> {
+    pub fn state(&self, root: &Bytes32) -> Option<&Arc<State>> {
         self.states.get(root)
     }
 
@@ -210,7 +218,7 @@ impl Store {
     /// `track_block`, and the `block_order` invariant test share one path.
     pub(crate) fn insert_block(&mut self, root: Bytes32, block: Block, state: State) {
         if self.blocks.insert(root, block).is_none() {
-            self.states.insert(root, state);
+            self.states.insert(root, Arc::new(state));
             self.block_order.push(root);
         }
     }

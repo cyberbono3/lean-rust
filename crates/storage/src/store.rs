@@ -1,6 +1,7 @@
 //! Persistence trait + canonical-chain view exposed to runtime callers.
 
 use protocol::{Checkpoint, SignedBlock, State};
+use thiserror::Error;
 use types::Bytes32;
 
 use crate::error::StorageError;
@@ -19,11 +20,49 @@ pub struct HeadInfo {
 }
 
 impl HeadInfo {
-    /// Constructs a [`HeadInfo`] from an explicit `(head, finalized)` pair.
+    /// Constructs a [`HeadInfo`] from an explicit `(head, finalized)` pair
+    /// without validation. Prefer [`Self::try_new`] at any seam that builds a
+    /// `HeadInfo` from persisted or otherwise untrusted input.
     #[must_use]
     pub const fn new(head: Checkpoint, finalized: Checkpoint) -> Self {
         Self { head, finalized }
     }
+
+    /// Validated constructor for the deserialization seam.
+    ///
+    /// Enforces the canonical-chain invariant `finalized.slot <= head.slot`:
+    /// the finalized checkpoint is always an ancestor of (or equal to) the
+    /// head, so it can never sit at a higher slot. Genesis — where `finalized`
+    /// and `head` are the same zero-root checkpoint at slot 0 — and any other
+    /// equal-slot pair are accepted.
+    ///
+    /// # Errors
+    /// [`HeadInfoError::FinalizedAheadOfHead`] when `finalized.slot >
+    /// head.slot`.
+    pub fn try_new(head: Checkpoint, finalized: Checkpoint) -> Result<Self, HeadInfoError> {
+        if finalized.slot > head.slot {
+            return Err(HeadInfoError::FinalizedAheadOfHead {
+                head: head.slot.get(),
+                finalized: finalized.slot.get(),
+            });
+        }
+        Ok(Self { head, finalized })
+    }
+}
+
+/// Validation failure for [`HeadInfo::try_new`].
+#[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HeadInfoError {
+    /// `finalized.slot` exceeds `head.slot`. The finalized checkpoint must be
+    /// an ancestor of the head, so its slot can never be higher.
+    #[error("finalized slot {finalized} is ahead of head slot {head}")]
+    FinalizedAheadOfHead {
+        /// Head checkpoint slot.
+        head: u64,
+        /// Finalized checkpoint slot (the out-of-range value).
+        finalized: u64,
+    },
 }
 
 /// Narrow persistence contract used by the runtime chain layer.
@@ -65,6 +104,42 @@ pub trait Store: Send + Sync {
     /// Backend-specific failures via [`StorageError`].
     fn save_head(&self, info: HeadInfo) -> Result<(), StorageError>;
 
+    /// Persists an accepted block, its post-state (both keyed by
+    /// `block_root`), and the updated canonical `head` in one call, writing the
+    /// head **last**.
+    ///
+    /// Head-last ordering is the load-bearing invariant: a mid-call backend
+    /// failure never leaves [`Self::load_head`] pointing at a block or state
+    /// that is absent from the store. Full atomicity (all-or-nothing across the
+    /// three writes) is provided only by adapters that override this with a
+    /// transaction or single lock — the default impl below is three ordered
+    /// writes, not one atomic operation. This collapses the
+    /// previous three-call `save_block` → `save_state` → `save_head` sequence
+    /// (whose interleaving window let a crash strand the head ahead of its
+    /// payload) into a single contract method.
+    ///
+    /// The default implementation performs the three writes in
+    /// `block` → `state` → `head` order, propagating the first error with `?`.
+    /// Adapters whose backend supports a single transaction (or a single lock,
+    /// like [`crate::MemoryStore`]) SHOULD override this so all three writes
+    /// commit together with no torn intermediate state observable to readers.
+    ///
+    /// # Errors
+    /// Backend-specific failures via [`StorageError`]. On error the head
+    /// record is guaranteed unchanged.
+    fn save_accepted(
+        &self,
+        block_root: Bytes32,
+        block: SignedBlock,
+        state: State,
+        head: HeadInfo,
+    ) -> Result<(), StorageError> {
+        self.save_block(block_root, block)?;
+        self.save_state(block_root, state)?;
+        self.save_head(head)?;
+        Ok(())
+    }
+
     /// Reports whether `root` is currently tracked.
     ///
     /// Adapters that can answer existence without materializing the full
@@ -95,4 +170,53 @@ pub trait Store: Send + Sync {
     /// Backend-specific failures via [`StorageError`]. Returns
     /// `Ok(None)` before the first `save_head` call.
     fn load_head(&self) -> Result<Option<HeadInfo>, StorageError>;
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use protocol::Slot;
+    use types::Bytes32;
+
+    use super::{Checkpoint, HeadInfo, HeadInfoError};
+
+    fn cp(root_byte: u8, slot: u64) -> Checkpoint {
+        Checkpoint::new(Bytes32::new([root_byte; 32]), Slot::new(slot))
+    }
+
+    #[test]
+    fn try_new_accepts_valid_and_rejects_finalized_ahead_of_head() {
+        // (head, finalized, expect_ok, label)
+        let genesis = Checkpoint::new(Bytes32::zero(), Slot::new(0));
+        let cases = [
+            (genesis, genesis, true, "genesis: equal zero-root at slot 0"),
+            (cp(0xaa, 5), cp(0xbb, 3), true, "finalized below head"),
+            (
+                cp(0xaa, 5),
+                cp(0xbb, 5),
+                true,
+                "finalized equal to head slot",
+            ),
+            (cp(0xaa, 3), cp(0xbb, 5), false, "finalized ahead of head"),
+        ];
+
+        for (head, finalized, expect_ok, label) in cases {
+            let result = HeadInfo::try_new(head, finalized);
+            assert_eq!(result.is_ok(), expect_ok, "case: {label}");
+            if expect_ok {
+                let info = result.expect(label);
+                assert_eq!(info.head, head, "case: {label}");
+                assert_eq!(info.finalized, finalized, "case: {label}");
+            } else {
+                assert_eq!(
+                    result.unwrap_err(),
+                    HeadInfoError::FinalizedAheadOfHead {
+                        head: head.slot.get(),
+                        finalized: finalized.slot.get(),
+                    },
+                    "case: {label}"
+                );
+            }
+        }
+    }
 }

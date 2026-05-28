@@ -19,9 +19,9 @@ mod metrics {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn metrics_endpoint_returns_prometheus_text_with_injected_gauge() {
-        let recorder = Recorder::new();
+        let mut recorder = Recorder::new();
         recorder.gauge("lean_test_fixed_gauge", "Fixed gauge for tests.", || 42);
-        let service = MetricsService::new(loopback(), recorder);
+        let service = MetricsService::new(loopback(), recorder.freeze().unwrap());
 
         service.start().await.unwrap();
         let addr = service.bound_addr().expect("service must be running");

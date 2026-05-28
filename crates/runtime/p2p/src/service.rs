@@ -510,7 +510,7 @@ async fn swarm_task(
                                 .blocks_rr
                                 .send_request(&peer, request),
                         };
-                        outbound.insert(id, reply);
+                        outbound.insert(id, peer, reply);
                     }
                 }
             }
@@ -564,6 +564,9 @@ fn handle_swarm_event(
         }
         SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
             debug!(peer = %peer_id, ?cause, "connection closed");
+            // Wake any in-flight outbound requests to this peer so their
+            // entries do not leak in the table for the task's lifetime.
+            outbound.fail_all_for_peer(peer_id, "peer connection closed");
         }
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
             warn!(peer = ?peer_id, %error, "outgoing connection error");

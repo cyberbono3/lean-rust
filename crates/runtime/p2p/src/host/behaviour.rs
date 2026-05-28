@@ -10,7 +10,10 @@
 //! is implemented in [`codec::SszSnappyCodec`] and dispatched per
 //! protocol in [`crate::service`].
 
-use std::{cell::RefCell, time::Duration};
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use lean_wire::{
     compute_gossipsub_message_id, ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1,
@@ -124,20 +127,46 @@ thread_local! {
     /// Scratch buffer reused across [`is_valid_snappy`] calls. The
     /// snappy `Decoder` itself is a zero-sized type (`snap::raw::Decoder`
     /// holds no state), so only the output buffer is worth keeping
-    /// thread-local.
+    /// thread-local. This is read within the same call that writes it
+    /// ([`gossipsub_message_id`] reads `scratch[..len]` right after
+    /// [`is_valid_snappy`]), so it never crosses a task `.await` and a
+    /// thread-local is correct here.
     static SNAPPY_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(4096));
+}
 
-    /// Single-slot inbound-routing cache. Populated by
-    /// [`gossipsub_message_id`] whenever it observes a valid snappy
-    /// payload, then consumed by
-    /// [`crate::gossip::handler::route_gossipsub_message`] via
-    /// [`take_decompressed_for`] to skip a second decompression on the
-    /// SSZ-decode path. Same-poll write/read on the swarm-poll task
-    /// guarantees hit for inbound messages; outbound publishes write
-    /// entries that get evicted on the next inbound. See module-level
-    /// note on libp2p call ordering.
-    static DECOMPRESSED_CACHE: RefCell<Option<(gossipsub::MessageId, Vec<u8>)>> =
-        const { RefCell::new(None) };
+/// Capacity of [`DECOMPRESSED_CACHE`]. A handful of in-flight messages
+/// per swarm-poll batch is the realistic working set; the bound caps
+/// worst-case memory if a consumer never claims an entry (outbound
+/// publishes, or a dropped inbound).
+const DECOMPRESSED_CACHE_CAP: usize = 32;
+
+/// Inbound-routing cache: decompressed gossip payloads keyed by their
+/// [`gossipsub::MessageId`]. Populated by [`gossipsub_message_id`] when
+/// it observes a valid snappy payload, then consumed by
+/// [`crate::gossip::handler::route_gossipsub_message`] via
+/// [`take_decompressed_for`] to skip a second snappy decompression on
+/// the SSZ-decode path.
+///
+/// A **process-global**, id-keyed bounded map rather than a
+/// `thread_local!` single slot: the swarm-poll task is spawned on the
+/// multi-threaded runtime, and tokio's work-stealing scheduler can move
+/// it to a different worker thread between the `message_id_fn` call and
+/// the `Event::Message` route. A thread-local cache silently missed on
+/// every such hop (the payload was decompressed twice). Keying by
+/// `MessageId` and sharing one map across threads makes the hit
+/// independent of which worker runs each step. Only the single swarm
+/// task touches it, so the `Mutex` is effectively uncontended.
+static DECOMPRESSED_CACHE: Mutex<VecDeque<(gossipsub::MessageId, Vec<u8>)>> =
+    Mutex::new(VecDeque::new());
+
+/// Locks [`DECOMPRESSED_CACHE`], recovering the guard if a previous
+/// holder panicked (the cached bytes are best-effort, never
+/// correctness-bearing, so a poisoned lock is safe to reuse).
+fn decompressed_cache() -> std::sync::MutexGuard<'static, VecDeque<(gossipsub::MessageId, Vec<u8>)>>
+{
+    DECOMPRESSED_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Reports whether `data` is a fully-decodable snappy frame, returning
@@ -191,23 +220,26 @@ pub(crate) fn gossipsub_message_id(msg: &gossipsub::Message) -> gossipsub::Messa
         // against the avoided second snappy decompression in
         // `route_gossipsub_message` (snappy ≈ 1 GB/s; memcpy ≈ 10–30 GB/s).
         let bytes = SNAPPY_SCRATCH.with_borrow(|scratch| scratch[..len].to_vec());
-        DECOMPRESSED_CACHE.with_borrow_mut(|cache| *cache = Some((id.clone(), bytes)));
+        let mut cache = decompressed_cache();
+        if cache.len() >= DECOMPRESSED_CACHE_CAP {
+            cache.pop_front();
+        }
+        cache.push_back((id.clone(), bytes));
     }
     id
 }
 
-/// Returns and clears the cached decompressed payload if the most-recent
-/// [`gossipsub_message_id`] call computed `id`. Returns `None` on a
-/// cache miss (different id, the entry was already taken, or the
-/// previous payload was not a valid snappy frame). Single-slot,
-/// thread-local; intended to be called once per inbound message from
+/// Removes and returns the cached decompressed payload for `id`, if a
+/// recent [`gossipsub_message_id`] call cached one. Returns `None` on a
+/// cache miss (no entry for `id`, already taken, or the payload was not
+/// a valid snappy frame). Id-keyed and process-global, so it hits
+/// regardless of which worker thread ran the populate vs the take;
+/// intended to be called once per inbound message from
 /// [`crate::gossip::handler::route_gossipsub_message`].
 pub(crate) fn take_decompressed_for(id: &gossipsub::MessageId) -> Option<Vec<u8>> {
-    DECOMPRESSED_CACHE.with_borrow_mut(|cache| {
-        cache
-            .take_if(|(cached_id, _)| cached_id == id)
-            .map(|(_, v)| v)
-    })
+    let mut cache = decompressed_cache();
+    let pos = cache.iter().position(|(cached_id, _)| cached_id == id)?;
+    cache.remove(pos).map(|(_, bytes)| bytes)
 }
 
 #[cfg(test)]
@@ -307,6 +339,26 @@ mod tests {
             take_decompressed_for(&id).is_none(),
             "cache slot must clear after take",
         );
+    }
+
+    #[test]
+    fn decompressed_cache_hits_across_thread_hop() {
+        // The regression #20-cache fixes: populate on one thread, take on
+        // another. A thread-local cache missed here (tokio work-stealing
+        // moves the swarm task between worker threads); the global
+        // id-keyed cache must still hit.
+        let raw = b"cross-thread payload";
+        let encoded = snappy_encode(raw);
+        let msg = message(VOTE_TOPIC_V1, encoded);
+
+        // Populate from a separate thread.
+        let id = std::thread::spawn(move || gossipsub_message_id(&msg))
+            .join()
+            .expect("populate thread");
+
+        // Take from this (different) thread — must still hit.
+        let bytes = take_decompressed_for(&id).expect("cache must hit across threads");
+        assert_eq!(bytes, raw);
     }
 
     #[test]

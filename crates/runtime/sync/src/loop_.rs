@@ -11,6 +11,7 @@
 //! finds a known block) is the expected outcome and is resolved on a
 //! future peer-connect or via gossip.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -20,6 +21,7 @@ use parking_lot::Mutex;
 use protocol::SignedBlock;
 use ssz::HashTreeRoot;
 use tokio::sync::mpsc;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -135,7 +137,11 @@ impl lean_core::Service for Loop {
             network: Arc::clone(&self.network),
             cancel: cancel.clone(),
         };
-        let watch = tokio::spawn(watch_loop(worker, events, tracker.clone()));
+        // One permit per allowed concurrent peer walk. The watch loop
+        // acquires before spawning, so a flap storm backpressures here
+        // instead of fanning out unbounded tasks.
+        let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent_peer_syncs.get()));
+        let watch = tokio::spawn(watch_loop(worker, events, tracker.clone(), semaphore));
         *slot = Some(RunHandle {
             watch,
             peers: tracker,
@@ -190,12 +196,27 @@ impl lean_core::Service for Loop {
     }
 }
 
-/// Drains peer-connect events until cancellation or sender close. Each
-/// event spawns an independent [`PeerWorker::handle`] task tracked by
-/// `tracker`.
+/// Drains peer-connect events until cancellation or sender close.
+///
+/// Per event: reap completed walks, dedup against any in-flight walk for
+/// the same `PeerId` (a flap-storming peer yields exactly one walk),
+/// acquire a [`Semaphore`] permit (capping concurrent walks at
+/// `max_concurrent_peer_syncs`), then spawn an independent
+/// [`PeerWorker::handle`] task tracked by `tracker`. The permit is held
+/// for the task's lifetime; acquiring before the spawn means a flap
+/// storm backpressures the event drain rather than fanning out.
 #[instrument(level = "trace", name = "sync.watch", skip_all)]
-async fn watch_loop(worker: PeerWorker, mut events: mpsc::Receiver<PeerId>, tracker: TaskTracker) {
+async fn watch_loop(
+    worker: PeerWorker,
+    mut events: mpsc::Receiver<PeerId>,
+    tracker: TaskTracker,
+    semaphore: Arc<Semaphore>,
+) {
     let cancel = worker.cancel.clone();
+    // In-flight walk per peer. A peer can re-sync only once its prior
+    // walk completes (reaped below); a duplicate event while a walk is
+    // running is dropped.
+    let mut in_flight: HashMap<PeerId, JoinHandle<()>> = HashMap::new();
     loop {
         tokio::select! {
             // `biased`: cancellation has priority over event delivery.
@@ -203,7 +224,36 @@ async fn watch_loop(worker: PeerWorker, mut events: mpsc::Receiver<PeerId>, trac
             () = cancel.cancelled() => break,
             maybe_peer = events.recv() => {
                 let Some(peer) = maybe_peer else { break };
-                tracker.spawn(worker.clone().handle(peer).instrument(Span::current()));
+                // Reap finished walks so their peers can sync again.
+                in_flight.retain(|_, handle| !handle.is_finished());
+                // Dedup: a walk for this peer is already running.
+                if in_flight.contains_key(&peer) {
+                    debug!(%peer, "sync walk already in flight; dropping duplicate peer event");
+                    continue;
+                }
+                // Acquire a permit before spawning. Cancellation still
+                // wins while we wait for a free permit.
+                let permit = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => break,
+                    permit = Arc::clone(&semaphore).acquire_owned() => match permit {
+                        Ok(permit) => permit,
+                        // The semaphore is never closed while the loop
+                        // runs; a closed semaphore means shutdown.
+                        Err(_) => break,
+                    },
+                };
+                let worker = worker.clone();
+                let key = peer.clone();
+                let handle = tracker.spawn(
+                    async move {
+                        // Hold the permit for the walk's lifetime.
+                        let _permit = permit;
+                        worker.handle(peer).await;
+                    }
+                    .instrument(Span::current()),
+                );
+                in_flight.insert(key, handle);
             }
         }
     }
@@ -224,7 +274,11 @@ impl PeerWorker {
     /// Handles a single peer-connect event: status exchange + walk-back.
     #[instrument(level = "debug", name = "sync.on_connect", skip_all, fields(peer = %peer))]
     async fn handle(self, peer: PeerId) {
-        if self.cancel.is_cancelled() {
+        // A child of the shared token: parent cancellation (Loop::stop)
+        // still cancels this walk, but the per-peer token also bounds
+        // this walk in isolation (its RPC timeout aborts only this peer).
+        let cancel = self.cancel.child_token();
+        if cancel.is_cancelled() {
             return;
         }
         let Ok((local_status, peer_status)) =
@@ -245,16 +299,17 @@ impl PeerWorker {
             peer_head = peer_status.head.slot.get(),
             "sync started",
         );
-        self.sync_with_peer(&peer, peer_status.head.root).await;
+        self.sync_with_peer(&peer, peer_status.head.root, &cancel)
+            .await;
     }
 
     /// Walks back from `start_root` then imports the recovered chain in
-    /// forward order.
-    async fn sync_with_peer(&self, peer: &PeerId, start_root: Bytes32) {
-        let Ok(pending) = self.walk_back(peer, start_root).await else {
+    /// forward order. `cancel` is this peer's child token.
+    async fn sync_with_peer(&self, peer: &PeerId, start_root: Bytes32, cancel: &CancellationToken) {
+        let Ok(pending) = self.walk_back(peer, start_root, cancel).await else {
             return;
         };
-        import_chain(&*self.chain, pending, &self.cancel).await;
+        import_chain(&*self.chain, pending, cancel).await;
     }
 
     /// Walks back from `start_root` collecting unknown ancestors up to
@@ -272,13 +327,14 @@ impl PeerWorker {
         &self,
         peer: &PeerId,
         start_root: Bytes32,
+        cancel: &CancellationToken,
     ) -> Result<Vec<SignedBlock>, SyncError> {
         let max_depth = self.config.max_sync_depth.get();
         let mut pending: Vec<SignedBlock> = Vec::with_capacity(max_depth);
         let mut next_root = start_root;
 
         for _ in 0..max_depth {
-            if self.cancel.is_cancelled() {
+            if cancel.is_cancelled() {
                 return Ok(Vec::new());
             }
             if next_root == Bytes32::zero() {
@@ -302,7 +358,33 @@ impl PeerWorker {
             #[allow(clippy::expect_used)]
             let request = BlocksByRootRequest::new([next_root])
                 .expect("single-root request is within MAX_REQUEST_BLOCKS");
-            let response = self.network.request_blocks_by_root(peer, request).await?;
+            // Bound the RPC by the per-request timeout and the per-peer
+            // cancel token: a hung substream aborts only this walk after
+            // `request_timeout`, and `Loop::stop` (which cancels the
+            // parent of this child token) drops the in-flight request
+            // immediately so shutdown drains in bounded time. The
+            // BlocksByRoot wire protocol itself is unchanged.
+            let response = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Ok(Vec::new()),
+                result = tokio::time::timeout(
+                    self.config.request_timeout,
+                    self.network.request_blocks_by_root(peer, request),
+                ) => match result {
+                    Ok(Ok(response)) => response,
+                    Ok(Err(err)) => return Err(err),
+                    Err(_elapsed) => {
+                        let timeout_ms =
+                            u64::try_from(self.config.request_timeout.as_millis()).unwrap_or(u64::MAX);
+                        warn!(
+                            ?peer,
+                            timeout_ms,
+                            "sync walk_back: BlocksByRoot request timed out, aborting peer walk"
+                        );
+                        return Ok(Vec::new());
+                    }
+                },
+            };
             let blocks = response.blocks();
             // Validate the peer's response shape and hash. A malicious or
             // buggy peer could otherwise return ANY block (or many blocks)

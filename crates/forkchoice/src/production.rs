@@ -1,7 +1,7 @@
 //! Local block + attestation production driven by the forkchoice store.
 //!
-//! Mirrors leanSpec `forkchoice/production.py` and the lean-go
-//! `consensus/forkchoice/production.go` shape:
+//! Mirrors leanSpec `forkchoice/production.py` and the upstream
+//! forkchoice production shape:
 //!
 //! - [`Store::produce_block`] runs the propose-and-track flow: derive the
 //!   proposal head, build a candidate, gather includable votes from

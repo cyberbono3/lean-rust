@@ -51,3 +51,6 @@ skills-lock.json
 !.meta-agent/runs/.gitkeep
 # --- End Claude Kit ---
 # --- End Claude Kit ---
+
+# Machine-local pq-devnet-0 metric capture runs (see scripts/capture-devnet-metrics.sh)
+.claude/pq-devnet-0-perf-runs.jsonl

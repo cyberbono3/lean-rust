@@ -15,8 +15,9 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
+use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
-use protocol::{is_proposer, Slot, ValidatorIndex};
+use protocol::{Slot, ValidatorIndex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep_until, Instant};
 use tokio_util::sync::CancellationToken;
@@ -25,6 +26,7 @@ use tracing::{debug, info, instrument, warn};
 use super::config::{Config, GenesisTimeUnix};
 use super::error::{DutiesError, DutiesResult};
 use super::ports::{Chain, Publisher};
+use super::proposer::LocalProposers;
 use super::validators::ValidatorAssignments;
 
 /// Handle to the running scheduler worker: the spawned `JoinHandle` and
@@ -40,32 +42,95 @@ struct RunHandle {
 /// Construct via [`Service::new`]; supply impls of [`Chain`] (the chain
 /// service in production, an in-memory fake in tests) and [`Publisher`]
 /// (the `node`-level libp2p adapter in production, a mock in tests).
-pub struct Service {
+///
+/// Generic over the concrete `Chain` / `Publisher` impls (`Arc<C>` /
+/// `Arc<P>`, not trait objects) so the native `async fn` ports avoid a
+/// boxed-future allocation per call (#27). The composition root stores
+/// the constructed `Service<C, P>` behind `Arc<dyn lean_core::Service>`.
+pub struct Service<C: Chain, P: Publisher> {
     config: Config,
-    chain: Arc<dyn Chain>,
-    publisher: Arc<dyn Publisher>,
+    chain: Arc<C>,
+    publisher: Arc<P>,
     /// Cached `(slot_duration, vote_due_offset)` derived from
     /// `config::DEVNET_CONFIG`. Cached so the scheduler doesn't
     /// re-multiply on every iteration.
     slot_duration: Duration,
     vote_due_offset: Duration,
     /// Shared scheduler state: the run handle (when started) and the
-    /// most-recent non-terminal scheduler error. Wrapped in `Arc<Mutex>`
-    /// so the worker task can record `last_err` without unsafe pointer
-    /// tricks (and without an `Arc` cycle, since `Worker` holds only
-    /// this state arc, not the whole service).
+    /// rolling publish-health counter. Wrapped in `Arc<Mutex>` so the
+    /// worker task can update health without unsafe pointer tricks (and
+    /// without an `Arc` cycle, since `Worker` holds only this state arc,
+    /// not the whole service).
     state: Arc<Mutex<ServiceState>>,
 }
+
+/// Number of consecutive duty failures (production or publish) after
+/// which [`lean_core::Service::status`] flips `Ok → Err`. Tolerating
+/// `K-1` flakes keeps a single transport hiccup from paging an
+/// operator while still surfacing a sustained outage.
+const PUBLISH_FAILURE_THRESHOLD: u32 = 3;
 
 #[derive(Default)]
 struct ServiceState {
     run: Option<RunHandle>,
-    /// Most recent non-terminal scheduler error. Surfaced via
+    /// Rolling publish-health counter. Surfaced via
     /// [`lean_core::Service::status`]. Reset on each `start`.
-    last_err: Option<DutiesError>,
+    health: PublishHealth,
 }
 
-impl core::fmt::Debug for Service {
+/// Rolling record of duty-publish health, replacing the prior
+/// fire-and-forget `last_err` slot (which never recorded publish
+/// failures at all). A run of [`PUBLISH_FAILURE_THRESHOLD`] consecutive
+/// failures flips `status()` to `Err`; any success resets the streak.
+#[derive(Default, Debug)]
+struct PublishHealth {
+    /// Consecutive failures since the last success. Reset to 0 on any
+    /// successful publish.
+    consecutive_failures: u32,
+    /// The most recent failure, retained for the `status()` message.
+    last_error: Option<DutiesError>,
+    /// Slot of the most recent failure.
+    last_failure_slot: Option<u64>,
+}
+
+impl PublishHealth {
+    /// Records a failed duty at `slot`, incrementing the consecutive
+    /// streak and capturing the error for diagnostics.
+    fn on_failure(&mut self, slot: Slot, err: DutiesError) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.last_error = Some(err);
+        self.last_failure_slot = Some(slot.get());
+    }
+
+    /// Records a successful publish, clearing the consecutive streak.
+    /// `last_error` / `last_failure_slot` are left in place — they only
+    /// surface while the streak is at or past the threshold.
+    fn on_success(&mut self) {
+        self.consecutive_failures = 0;
+    }
+
+    /// Returns `Err` once the consecutive-failure streak reaches
+    /// [`PUBLISH_FAILURE_THRESHOLD`], carrying the last error and the
+    /// slot it occurred on; `Ok` otherwise.
+    fn status(&self) -> anyhow::Result<()> {
+        if self.consecutive_failures < PUBLISH_FAILURE_THRESHOLD {
+            return Ok(());
+        }
+        let slot = self.last_failure_slot.unwrap_or_default();
+        match self.last_error.as_ref() {
+            Some(err) => Err(anyhow!(
+                "duties publish degraded: {} consecutive failures (last at slot {slot}): {err}",
+                self.consecutive_failures,
+            )),
+            None => Err(anyhow!(
+                "duties publish degraded: {} consecutive failures",
+                self.consecutive_failures,
+            )),
+        }
+    }
+}
+
+impl<C: Chain, P: Publisher> core::fmt::Debug for Service<C, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let state = self.state.lock();
         f.debug_struct("Service")
@@ -73,12 +138,12 @@ impl core::fmt::Debug for Service {
             .field("slot_duration", &self.slot_duration)
             .field("vote_due_offset", &self.vote_due_offset)
             .field("running", &state.run.is_some())
-            .field("has_last_err", &state.last_err.is_some())
+            .field("consecutive_failures", &state.health.consecutive_failures)
             .finish_non_exhaustive()
     }
 }
 
-impl Service {
+impl<C: Chain, P: Publisher> Service<C, P> {
     /// Builds a duties service. [`Config`] is already validated at
     /// construction (parse-don't-validate), so this method is
     /// infallible at the field level — it cannot reject a malformed
@@ -86,15 +151,16 @@ impl Service {
     /// [`Service::start`], not here, so a missing fixture file does
     /// not prevent service composition.
     #[must_use]
-    pub fn new(config: Config, chain: Arc<dyn Chain>, publisher: Arc<dyn Publisher>) -> Self {
-        let slot_duration = Duration::from_millis(config::DEVNET_CONFIG.slot_duration_ms);
-        // Integer math: slot_duration_ms * bps / 10_000.
-        // `DEVNET_CONFIG` is a compile-time const — overflow is not
-        // reachable at realistic values (product caps near 2^36 for
-        // slot_duration in seconds and bps within [0, 10_000]).
-        let vote_due_offset = Duration::from_millis(
-            config::DEVNET_CONFIG.slot_duration_ms * config::DEVNET_CONFIG.vote_due_bps / 10_000,
-        );
+    pub fn new(config: Config, chain: Arc<C>, publisher: Arc<P>) -> Self {
+        let slot_duration_ms = config.slot_duration_ms().get();
+        let slot_duration = Duration::from_millis(slot_duration_ms);
+        // Integer math: slot_duration_ms * bps / 10_000. The
+        // `vote_due_bps` factor comes from the compile-time
+        // `DEVNET_CONFIG` const and is bounded to [0, 10_000]; at the
+        // realistic `slot_duration_ms` devnet range the product stays
+        // far below `u64::MAX`, so overflow is not reachable.
+        let vote_due_offset =
+            Duration::from_millis(slot_duration_ms * config::DEVNET_CONFIG.vote_due_bps / 10_000);
         Self {
             config,
             chain,
@@ -120,7 +186,7 @@ impl Service {
     }
 }
 
-impl Drop for Service {
+impl<C: Chain, P: Publisher> Drop for Service<C, P> {
     /// Best-effort cleanup if the service is dropped without going
     /// through [`lean_core::Service::stop`]: cancel the shared token
     /// so the worker exits on its next iteration. The handle detaches;
@@ -134,13 +200,18 @@ impl Drop for Service {
 }
 
 #[async_trait]
-impl lean_core::Service for Service {
+impl<C: Chain, P: Publisher> lean_core::Service for Service<C, P> {
     fn name(&self) -> &'static str {
         "duties"
     }
 
     #[instrument(level = "info", name = "duties.start", skip_all, err)]
     async fn start(&self) -> anyhow::Result<()> {
+        // Reject a config that would schedule fictitious slots (epoch
+        // genesis) before doing any work. `slot_duration_ms` is a
+        // `NonZeroU64`, so the divide-by-zero case is already
+        // unrepresentable.
+        self.config.ensure_runnable()?;
         // Load assignments before flipping the running flag so a load
         // failure leaves the service stoppable and re-startable.
         let assignments = ValidatorAssignments::load(self.config.validators_path())
@@ -163,20 +234,20 @@ impl lean_core::Service for Service {
         if state.run.is_some() {
             return Err(DutiesError::AlreadyStarted.into());
         }
-        state.last_err = None;
+        state.health = PublishHealth::default();
 
         let cancel = CancellationToken::new();
         let worker = Worker {
             chain: Arc::clone(&self.chain),
             publisher: Arc::clone(&self.publisher),
             validators: local.into(),
-            total_validators: assignments.total_validators(),
+            proposers: LocalProposers::new(local.iter().copied(), assignments.total_validators()),
             slot_duration: self.slot_duration,
             vote_due_offset: self.vote_due_offset,
             genesis: Genesis::new(self.config.genesis_time_unix()),
             cancel: cancel.clone(),
             progress: Progress::default(),
-            last_err: LastErrSink {
+            health: HealthSink {
                 state: Arc::clone(&self.state),
             },
         };
@@ -217,24 +288,25 @@ impl lean_core::Service for Service {
             Some(h) if h.task.is_finished() => {
                 Err(anyhow!("duties worker task exited prematurely"))
             }
-            Some(_) => {
-                if let Some(err) = state.last_err.as_ref() {
-                    Err(anyhow!("duties last error: {err}"))
-                } else {
-                    Ok(())
-                }
-            }
+            Some(_) => state.health.status(),
         }
     }
 }
 
-struct LastErrSink {
+/// Worker-side handle to the shared publish-health counter. Recording
+/// here surfaces via [`lean_core::Service::status`] without the worker
+/// holding the whole [`Service`].
+struct HealthSink {
     state: Arc<Mutex<ServiceState>>,
 }
 
-impl LastErrSink {
-    fn record(&self, err: DutiesError) {
-        self.state.lock().last_err = Some(err);
+impl HealthSink {
+    fn record_failure(&self, slot: Slot, err: DutiesError) {
+        self.state.lock().health.on_failure(slot, err);
+    }
+
+    fn record_success(&self) {
+        self.state.lock().health.on_success();
     }
 }
 
@@ -281,7 +353,7 @@ impl Genesis {
 /// Per-slot progress flags tracked by the [`Worker`].
 ///
 /// Renamed away from "state" so it doesn't collide visually with
-/// [`ServiceState`] (the Service's lifecycle + last-error store).
+/// [`ServiceState`] (the Service's lifecycle + publish-health store).
 ///
 /// Helper methods own the `Slot → u64` conversion so call sites read
 /// as natural language (`progress.proposer_done(slot)`) instead of
@@ -316,27 +388,29 @@ impl Progress {
     }
 }
 
-struct Worker {
-    chain: Arc<dyn Chain>,
-    publisher: Arc<dyn Publisher>,
+struct Worker<C: Chain, P: Publisher> {
+    chain: Arc<C>,
+    publisher: Arc<P>,
     /// Shared immutable slice of locally assigned validators.
     /// `Arc<[T]>` (vs `Arc<Vec<T>>`) keeps one heap allocation and
     /// drops the unused `capacity` field — idiomatic Rust for
     /// "shared immutable list."
     validators: Arc<[ValidatorIndex]>,
-    total_validators: u64,
+    /// O(1) proposer lookup over the local set (replaces the prior
+    /// linear `is_proposer` scan).
+    proposers: LocalProposers,
     slot_duration: Duration,
     vote_due_offset: Duration,
     genesis: Genesis,
     cancel: CancellationToken,
     progress: Progress,
-    /// Sink for non-terminal scheduler errors. Constructed at start
-    /// with an `Arc` clone of the Service's state — recording an
-    /// error here surfaces via `Service::status`.
-    last_err: LastErrSink,
+    /// Sink for the rolling publish-health counter. Constructed at
+    /// start with an `Arc` clone of the Service's state — recording a
+    /// failure / success here surfaces via `Service::status`.
+    health: HealthSink,
 }
 
-impl Worker {
+impl<C: Chain, P: Publisher> Worker<C, P> {
     #[instrument(level = "debug", name = "duties.worker", skip_all)]
     async fn run(mut self) {
         loop {
@@ -395,7 +469,7 @@ impl Worker {
         self.progress.mark_proposer(slot);
         if let Err(err) = self.run_proposer(slot).await {
             warn!(slot = slot.get(), %err, "duties proposer pass failed");
-            self.last_err.record(err);
+            self.health.record_failure(slot, err);
         }
     }
 
@@ -424,70 +498,125 @@ impl Worker {
     }
 
     async fn run_proposer(&self, slot: Slot) -> DutiesResult<()> {
-        let Some(validator) = self.proposer_for_slot(slot) else {
+        let Some(validator) = self.proposers.proposer_for_slot(slot) else {
             debug!(slot = slot.get(), "duties proposer slot not assigned");
             return Ok(());
         };
         let block = self.chain.produce_block(slot, validator).await?;
         match self.publisher.publish_block(block).await {
-            Ok(()) => info!(
-                slot = slot.get(),
-                validator = validator.get(),
-                "duties block proposed",
-            ),
-            Err(err) => warn!(
-                slot = slot.get(),
-                validator = validator.get(),
-                %err,
-                "duties block publish failed",
-            ),
-        }
-        Ok(())
-    }
-
-    /// Per-validator attester pass. Each step warn-logs and continues
-    /// on failure — attester errors are never service-terminal, so the
-    /// function is fire-and-forget rather than `Result`-returning.
-    async fn run_attesters(&self, slot: Slot) {
-        for validator in self.validators.iter().copied() {
-            let vote = match self.chain.produce_attestation(slot, validator).await {
-                Ok(v) => v,
-                Err(err) => {
-                    warn!(
-                        slot = slot.get(),
-                        validator = validator.get(),
-                        %err,
-                        "duties attestation production failed",
-                    );
-                    continue;
-                }
-            };
-            if let Err(err) = self.publisher.publish_attestation(vote).await {
+            Ok(()) => {
+                info!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    "duties block proposed",
+                );
+                self.health.record_success();
+            }
+            Err(err) => {
                 warn!(
                     slot = slot.get(),
                     validator = validator.get(),
                     %err,
-                    "duties attestation publish failed",
+                    "duties block publish failed",
                 );
-            } else {
+                self.health.record_failure(slot, err.into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Per-validator attester pass. Drives all validators' duties
+    /// concurrently through a [`FuturesUnordered`] instead of awaiting
+    /// each sequentially: at N validators the old loop's wall-time was
+    /// the SUM of per-validator latencies, which blows the ~2 s vote-due
+    /// window at operator scale. Each duty carries a per-validator
+    /// timeout (half the slot duration) so one stalled
+    /// produce/publish cannot wedge the pass, and the whole drive sits
+    /// under a `select!` on the cancel token so shutdown drops every
+    /// inflight future immediately rather than waiting on the slowest.
+    ///
+    /// Outcomes are folded into publish health as they complete; the
+    /// pass is fire-and-forget (no `Result`) because attester failures
+    /// are never service-terminal.
+    async fn run_attesters(&self, slot: Slot) {
+        let budget = self.slot_duration / 2;
+        let mut duties = self
+            .validators
+            .iter()
+            .copied()
+            .map(|validator| async move {
+                let outcome = tokio::time::timeout(budget, self.attest_one(slot, validator)).await;
+                (validator, outcome)
+            })
+            .collect::<FuturesUnordered<_>>();
+
+        loop {
+            tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => break,
+                next = duties.next() => match next {
+                    Some((validator, outcome)) => {
+                        self.record_attest_outcome(slot, validator, budget, outcome);
+                    }
+                    None => break,
+                },
+            }
+        }
+    }
+
+    /// Produces and publishes one validator's attestation. Returns the
+    /// first failure as a [`DutiesError`] so the caller can fold it into
+    /// publish health.
+    async fn attest_one(&self, slot: Slot, validator: ValidatorIndex) -> DutiesResult<()> {
+        let vote = self.chain.produce_attestation(slot, validator).await?;
+        self.publisher.publish_attestation(vote).await?;
+        Ok(())
+    }
+
+    /// Folds one validator's attestation outcome into publish health,
+    /// warn-logging failures and the timeout case.
+    fn record_attest_outcome(
+        &self,
+        slot: Slot,
+        validator: ValidatorIndex,
+        budget: Duration,
+        outcome: Result<DutiesResult<()>, tokio::time::error::Elapsed>,
+    ) {
+        match outcome {
+            Ok(Ok(())) => {
                 debug!(
                     slot = slot.get(),
                     validator = validator.get(),
                     "duties attestation published",
                 );
+                self.health.record_success();
+            }
+            Ok(Err(err)) => {
+                warn!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    %err,
+                    "duties attestation duty failed",
+                );
+                self.health.record_failure(slot, err);
+            }
+            Err(_elapsed) => {
+                let timeout_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX);
+                warn!(
+                    slot = slot.get(),
+                    validator = validator.get(),
+                    timeout_ms,
+                    "duties attestation duty timed out",
+                );
+                self.health.record_failure(
+                    slot,
+                    DutiesError::DutyTimeout {
+                        validator: validator.get(),
+                        timeout_ms,
+                    },
+                );
             }
         }
-    }
-
-    fn proposer_for_slot(&self, slot: Slot) -> Option<ValidatorIndex> {
-        // `is_proposer` only errors when `total_validators == 0`, which
-        // `ValidatorAssignments` already rules out at load time. Treat
-        // the surprising-error case as "not assigned" rather than
-        // panicking — the scheduler tolerates an idle slot.
-        self.validators
-            .iter()
-            .copied()
-            .find(|&validator| is_proposer(validator, slot, self.total_validators).unwrap_or(false))
     }
 }
 
@@ -503,7 +632,6 @@ mod tests {
     /// construction-time tests below.
     struct NoopChain;
 
-    #[async_trait]
     impl Chain for NoopChain {
         async fn produce_block(
             &self,
@@ -523,7 +651,6 @@ mod tests {
 
     struct NoopPublisher;
 
-    #[async_trait]
     impl Publisher for NoopPublisher {
         async fn publish_block(&self, _b: SignedBlock) -> Result<(), PublishError> {
             Ok(())
@@ -533,7 +660,7 @@ mod tests {
         }
     }
 
-    fn service() -> Service {
+    fn service() -> Service<NoopChain, NoopPublisher> {
         Service::new(
             Config::default(),
             Arc::new(NoopChain),
@@ -565,6 +692,60 @@ mod tests {
     #[tokio::test]
     async fn status_before_start_errors() {
         let svc = service();
-        assert!(<Service as lean_core::Service>::status(&svc).await.is_err());
+        assert!(lean_core::Service::status(&svc).await.is_err());
+    }
+
+    // -- PublishHealth ------------------------------------------------------
+
+    fn sample_err() -> DutiesError {
+        DutiesError::Publish(anyhow!("transport down").into())
+    }
+
+    #[test]
+    fn publish_health_ok_below_threshold() {
+        let mut h = PublishHealth::default();
+        for _ in 0..PUBLISH_FAILURE_THRESHOLD - 1 {
+            h.on_failure(Slot::new(7), sample_err());
+        }
+        assert!(
+            h.status().is_ok(),
+            "must stay Ok below K={PUBLISH_FAILURE_THRESHOLD}"
+        );
+    }
+
+    #[test]
+    fn publish_health_flips_exactly_on_kth_failure() {
+        let mut h = PublishHealth::default();
+        // K-1 failures: still Ok.
+        for _ in 0..PUBLISH_FAILURE_THRESHOLD - 1 {
+            h.on_failure(Slot::new(2), sample_err());
+        }
+        assert!(h.status().is_ok());
+        // The Kth consecutive failure flips status.
+        h.on_failure(Slot::new(2), sample_err());
+        let err = h.status().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("slot 2"),
+            "expected last_failure_slot, got {msg}"
+        );
+        assert!(
+            msg.contains("transport down"),
+            "expected last error, got {msg}"
+        );
+    }
+
+    #[test]
+    fn publish_health_success_resets_streak() {
+        let mut h = PublishHealth::default();
+        for _ in 0..PUBLISH_FAILURE_THRESHOLD {
+            h.on_failure(Slot::new(1), sample_err());
+        }
+        assert!(h.status().is_err());
+        h.on_success();
+        assert!(
+            h.status().is_ok(),
+            "a success must clear the degraded state"
+        );
     }
 }

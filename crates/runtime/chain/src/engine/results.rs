@@ -3,7 +3,7 @@
 //!
 //! Both result types are sum-type enums whose variants carry exactly the
 //! fields meaningful to that outcome. This is the idiomatic Rust counterpart
-//! to lean-go's `(Status, Err)` struct pair: callers pattern-match once,
+//! to the upstream `(Status, Err)` struct pair: callers pattern-match once,
 //! with the compiler enforcing exhaustiveness.
 
 use protocol::ValidatorIndex;

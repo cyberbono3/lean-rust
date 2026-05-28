@@ -46,7 +46,7 @@ Tier 5. Depends on `types`, `protocol`, `tokio`, `tokio-util`,
 ## Design notes
 
 - **Ordered start, reverse stop.** The slot ordering matches the
-  upstream lean-go composition: chain must be up before sync /
+  upstream Go-client composition: chain must be up before sync /
   duties can drive it; p2p must be up before sync subscribes to
   peer-connect events.
 - **Start-time unwinding.** A failure in slot N triggers reverse-

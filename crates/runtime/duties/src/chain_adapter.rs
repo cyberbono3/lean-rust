@@ -9,13 +9,11 @@
 //! `lean-chain`. Putting the impl here keeps `lean-chain` free
 //! of any duties dependency.
 
-use async_trait::async_trait;
 use lean_chain::{ChainError, Service as ChainService};
 use protocol::{SignedBlock, SignedVote, Slot, ValidatorIndex};
 
 use crate::ports::Chain;
 
-#[async_trait]
 impl Chain for ChainService {
     async fn produce_block(
         &self,

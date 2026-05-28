@@ -35,6 +35,6 @@ pub mod metrics;
 pub use http::{HttpError, HttpService};
 pub use httpsvc::{HttpsvcError, Server};
 pub use metrics::{
-    GaugeProvider, LabeledGaugeProvider, LabeledGaugeSamples, MetricsError, MetricsService,
-    Recorder,
+    FrozenRecorder, GaugeProvider, LabeledGaugeProvider, LabeledGaugeSamples, MetricsError,
+    MetricsService, Recorder,
 };

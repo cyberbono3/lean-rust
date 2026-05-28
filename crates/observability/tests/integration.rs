@@ -34,14 +34,8 @@ fn file_sink_creates_timestamped_log_file_and_blocks_reinit() {
     // a single log file lands in the temp directory.
     let dir = TempDir::new().expect("tempdir");
 
-    let guard = init_tracing(
-        Verbosity::Info,
-        Some(FileSink {
-            dir: dir.path(),
-            prefix: "test",
-        }),
-    )
-    .expect("init_tracing");
+    let guard = init_tracing(Verbosity::Info, Some(FileSink::new(dir.path(), "test")))
+        .expect("init_tracing");
 
     tracing::info!("hello from observability test");
     // Drop the worker explicitly via the guard going out of scope below
@@ -55,13 +49,15 @@ fn file_sink_creates_timestamped_log_file_and_blocks_reinit() {
         .collect();
     assert_eq!(entries.len(), 1, "expected one log file, got {entries:?}");
     let name = &entries[0];
-    assert!(name.starts_with("test-"), "got {name}");
-    let extension = std::path::Path::new(&name).extension();
-    assert_eq!(
-        extension.and_then(|e| e.to_str()),
-        Some("log"),
-        "got {name}"
-    );
+    // The daily rolling appender names files `<prefix>.<YYYY-MM-DD>.log`;
+    // the date component is what proves rotation is wired (vs the old
+    // `rolling::never` static `<prefix>-<stamp>.log`).
+    assert!(name.starts_with("test."), "got {name}");
+    let date = name
+        .strip_prefix("test.")
+        .and_then(|s| s.strip_suffix(".log"))
+        .unwrap_or_else(|| panic!("expected test.<date>.log, got {name}"));
+    assert_eq!(date.len(), "YYYY-MM-DD".len(), "got date {date:?}");
 
     // Stash the guard + tempdir so the worker keeps running and the path
     // stays valid for any subsequent assertions in this test process.
@@ -72,7 +68,7 @@ fn file_sink_creates_timestamped_log_file_and_blocks_reinit() {
     // in this process.
     let err = init_tracing(Verbosity::Debug, None).expect_err("expected re-init error");
     assert!(
-        matches!(err, TracingInitError::AlreadyInitialized(_)),
+        matches!(err, TracingInitError::AlreadyInitialized),
         "got {err:?}",
     );
 }

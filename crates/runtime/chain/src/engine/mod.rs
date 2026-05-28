@@ -25,4 +25,5 @@ pub mod test_fixtures;
 
 pub use error::EngineError;
 pub use handle::Engine;
+pub(crate) use handle::PersistPlan;
 pub use results::{AttestationImportResult, BlockImportResult};
