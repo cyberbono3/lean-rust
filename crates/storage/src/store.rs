@@ -104,12 +104,16 @@ pub trait Store: Send + Sync {
     /// Backend-specific failures via [`StorageError`].
     fn save_head(&self, info: HeadInfo) -> Result<(), StorageError>;
 
-    /// Atomically persists an accepted block, its post-state (both keyed by
-    /// `block_root`), and the updated canonical `head` in one call.
+    /// Persists an accepted block, its post-state (both keyed by
+    /// `block_root`), and the updated canonical `head` in one call, writing the
+    /// head **last**.
     ///
-    /// The head record is written only after the block and state succeed, so
-    /// a mid-call backend failure never leaves [`Self::load_head`] pointing at
-    /// a block or state that is absent from the store. This collapses the
+    /// Head-last ordering is the load-bearing invariant: a mid-call backend
+    /// failure never leaves [`Self::load_head`] pointing at a block or state
+    /// that is absent from the store. Full atomicity (all-or-nothing across the
+    /// three writes) is provided only by adapters that override this with a
+    /// transaction or single lock — the default impl below is three ordered
+    /// writes, not one atomic operation. This collapses the
     /// previous three-call `save_block` → `save_state` → `save_head` sequence
     /// (whose interleaving window let a crash strand the head ahead of its
     /// payload) into a single contract method.

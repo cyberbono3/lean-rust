@@ -85,20 +85,11 @@ impl ValidatorAssignments {
             return Err(DutiesError::EmptyValidatorsPath);
         }
         let resolved = resolve_path(raw);
-        // Bound the read before touching the bytes: `Metadata::len`
-        // rejects an oversized file without first allocating its
-        // contents. A missing file falls through to the `fs::read`
-        // branch below so the IO error is reported uniformly.
-        if let Ok(meta) = std::fs::metadata(&resolved) {
-            check_file_size(meta.len())?;
-        }
-        // Clone on the IO-error branch so the resolved path is still
-        // available to wrap a subsequent parse error. Both branches are
-        // rare; the extra `PathBuf` clone is bounded by error frequency.
-        let bytes = std::fs::read(&resolved).map_err(|source| DutiesError::YamlRead {
-            path: resolved.clone(),
-            source,
-        })?;
+        // Bound the read at the cap: a capped read rejects an oversized file
+        // (including one that grew, or whose symlink target was swapped, after
+        // any earlier stat) without slurping unbounded bytes — no check-to-use
+        // window. A missing file surfaces uniformly as `YamlRead`.
+        let bytes = read_capped(&resolved)?;
         let parsed: RawAssignments =
             serde_yaml::from_slice(&bytes).map_err(|source| DutiesError::YamlParse {
                 path: resolved,
@@ -199,6 +190,30 @@ impl ValidatorAssignments {
             total_validators: total,
         })
     }
+}
+
+/// Reads `path` into memory, bounding the read at one byte past
+/// [`MAX_VALIDATORS_FILE_BYTES`]. Reading that extra byte lets
+/// [`check_file_size`] reject an oversized file without ever allocating its
+/// full contents, and because the bound is on the read itself (not a prior
+/// `Metadata::len` probe) it closes the TOCTOU / symlink-swap window: a file
+/// that grows after a stat cannot slurp unbounded memory here.
+fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).map_err(|source| DutiesError::YamlRead {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut bytes = Vec::new();
+    file.take(MAX_VALIDATORS_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| DutiesError::YamlRead {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    check_file_size(bytes.len() as u64)?;
+    Ok(bytes)
 }
 
 /// Rejects a file whose byte length exceeds

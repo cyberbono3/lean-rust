@@ -28,8 +28,10 @@ use types::Bytes4000;
 /// this; benches must support up to (not below) this many validators.
 const VALIDATOR_REGISTRY_LIMIT: u64 = 4096;
 
-/// Current in-memory entry size: `validator_id` (8) + `Vote` (128) +
-/// `Bytes4000` (4000) = 4136 bytes. Recorded as the pre-change baseline.
+/// Pre-change baseline floor for a vote-pool entry: `validator_id` (8) +
+/// `Vote` (~128) + `Bytes4000` (4000) ≈ 4136 bytes. The assertion uses `>=`
+/// against this deliberate 4 KiB floor (not the exact 4136) so it tolerates
+/// struct layout / padding differences across targets.
 const SIGNED_VOTE_BASELINE_BYTES: usize = 4096;
 
 fn signed_vote(validator: u64) -> SignedVote {

@@ -137,3 +137,37 @@ impl TryFrom<usize> for Config {
             .ok_or(SyncError::InvalidMaxSyncDepth)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_seeds_new_field_constants() {
+        assert_eq!(Config::DEFAULT_MAX_CONCURRENT_PEER_SYNCS.get(), 4);
+        assert_eq!(Config::DEFAULT_REQUEST_TIMEOUT, Duration::from_secs(10));
+
+        let cfg = Config::default();
+        assert_eq!(
+            cfg.max_concurrent_peer_syncs,
+            Config::DEFAULT_MAX_CONCURRENT_PEER_SYNCS
+        );
+        assert_eq!(cfg.request_timeout, Config::DEFAULT_REQUEST_TIMEOUT);
+    }
+
+    #[test]
+    fn builders_override_only_their_field() {
+        let cap = NonZeroUsize::new(16).unwrap();
+        let timeout = Duration::from_millis(250);
+
+        let cfg = Config::default()
+            .with_max_concurrent_peer_syncs(cap)
+            .with_request_timeout(timeout);
+
+        assert_eq!(cfg.max_concurrent_peer_syncs, cap);
+        assert_eq!(cfg.request_timeout, timeout);
+        // The unrelated field is left at its default.
+        assert_eq!(cfg.max_sync_depth, Config::DEFAULT_MAX_SYNC_DEPTH);
+    }
+}

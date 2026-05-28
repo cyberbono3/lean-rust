@@ -54,12 +54,6 @@ impl LocalProposers {
         let proposer = ValidatorIndex::new(slot.get() % self.total_validators);
         self.local.contains(&proposer).then_some(proposer)
     }
-
-    /// Number of local validators tracked. Useful for diagnostics.
-    #[must_use]
-    pub fn local_len(&self) -> usize {
-        self.local.len()
-    }
 }
 
 #[cfg(test)]

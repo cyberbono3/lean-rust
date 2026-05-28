@@ -20,7 +20,8 @@ use thiserror::Error;
 ///
 /// Newtype around [`anyhow::Error`]: adapters wrap their
 /// transport-specific error here and the duties scheduler treats every
-/// publish failure uniformly (warn-log + record in `last_err`). The
+/// publish failure uniformly (warn-log + fold into the scheduler's
+/// publish-health counter). The
 /// `#[from]` impl gives `?`-friendly conversion from `anyhow::Error`
 /// — adapters use `?` or `.into()` to construct.
 ///

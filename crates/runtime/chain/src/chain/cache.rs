@@ -22,7 +22,9 @@ pub struct ChainSnapshot {
     pub safe_target_root: Bytes32,
     /// Forkchoice clock — slot index.
     pub current_slot: u64,
-    /// Latest justified checkpoint.
+    /// Latest justified checkpoint. Consumed by
+    /// `node::devnet::register_chain_gauges` (the `lean_chain_justified_slot`
+    /// gauge); no in-crate reader, hence the cross-crate note.
     pub latest_justified: Checkpoint,
     /// Latest finalized checkpoint.
     pub latest_finalized: Checkpoint,

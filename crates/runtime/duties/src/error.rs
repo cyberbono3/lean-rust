@@ -11,7 +11,8 @@ use super::ports::PublishError;
 /// Failures raised by the duties service.
 ///
 /// Per-slot production / publish errors are *not* terminal: they are
-/// warn-logged and recorded in `last_err` by the scheduler. The variants
+/// warn-logged and folded into the scheduler's publish-health counter
+/// (see [`super::Service`]). The variants
 /// below cover construction (invalid config, missing group) and the YAML
 /// loader.
 #[derive(Debug, Error)]

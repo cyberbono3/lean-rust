@@ -353,7 +353,7 @@ impl Genesis {
 /// Per-slot progress flags tracked by the [`Worker`].
 ///
 /// Renamed away from "state" so it doesn't collide visually with
-/// [`ServiceState`] (the Service's lifecycle + last-error store).
+/// [`ServiceState`] (the Service's lifecycle + publish-health store).
 ///
 /// Helper methods own the `Slot → u64` conversion so call sites read
 /// as natural language (`progress.proposer_done(slot)`) instead of

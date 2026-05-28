@@ -219,7 +219,11 @@ async fn concurrent_walks_capped_at_max_concurrent_peer_syncs() {
         poll_until(500, || network.status_calls.load(Ordering::SeqCst) >= CAP).await,
         "expected {CAP} walks to start",
     );
-    // Give any (incorrectly) un-capped walks a chance to also start.
+    // Best-effort negative-window probe (NOT a sync point): give any
+    // incorrectly un-capped walks a chance to also reach send_status before
+    // we read the peak. The positive path is already gated deterministically
+    // by the 0-permit `gate`, so this sleep only widens the window in which a
+    // regression (peak > CAP) would surface; it cannot cause a false pass.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let peak = network.peak.load(Ordering::SeqCst);
@@ -260,7 +264,10 @@ async fn same_peer_flap_yields_single_walk() {
         poll_until(500, || network.status_calls.load(Ordering::SeqCst) >= 1).await,
         "expected the single walk to start",
     );
-    // Let any (incorrectly) un-deduped walks also reach send_status.
+    // Best-effort negative-window probe (NOT a sync point): let any
+    // incorrectly un-deduped walks also reach send_status before we assert the
+    // count. The single walk is held in flight by the 0-permit `gate`, so this
+    // sleep only widens the regression-detection window; it cannot false-pass.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let calls = network.status_calls.load(Ordering::SeqCst);
