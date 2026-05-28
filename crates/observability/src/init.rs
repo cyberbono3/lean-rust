@@ -27,6 +27,16 @@ const LOG_FILE_SUFFIX: &str = "log";
 /// `tracing_appender` import. Defaults to [`LogRotation::Daily`]: an
 /// operator who opted into a file sink expects bounded per-file growth,
 /// not a single file that grows for the whole process lifetime.
+///
+/// # Intentional override surface
+///
+/// `bin/lean-rust` currently builds the sink via [`FileSink::new`], which
+/// pins [`LogRotation::Daily`] — no CLI flag wires the other variants yet,
+/// so only `Daily` is reachable from the shipped binary. The non-default
+/// variants and [`FileSink::with_rotation`] are retained deliberately as
+/// the public override surface for (a) library/embedding consumers of
+/// `lean-observability` and (b) a future `--log.rotation` flag; they are
+/// covered by `with_rotation`'s unit test, not dead code to be removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LogRotation {
     /// Roll every minute (mainly for tests / very high volume).
@@ -84,6 +94,11 @@ impl<'a> FileSink<'a> {
     }
 
     /// Returns a copy with the rotation policy overridden.
+    ///
+    /// Intentional public override surface — see [`LogRotation`]. The
+    /// shipped binary always takes the [`LogRotation::Daily`] default from
+    /// [`Self::new`]; this builder exists for library consumers and a
+    /// future `--log.rotation` flag.
     #[must_use]
     pub const fn with_rotation(mut self, rotation: LogRotation) -> Self {
         self.rotation = rotation;
