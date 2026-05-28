@@ -32,36 +32,14 @@ impl Engine {
     /// Returns a structured outcome — see [`BlockImportResult`] for the four
     /// variants and their semantics. Engine never panics on this path.
     pub fn import_block(&self, signed_block: SignedBlock) -> BlockImportResult {
-        let block_root: Bytes32 = signed_block.message.hash_tree_root().into();
-        let parent_root = signed_block.message.parent_root;
-        let mut store = self.lock();
-
-        if store.has_block(&block_root) {
-            return BlockImportResult::DuplicateBlock { block_root };
-        }
-        // Deep-clone the parent post-state: the state transition mutates an
-        // owned copy. (The post-state *capture* for persistence is the cheap
-        // Arc bump; this parent clone is inherent to running the STF.)
-        let Some(parent_state) = store.state(&parent_root).map(|s| State::clone(s)) else {
-            return BlockImportResult::MissingParent {
-                block_root,
-                parent_root,
-            };
-        };
-
-        match transition_and_track(&mut store, signed_block, parent_state) {
-            Ok(post_state_root) => BlockImportResult::Accepted {
-                block_root,
-                parent_root,
-                post_state_root,
-                head_root: store.head(),
-            },
-            Err(error) => BlockImportResult::Rejected {
-                block_root,
-                parent_root,
-                error,
-            },
-        }
+        // Plan-free import entry point: a thin wrapper over
+        // [`Self::import_block_capturing`] that discards the persist plan, so
+        // the two paths cannot drift. Production uses the capturing variant
+        // directly (it needs the plan to persist atomically under the same
+        // lock); this form serves tests, the `engine_import` bench, and any
+        // caller that does not persist. The discarded capture is a cheap
+        // Arc bump, so the extra work is negligible.
+        self.import_block_capturing(signed_block).0
     }
 
     /// Imports `signed_block` and, on [`BlockImportResult::Accepted`], captures

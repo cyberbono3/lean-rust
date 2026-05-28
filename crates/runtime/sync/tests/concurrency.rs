@@ -21,11 +21,13 @@ use lean_chain::ChainError;
 use lean_core::Service as _;
 use lean_sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
 use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
-use parking_lot::Mutex;
 use protocol::{Checkpoint, SignedBlock, Slot};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use types::Bytes32;
+
+mod common;
+use common::{poll_until, ChannelPeers};
 
 fn cp(slot: u64) -> Checkpoint {
     Checkpoint::new(Bytes32::zero(), Slot::new(slot))
@@ -67,36 +69,6 @@ impl Chain for StubChain {
             post_state_root: Bytes32::zero(),
             head_root: Bytes32::zero(),
         })
-    }
-}
-
-struct ChannelPeers {
-    handle: Mutex<Option<mpsc::Sender<PeerId>>>,
-}
-
-impl ChannelPeers {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            handle: Mutex::new(None),
-        })
-    }
-    fn sender(&self) -> mpsc::Sender<PeerId> {
-        self.handle
-            .lock()
-            .as_ref()
-            .expect("subscribe first")
-            .clone()
-    }
-}
-
-#[async_trait]
-impl PeerEventProvider for ChannelPeers {
-    async fn subscribe_outbound_connected_peers(
-        &self,
-    ) -> Result<mpsc::Receiver<PeerId>, SyncError> {
-        let (tx, rx) = mpsc::channel(256);
-        *self.handle.lock() = Some(tx);
-        Ok(rx)
     }
 }
 
@@ -174,17 +146,6 @@ impl Network for BlockingRpcNetwork {
         // Never resolves: the walk must abort via timeout or cancel.
         std::future::pending().await
     }
-}
-
-async fn poll_until(deadline_ms: u64, cond: impl Fn() -> bool) -> bool {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(deadline_ms);
-    while tokio::time::Instant::now() < deadline {
-        if cond() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(2)).await;
-    }
-    cond()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

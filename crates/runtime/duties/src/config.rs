@@ -34,7 +34,7 @@ pub const DEFAULT_VALIDATOR_GROUP: &str = "ream";
 /// fires a compile-time panic if the preset is ever set to zero —
 /// `NonZeroU64::new(0)` is `None`, which is unreachable for a valid
 /// devnet config.
-pub const DEFAULT_SLOT_DURATION_MS: NonZeroU64 =
+pub(crate) const DEFAULT_SLOT_DURATION_MS: NonZeroU64 =
     match NonZeroU64::new(config::DEVNET_CONFIG.slot_duration_ms) {
         Some(v) => v,
         None => panic!("DEVNET_CONFIG.slot_duration_ms must be non-zero"),

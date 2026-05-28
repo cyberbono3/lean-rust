@@ -144,24 +144,11 @@ impl Engine {
     ) -> Result<ProducedBlock, EngineError> {
         match self.lock().produce_block(slot, validator) {
             Ok(produced) => {
-                info!(
-                    slot = slot.get(),
-                    validator = validator.get(),
-                    parent_root = %produced.parent_root.to_hex(),
-                    block_root = %produced.root.to_hex(),
-                    post_state_root = %produced.post_state_root.to_hex(),
-                    attestations = produced.block.body.attestations.len(),
-                    "engine block produced",
-                );
+                log_block_produced(slot, validator, &produced);
                 Ok(produced)
             }
             Err(err) => {
-                warn!(
-                    slot = slot.get(),
-                    validator = validator.get(),
-                    %err,
-                    "engine block production failed",
-                );
+                log_block_production_failed(slot, validator, &err);
                 Err(EngineError::from(err))
             }
         }
@@ -189,24 +176,11 @@ impl Engine {
         let produced = match store.produce_block(slot, validator) {
             Ok(produced) => produced,
             Err(err) => {
-                warn!(
-                    slot = slot.get(),
-                    validator = validator.get(),
-                    %err,
-                    "engine block production failed",
-                );
+                log_block_production_failed(slot, validator, &err);
                 return Err(EngineError::from(err));
             }
         };
-        info!(
-            slot = slot.get(),
-            validator = validator.get(),
-            parent_root = %produced.parent_root.to_hex(),
-            block_root = %produced.root.to_hex(),
-            post_state_root = %produced.post_state_root.to_hex(),
-            attestations = produced.block.body.attestations.len(),
-            "engine block produced",
-        );
+        log_block_produced(slot, validator, &produced);
         let signed = SignedBlock {
             message: produced.block,
             signature: Bytes4000::new([0; 4000]),
@@ -323,6 +297,32 @@ impl PersistPlan {
             self.finalized,
         )
     }
+}
+
+/// Emits the canonical `"engine block produced"` info event. Shared by
+/// [`Engine::produce_block`] and [`Engine::produce_block_capturing`] so the
+/// two production entry points cannot log divergent fields.
+fn log_block_produced(slot: Slot, validator: ValidatorIndex, produced: &ProducedBlock) {
+    info!(
+        slot = slot.get(),
+        validator = validator.get(),
+        parent_root = %produced.parent_root.to_hex(),
+        block_root = %produced.root.to_hex(),
+        post_state_root = %produced.post_state_root.to_hex(),
+        attestations = produced.block.body.attestations.len(),
+        "engine block produced",
+    );
+}
+
+/// Emits the canonical `"engine block production failed"` warn event. Shared
+/// by the two production entry points (see [`log_block_produced`]).
+fn log_block_production_failed(slot: Slot, validator: ValidatorIndex, err: &ForkchoiceError) {
+    warn!(
+        slot = slot.get(),
+        validator = validator.get(),
+        %err,
+        "engine block production failed",
+    );
 }
 
 /// Captures the persist inputs for `block_root` from a locked store guard.

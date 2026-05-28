@@ -42,7 +42,7 @@ type RawAssignments = BTreeMap<String, Vec<u64>>;
 /// an operator-supplied (or symlinked) huge file cannot OOM the process
 /// before YAML parsing starts — the same `Metadata::len` pattern used
 /// for the genesis-SSZ read.
-pub const MAX_VALIDATORS_FILE_BYTES: u64 = 1 << 20;
+pub(crate) const MAX_VALIDATORS_FILE_BYTES: u64 = 1 << 20;
 
 /// Sentinel path surfaced inside [`DutiesError::YamlParse`] when the
 /// parse came from [`ValidatorAssignments::from_bytes`] rather than a
