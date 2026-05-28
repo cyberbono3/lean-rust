@@ -28,7 +28,7 @@ use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::{Bitlist, Bytes32};
 
-use crate::block::{Block, BlockBody, BlockHeader, SignedBlock};
+use crate::block::{Block, BlockHeader, SignedBlock};
 use crate::checkpoint::Checkpoint;
 use crate::error::{AttSlotKind, StateTransitionError};
 use crate::internal::{
@@ -61,12 +61,10 @@ pub const VALIDATOR_REGISTRY_LIMIT: usize = config::DEVNET_CONFIG.validator_regi
 pub const JUSTIFICATIONS_VALIDATORS_LIMIT: usize =
     HISTORICAL_ROOTS_LIMIT * VALIDATOR_REGISTRY_LIMIT;
 
-const PROTOCOL_CONFIG_SSZ_LEN: usize = 2 * U64_LEN; // 16
-const STATE_VARIABLE_FIELD_COUNT: usize = 4;
-const REAM_LEAN_STATE_FIXED_PART_LEN: usize = PROTOCOL_CONFIG_SSZ_LEN
-    + CHECKPOINT_LEN
-    + CHECKPOINT_LEN
-    + STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 112
+// `pub(crate)` so the compact-state interop decoder in [`crate::ream`] can
+// reuse them; both are also consumed by `STATE_FIXED_PART_LEN` below.
+pub(crate) const PROTOCOL_CONFIG_SSZ_LEN: usize = 2 * U64_LEN; // 16
+pub(crate) const STATE_VARIABLE_FIELD_COUNT: usize = 4;
 
 /// Length of the fixed portion of a [`State`] (5 fixed fields plus 4 offsets
 /// for the variable-length tails).
@@ -189,148 +187,6 @@ impl State {
             self.justifications_validators.as_bytes(),
         ]
     }
-
-    /// Decodes the compact Ream leanchain genesis state emitted by the
-    /// `eth-beacon-genesis:pk910-leanchain` local-pq generator.
-    ///
-    /// Ream `master-0bceaee` reads the generated `num_validators` and
-    /// `genesis_time`, then constructs `LeanState::new(...)` for the actual
-    /// chain anchor. The generated historical/justification tails are
-    /// validated for shape here, but intentionally not committed into the
-    /// synthesized genesis state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an SSZ decode error when the byte slice is not the compact Ream
-    /// leanchain state shape or one of the variable tails violates the devnet0
-    /// bounds.
-    pub fn from_ream_legacy_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() < REAM_LEAN_STATE_FIXED_PART_LEN {
-            return Err(DecodeError::InvalidByteLength {
-                len: bytes.len(),
-                expected: REAM_LEAN_STATE_FIXED_PART_LEN,
-            });
-        }
-
-        let mut c = 0;
-        let config = read_fixed::<ProtocolConfig>(bytes, &mut c)?;
-        let latest_justified = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_LEN])?;
-        c += CHECKPOINT_LEN;
-        let latest_finalized = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_LEN])?;
-        c += CHECKPOINT_LEN;
-
-        let mut offsets = [0_usize; STATE_VARIABLE_FIELD_COUNT];
-        for offset in &mut offsets {
-            *offset = read_offset(bytes, &mut c)?;
-        }
-
-        if offsets[0] != REAM_LEAN_STATE_FIXED_PART_LEN {
-            return Err(DecodeError::OffsetIntoFixedPortion(offsets[0]));
-        }
-        for pair in offsets.windows(2) {
-            if pair[1] < pair[0] {
-                return Err(DecodeError::OffsetsAreDecreasing(pair[1]));
-            }
-        }
-        let last_offset = offsets[STATE_VARIABLE_FIELD_COUNT - 1];
-        if last_offset > bytes.len() {
-            return Err(DecodeError::OffsetOutOfBounds(last_offset));
-        }
-
-        let tail_slice = |idx: usize| -> &[u8] {
-            let start = offsets[idx];
-            let end = if idx + 1 < STATE_VARIABLE_FIELD_COUNT {
-                offsets[idx + 1]
-            } else {
-                bytes.len()
-            };
-            &bytes[start..end]
-        };
-
-        let historical_block_hashes = decode_bytes32_list(tail_slice(0), HISTORICAL_ROOTS_LIMIT)?;
-        let _justified_slots = decode_ream_raw_bitlist::<HISTORICAL_ROOTS_LIMIT>(
-            tail_slice(1),
-            historical_block_hashes.len(),
-            "justified_slots",
-        )?;
-        let justifications_roots = decode_bytes32_list(tail_slice(2), HISTORICAL_ROOTS_LIMIT)?;
-        let validator_count = usize::try_from(config.num_validators).map_err(|_| {
-            DecodeError::BytesInvalid("num_validators does not fit usize".to_owned())
-        })?;
-        let justifications_validator_bits = justifications_roots
-            .len()
-            .checked_mul(validator_count)
-            .ok_or_else(|| {
-                DecodeError::BytesInvalid("justifications_validators length overflow".to_owned())
-            })?;
-        let _justifications_validators = decode_ream_raw_bitlist::<JUSTIFICATIONS_VALIDATORS_LIMIT>(
-            tail_slice(3),
-            justifications_validator_bits,
-            "justifications_validators",
-        )?;
-
-        // The decoded variable-length fields are intentionally NOT
-        // copied into the returned State: this function is a
-        // validate-then-discard anchor-state producer, not a full
-        // legacy-shape reconstruction. It runs ream-format SSZ through
-        // the field-level parsers (so we surface malformed input as
-        // typed errors) and then returns the canonical slot-0 anchor
-        // shape (empty history, default bitlists) consistent with how
-        // the rest of the codebase treats imported anchor states. See
-        // lean-cli's loads_ream_legacy_local_pq_state_from_ssz test
-        // for the contract.
-        Ok(Self {
-            config,
-            latest_block_header: BlockHeader {
-                body_root: BlockBody::default().hash_tree_root().into(),
-                ..BlockHeader::default()
-            },
-            latest_justified,
-            latest_finalized,
-            ..Self::default()
-        })
-    }
-}
-
-fn decode_ream_raw_bitlist<const LIMIT: usize>(
-    bytes: &[u8],
-    bit_len: usize,
-    context: &'static str,
-) -> Result<Bitlist<LIMIT>, DecodeError> {
-    if bit_len > LIMIT {
-        return Err(DecodeError::BytesInvalid(format!(
-            "{context}: bit length {bit_len} exceeds limit {LIMIT}"
-        )));
-    }
-    let expected_bytes = bit_len.div_ceil(8);
-    if bytes.len() != expected_bytes {
-        return Err(DecodeError::BytesInvalid(format!(
-            "{context}: raw bit payload has {} bytes, expected {expected_bytes}",
-            bytes.len()
-        )));
-    }
-
-    let mut bitlist = Bitlist::<LIMIT>::with_length(bit_len)
-        .map_err(|err| DecodeError::BytesInvalid(format!("{context}: {err}")))?;
-    for bit_index in 0..bit_len {
-        let bit_set = bytes[bit_index / 8] & (1_u8 << (bit_index % 8)) != 0;
-        if bit_set {
-            bitlist
-                .set(bit_index, true)
-                .map_err(|err| DecodeError::BytesInvalid(format!("{context}: {err}")))?;
-        }
-    }
-
-    if bit_len % 8 != 0 {
-        let trailing_mask = !((1_u8 << (bit_len % 8)) - 1);
-        if bytes.last().is_some_and(|last| last & trailing_mask != 0) {
-            return Err(DecodeError::BytesInvalid(format!(
-                "{context}: non-zero trailing bits"
-            )));
-        }
-    }
-
-    Ok(bitlist)
 }
 
 impl Encode for State {
