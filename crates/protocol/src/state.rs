@@ -19,8 +19,9 @@
 //! variable-length fields each contribute a 4-byte offset to the fixed
 //! portion ([`STATE_FIXED_PART_LEN`] = 232 bytes).
 //!
-//! Hash-tree-roots commit to the same 9-field state shape used by Ream
-//! `master-0bceaee` for local-pq devnet genesis.
+//! The hash-tree-root commits to all nine fields in this order; the
+//! cross-client compatibility of that shape (and the genesis-interop
+//! decoder for the compact form) lives in [`crate::ream`].
 
 use std::collections::BTreeMap;
 
@@ -61,8 +62,8 @@ pub const VALIDATOR_REGISTRY_LIMIT: usize = config::DEVNET_CONFIG.validator_regi
 pub const JUSTIFICATIONS_VALIDATORS_LIMIT: usize =
     HISTORICAL_ROOTS_LIMIT * VALIDATOR_REGISTRY_LIMIT;
 
-// `pub(crate)` so the compact-state interop decoder in [`crate::ream`] can
-// reuse them; both are also consumed by `STATE_FIXED_PART_LEN` below.
+// `pub(crate)` so the sibling [`crate::ream`] module can reuse them; both
+// are also consumed by `STATE_FIXED_PART_LEN` below.
 pub(crate) const PROTOCOL_CONFIG_SSZ_LEN: usize = 2 * U64_LEN; // 16
 pub(crate) const STATE_VARIABLE_FIELD_COUNT: usize = 4;
 
@@ -300,7 +301,7 @@ impl Decode for State {
 
 impl HashTreeRoot for State {
     fn hash_tree_root(&self) -> [u8; 32] {
-        // Ream leanchain state root: 9 fields → width 16.
+        // Native lean state root: 9 fields → merkleize width 16.
         merkleize(&[
             self.config.hash_tree_root(),
             self.slot.hash_tree_root(),
@@ -964,43 +965,10 @@ mod tests {
     }
 
     // -- State HashTreeRoot ------------------------------------------------
-
-    #[test]
-    fn state_hash_tree_root_responds_to_ream_state_fields() {
-        let baseline = sample_state().hash_tree_root();
-
-        let mut s = sample_state();
-        s.config.num_validators = 5;
-        assert_ne!(s.hash_tree_root(), baseline);
-
-        let mut s = sample_state();
-        s.config.genesis_time = 1_800_000_000;
-        assert_ne!(s.hash_tree_root(), baseline);
-
-        let mut s = sample_state();
-        s.latest_justified = Checkpoint::default();
-        assert_ne!(s.hash_tree_root(), baseline);
-
-        let mut s = sample_state();
-        s.latest_finalized = Checkpoint::default();
-        assert_ne!(s.hash_tree_root(), baseline);
-
-        let mut s = sample_state();
-        s.historical_block_hashes.push(Bytes32::zero());
-        assert_ne!(s.hash_tree_root(), baseline);
-
-        let mut s = sample_state();
-        s.justified_slots.set(7, true).unwrap();
-        assert_ne!(s.hash_tree_root(), baseline);
-
-        let mut s = sample_state();
-        s.justifications_roots.push(Bytes32::zero());
-        assert_ne!(s.hash_tree_root(), baseline);
-
-        let mut s = sample_state();
-        s.justifications_validators.set(11, true).unwrap();
-        assert_ne!(s.hash_tree_root(), baseline);
-    }
+    //
+    // The all-nine-fields responsiveness check that documents cross-client
+    // (ream) HTR-shape compatibility lives in `crate::ream`'s tests; the
+    // check below covers the remaining `slot` / `latest_block_header` fields.
 
     #[test]
     fn state_hash_tree_root_responds_to_slot_and_latest_header() {

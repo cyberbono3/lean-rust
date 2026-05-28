@@ -18,6 +18,17 @@
 //!
 //! Wired through `lean-cli`'s genesis loader; see that crate's
 //! `loads_ream_legacy_local_pq_state_from_ssz` test for the contract.
+//!
+//! ## State-root shape compatibility
+//!
+//! Beyond decoding the compact genesis, cross-client interop also requires
+//! the *native* [`State`] hash-tree-root (defined in [`crate::state`]) to
+//! commit to the same nine-field shape the ream client uses, so both
+//! clients compute identical state roots over the wire. The `tests` module
+//! below pins that shape: perturbing any of the eight
+//! config / checkpoint / list / bitlist fields changes the root. The
+//! remaining `slot` / `latest_block_header` fields are covered by a sibling
+//! check in `state.rs`.
 
 use ssz::{Decode, DecodeError, HashTreeRoot};
 use types::Bitlist;
@@ -212,4 +223,85 @@ fn decode_ream_raw_bitlist<const LIMIT: usize>(
     }
 
     Ok(bitlist)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::slot::Slot;
+    use types::Bytes32;
+
+    /// Non-trivial baseline state — every field perturbed by the test below
+    /// is set to a non-default value — mirroring the nine-field shape the
+    /// ream client produces.
+    fn sample_state() -> State {
+        let mut justified_slots: Bitlist<HISTORICAL_ROOTS_LIMIT> = Bitlist::new();
+        justified_slots.set(0, true).unwrap();
+        justified_slots.set(2, true).unwrap();
+
+        let mut justifications_validators: Bitlist<JUSTIFICATIONS_VALIDATORS_LIMIT> =
+            Bitlist::new();
+        for i in [0_usize, 2, 5, 7] {
+            justifications_validators.set(i, true).unwrap();
+        }
+
+        State {
+            config: ProtocolConfig {
+                num_validators: 4,
+                genesis_time: 1_700_000_000,
+            },
+            slot: Slot::new(9),
+            latest_block_header: BlockHeader::default(),
+            latest_justified: Checkpoint::new(Bytes32::new([0x44; 32]), Slot::new(8)),
+            latest_finalized: Checkpoint::new(Bytes32::new([0x55; 32]), Slot::new(0)),
+            historical_block_hashes: vec![Bytes32::new([0xaa; 32]), Bytes32::new([0xbb; 32])],
+            justified_slots,
+            justifications_roots: vec![Bytes32::new([0xcc; 32]), Bytes32::new([0xdd; 32])],
+            justifications_validators,
+        }
+    }
+
+    /// Cross-client HTR-shape compatibility: the native [`State`]
+    /// hash-tree-root must commit to all nine fields of the shape the ream
+    /// client uses, so the two clients agree on state roots. Perturbing any
+    /// of the eight config / checkpoint / list / bitlist fields must change
+    /// the root (the `slot` / `latest_block_header` pair is covered in
+    /// `state.rs`).
+    #[test]
+    fn native_state_htr_commits_to_ream_nine_field_shape() {
+        let baseline = sample_state().hash_tree_root();
+
+        let mut s = sample_state();
+        s.config.num_validators = 5;
+        assert_ne!(s.hash_tree_root(), baseline);
+
+        let mut s = sample_state();
+        s.config.genesis_time = 1_800_000_000;
+        assert_ne!(s.hash_tree_root(), baseline);
+
+        let mut s = sample_state();
+        s.latest_justified = Checkpoint::default();
+        assert_ne!(s.hash_tree_root(), baseline);
+
+        let mut s = sample_state();
+        s.latest_finalized = Checkpoint::default();
+        assert_ne!(s.hash_tree_root(), baseline);
+
+        let mut s = sample_state();
+        s.historical_block_hashes.push(Bytes32::zero());
+        assert_ne!(s.hash_tree_root(), baseline);
+
+        let mut s = sample_state();
+        s.justified_slots.set(7, true).unwrap();
+        assert_ne!(s.hash_tree_root(), baseline);
+
+        let mut s = sample_state();
+        s.justifications_roots.push(Bytes32::zero());
+        assert_ne!(s.hash_tree_root(), baseline);
+
+        let mut s = sample_state();
+        s.justifications_validators.set(11, true).unwrap();
+        assert_ne!(s.hash_tree_root(), baseline);
+    }
 }
