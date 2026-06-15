@@ -2,7 +2,7 @@
 
 Modular, contributor-friendly implementation of Lean Ethereum in Rust.
 
-**[Lean Consensus spec (PDF, download)](docs/lean_consensus.pdf?raw=true)**
+**[Download the Lean Consensus spec (PDF)](docs/lean_consensus.pdf?raw=true)**
 | [Devnet Guide](docs/local-pq-devnet0.md)
 
 ## What is lean-rust
@@ -18,7 +18,7 @@ hardened for ultimate security and decentralization, plus finality in seconds.
 Its goal is to transition quickly and safely from the Beacon Chain to a
 consensus layer design much closer to the final design of Ethereum.
 
-See the [Lean Consensus spec (PDF, download)](docs/lean_consensus.pdf?raw=true)
+[Download the Lean Consensus spec (PDF)](docs/lean_consensus.pdf?raw=true)
 for the full specification and background.
 
 ## Goals
