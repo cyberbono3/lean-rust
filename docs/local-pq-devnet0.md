@@ -11,11 +11,9 @@ registry, and bootnode metadata.
 - A working Rust toolchain for building `lean-rust:local`.
 - Optional local overrides in `crates/fixtures/.env`.
 
-Create the local environment file before the first run:
-
-```sh
-cp crates/fixtures/.env.example crates/fixtures/.env
-```
+The devnet runs with built-in defaults, so no environment file is required.
+To override any value, copy `crates/fixtures/.env.example` to
+`crates/fixtures/.env` and edit it.
 
 The default images are:
 
@@ -30,7 +28,6 @@ The default images are:
 ## Quick Start
 
 ```sh
-cp crates/fixtures/.env.example crates/fixtures/.env
 make devnet-start
 make devnet-status
 make devnet-logs
@@ -355,3 +352,7 @@ FORCE=1 make devnet-build
 make devnet-clean
 make devnet-start
 ```
+
+## References
+
+- [pq-devnet-0 specification](https://github.com/leanEthereum/pm/blob/main/breakout-rooms/leanConsensus/pq-interop/pq-devnet-0.md)
