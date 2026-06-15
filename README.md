@@ -54,7 +54,9 @@ lean-rust is a Cargo workspace. Core crates:
 ## local-pq Devnet
 
 The repo contains a crate-local Docker devnet for running one `ream` node and
-one `lean-rust` node against generated local-pq genesis state.
+one `lean-rust` node against generated local-pq genesis state. See the
+[pq-devnet-0 high-level plan](https://github.com/leanEthereum/pm/blob/main/breakout-rooms/leanConsensus/pq-interop/pq-devnet-0.md)
+for the cross-client interop goals.
 
 **Prerequisite:** [Docker](https://docs.docker.com/get-docker/) (with the
 Compose plugin) must be installed and running.
