@@ -1,6 +1,9 @@
 # lean-rust
 
-Modular, contributor-friendly implementation of Lean Ethereum in Rust.
+This is the implementation of Lean Ethereum in Rust.
+
+> ⚠️ **Warning:** This code is work in progress. It is not clean and has not
+> been reviewed yet. Use at your own risk.
 
 **[Download the Lean Consensus spec (PDF)](docs/lean_consensus.pdf?raw=true)**
 | [Devnet Guide](docs/local-pq-devnet0.md)
