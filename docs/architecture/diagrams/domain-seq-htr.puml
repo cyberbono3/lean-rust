@@ -1,0 +1,26 @@
+@startuml domain-seq-htr
+title Domain / Data — SSZ encode + hash-tree-root of a value
+
+actor Caller
+participant "ssz module" as Ssz
+participant "eth_ssz Encode" as Eth
+participant "SHA-256" as Sha
+
+Caller -> Ssz : encode(&value)
+Ssz -> Eth : as_ssz_bytes(value)
+Eth --> Ssz : Vec<u8>
+Ssz --> Caller : Vec<u8>
+
+Caller -> Ssz : hash_tree_root(&value)
+activate Ssz
+Ssz -> Ssz : pack(bytes) -> Vec<[u8;32]>
+Ssz -> Ssz : merkleize(chunks)
+loop for each pair of chunks
+  Ssz -> Sha : hash_pair(left, right)
+  Sha --> Ssz : [u8;32]
+end
+Ssz -> Ssz : mix_in_length(root, len) (for List/Bitlist)
+Ssz --> Caller : [u8;32] root
+deactivate Ssz
+
+@enduml

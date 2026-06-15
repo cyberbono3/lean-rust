@@ -1,0 +1,29 @@
+@startuml storage-seq-persist
+title Storage — persist accepted block, then read head
+
+participant "Runtime (chain)" as Rt
+participant "Store (trait)" as Store
+participant "MemoryStore" as Mem
+participant "RwLock<Inner>" as Lock
+
+Rt -> Store : save_accepted(block_root, signed_block, state, head)
+Store -> Mem : save_accepted(...)
+activate Mem
+Mem -> Lock : write()
+Mem -> Mem : blocks.insert(block_root, signed_block)
+Mem -> Mem : states.insert(block_root, state)
+Mem -> Mem : head = Some(head)
+note right : single write lock -> atomic visibility (head written last)
+Mem --> Store : Ok(())
+deactivate Mem
+Store --> Rt : Ok(())
+
+Rt -> Store : load_head()
+Store -> Mem : load_head()
+activate Mem
+Mem -> Lock : read()
+Mem --> Store : Ok(Some(HeadInfo))
+deactivate Mem
+Store --> Rt : Ok(Some(HeadInfo))
+
+@enduml

@@ -1,0 +1,37 @@
+@startuml runtime-seq-duties
+title Runtime — duties tick: propose + attest
+
+participant "Duties Worker" as Worker
+participant "LocalProposers" as Proposers
+participant "Chain (port)" as Chain
+participant "ChainService" as Svc
+participant "Engine" as Engine
+participant "Store" as Store
+participant "Publisher (port)" as Pub
+
+== proposer phase (slot boundary) ==
+Worker -> Proposers : proposer_for_slot(slot)
+Proposers --> Worker : Option<ValidatorIndex>
+alt local owns proposer
+  Worker -> Chain : produce_block(slot, validator)
+  Chain -> Svc : produce_block(slot, validator)
+  Svc -> Engine : produce_block_capturing(slot, validator)
+  Engine --> Svc : (SignedBlock, PersistPlan)
+  Svc -> Store : save_accepted(...)
+  Svc -> Svc : refresh_snapshot()
+  Svc --> Worker : SignedBlock
+  Worker -> Pub : publish_block(signed)
+end
+
+== attester phase (vote_due deadline) ==
+loop each local validator (concurrent, timeout = slot_duration/2)
+  Worker -> Chain : produce_attestation(slot, validator)
+  Chain -> Svc : produce_attestation(slot, validator)
+  Svc -> Engine : produce_attestation_vote(slot)
+  Engine --> Svc : ProducedVote
+  Svc -> Engine : import_attestation(vote)  (local re-import)
+  Svc --> Worker : SignedVote
+  Worker -> Pub : publish_attestation(vote)
+end
+
+@enduml

@@ -1,0 +1,28 @@
+@startuml protocol-seq-forkchoice
+title Forkchoice — tick_interval phase dispatch + head resolution
+
+actor Caller
+participant "Store" as Store
+participant "get_fork_choice_head" as Ghost
+
+Caller -> Store : tick_interval(has_proposal)
+activate Store
+Store -> Store : time = time.checked_advance()  (overflow-checked)
+alt phase == Proposal
+  opt has_proposal
+    Store -> Store : accept_new_votes()
+  end
+else phase == Idle
+  Store -> Store : (no-op)
+else phase == UpdateSafeTarget
+  Store -> Ghost : get_fork_choice_head(blocks, justified.root, votes, ceil(2N/3))
+  Ghost --> Store : safe_target root
+else phase == AcceptNewVotes
+  Store -> Store : accept_new_votes() (promote latest_new_votes)
+  Store -> Ghost : get_fork_choice_head(blocks, justified.root, votes, 0)
+  Ghost --> Store : head root
+end
+Store --> Caller : Ok(()) | Err(ForkchoiceError)
+deactivate Store
+
+@enduml

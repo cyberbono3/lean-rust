@@ -1,0 +1,211 @@
+@startuml runtime-class
+title Runtime / Services Layer — Class Diagram (core, chain, sync, duties, api)
+
+skinparam linetype ortho
+skinparam shadowing false
+
+package "runtime/core (lean-core)" #F4FBFB {
+  interface Service <<trait>> {
+    .. Send + Sync + 'static ..
+    +name(&self): &'static str
+    +start(&self): Result<()>
+    +stop(&self, cancel: CancellationToken): Result<()>
+    +status(&self): Result<()>
+  }
+  class Node <<struct>> {
+    -config: NodeConfig
+    -chain/p2p/sync/duties/http/metrics: Option<Arc<dyn Service>>
+    -state: Mutex<Option<Vec<NamedService>>>
+    +new(config: NodeConfig): Self
+    +with_chain/p2p/sync/duties/http/metrics(self, Arc<dyn Service>): Self
+    +start(&self): Result<(), NodeError>
+    +stop(&self): Result<(), NodeError>
+    +status(&self): Result<(), NodeError>
+    +run(&self, shutdown: CancellationToken): Result<(), NodeError>
+  }
+  class NodeConfig <<struct>> {
+    +shutdown_timeout: Duration
+  }
+  enum NodeError <<enum>> {
+    StartFailed(ServiceFailure)
+    StopFailed(ServiceFailure)
+    ServicesUnhealthy { errors: Vec<ServiceFailure> }
+    AlreadyStarted
+  }
+  class ServiceFailure <<struct>> {
+    +service: &'static str
+    +source: anyhow::Error
+  }
+}
+
+package "runtime/chain (lean-chain)" #EEF8F8 {
+  class "Service" as ChainService <<struct>> {
+    -engine: Engine
+    -store: Arc<dyn storage::Store>
+    -snapshot: Arc<RwLock<ChainSnapshot>>
+    +new(engine: Engine, store): Self
+    +snapshot(&self): Arc<RwLock<ChainSnapshot>>
+    +import_block(&self, SignedBlock): Result<BlockImportResult, ChainError>
+    +import_attestation(&self, SignedVote): Result<AttestationImportResult, ChainError>
+    +produce_block(&self, slot, validator): Result<SignedBlock, ChainError>
+    +produce_attestation(&self, slot, validator): Result<SignedVote, ChainError>
+    +local_status(&self): Status
+    +has_block(&self, root): Result<bool, ChainError>
+  }
+  class Engine <<struct>> {
+    -store: Arc<Mutex<forkchoice::Store>>
+    +from_anchor(state: State, anchor: Block): Result<Self, ForkchoiceError>
+    +head(&self): Bytes32
+    +safe_target(&self): Bytes32
+    +produce_block(slot, validator): Result<ProducedBlock, EngineError>
+    +tick_interval(has_proposal): Result<(), EngineError>
+  }
+  class ChainSnapshot <<struct>> {
+    +head_root: Bytes32
+    +safe_target_root: Bytes32
+    +current_slot: u64
+    +latest_justified: Checkpoint
+    +latest_finalized: Checkpoint
+  }
+  enum BlockImportResult <<enum>> {
+    Accepted { block_root, parent_root, post_state_root, head_root }
+    DuplicateBlock { block_root }
+    MissingParent { block_root, parent_root }
+    Rejected { block_root, parent_root, error }
+  }
+  enum AttestationImportResult <<enum>> {
+    Accepted { validator_id, head_root, safe_target_root }
+    Ignored { validator_id, head_root, safe_target_root }
+    Rejected { validator_id, error }
+  }
+  enum EngineError <<enum>> {
+    Forkchoice(ForkchoiceError)
+    StateTransition(StateTransitionError)
+  }
+  enum ChainError <<enum>> {
+    Storage(StorageError)
+    PostStateMissing { block_root }
+    Engine(EngineError)
+    HeadBlockMissing { head_root }
+  }
+}
+
+package "runtime/sync (lean-sync)" #EEF8F4 {
+  class "Loop" as SyncLoop <<struct>> {
+    -config: Config
+    -chain: Arc<dyn Chain>
+    -network: Arc<dyn Network>
+    -peers: Arc<dyn PeerEventProvider>
+    +new(config, chain, network, peers): Self
+  }
+  interface "Chain (sync port)" as SyncChain <<trait>> {
+    +local_status(&self): Result<Status, ChainError>
+    +has_block(&self, root): Result<bool, ChainError>
+    +import_block(&self, SignedBlock): Result<BlockImportResult, ChainError>
+  }
+  interface Network <<trait>> {
+    +send_status(&self, peer, local): Result<Status, SyncError>
+    +request_blocks_by_root(&self, peer, req): Result<BlocksByRootResponse, SyncError>
+  }
+  interface PeerEventProvider <<trait>> {
+    +subscribe_outbound_connected_peers(&self): Result<mpsc::Receiver<PeerId>, SyncError>
+  }
+  class "Config (sync)" as SyncConfig <<struct>> {
+    +max_sync_depth: NonZeroUsize
+    +max_concurrent_peer_syncs: NonZeroUsize
+    +request_timeout: Duration
+  }
+  enum SyncError <<enum>> {
+    InvalidMaxSyncDepth / EmptyPeerId / Chain(ChainError)
+    Network(String) / Subscription(String)
+    AlreadyStarted / NotStarted / WatchExited
+  }
+}
+
+package "runtime/duties (lean-duties)" #F8F8EE {
+  class "Service<C, P>" as DutiesService <<struct>> {
+    -config: Config
+    -chain: Arc<C>
+    -publisher: Arc<P>
+    -slot_duration / vote_due_offset: Duration
+    +new(config, chain, publisher): Self
+  }
+  interface "Chain (duties port)" as DutiesChain <<trait>> {
+    +produce_block(slot, validator): Result<SignedBlock, ChainError>
+    +produce_attestation(slot, validator): Result<SignedVote, ChainError>
+  }
+  interface Publisher <<trait>> {
+    +publish_block(SignedBlock): Result<(), PublishError>
+    +publish_attestation(SignedVote): Result<(), PublishError>
+  }
+  class LocalProposers <<struct>> {
+    -local: HashSet<ValidatorIndex>
+    -total_validators: u64
+    +new(local, total): Self
+    +proposer_for_slot(&self, slot): Option<ValidatorIndex>
+  }
+  enum DutiesError <<enum>> {
+    EmptyValidatorsPath / UnknownValidatorGroup
+    DuplicateValidatorAssignment / NonContiguousValidatorSet
+    DutyTimeout / Chain(ChainError) / Publish(PublishError) ...
+  }
+}
+
+package "runtime/api (lean-api)" #F4F4FB {
+  class HttpService <<struct>> {
+    -store: Arc<dyn Store>
+    +new(store, listen_addr: SocketAddr): Self
+    +bound_addr(&self): Option<SocketAddr>
+  }
+  class MetricsService <<struct>> {
+    -recorder: FrozenRecorder
+    +new(listen_addr, recorder): Self
+  }
+  class Server <<struct>> {
+    +bind(addr): Result<Self, HttpsvcError>
+    +serve(self, router, cancel): Result<(), HttpsvcError>
+  }
+  class Recorder <<struct>> {
+    +gauge(name, help, provider)
+    +labeled_gauge(name, help, label, provider)
+    +freeze(self): Result<FrozenRecorder, MetricsError>
+  }
+  enum HttpError <<enum>> {
+    HeadNotSet
+    Storage(StorageError)
+  }
+}
+
+' lifecycle realizations
+ChainService ..|> Service
+SyncLoop ..|> Service
+DutiesService ..|> Service
+HttpService ..|> Service
+MetricsService ..|> Service
+
+' composition
+Node o-- "6" Service
+ChainService *-- Engine
+ChainService *-- ChainSnapshot
+ChainService ..> ChainError
+Engine ..> EngineError
+Engine ..> BlockImportResult
+ChainService ..> AttestationImportResult
+
+SyncLoop o-- SyncChain
+SyncLoop o-- Network
+SyncLoop o-- PeerEventProvider
+SyncLoop *-- SyncConfig
+SyncLoop ..> SyncError
+ChainService ..|> SyncChain : adapter
+
+DutiesService o-- DutiesChain
+DutiesService o-- Publisher
+DutiesService *-- LocalProposers
+DutiesService ..> DutiesError
+ChainService ..|> DutiesChain : adapter
+
+HttpService ..> HttpError
+MetricsService *-- Recorder
+
+@enduml

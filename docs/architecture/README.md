@@ -11,12 +11,12 @@ overview plus per-layer class and sequence diagrams.
 | File | Contents |
 | ---- | -------- |
 | [`global-class.md`](global-class.md) | Global class / crate-dependency diagram across all layers |
-| `layers/domain.md` | Domain / Data layer — `types`, `ssz`, `config` (planned) |
-| `layers/protocol.md` | Protocol / Consensus — `protocol`, `forkchoice` (planned) |
-| `layers/storage.md` | Storage — `storage` (planned) |
-| `layers/networking.md` | Networking — `networking`, `runtime/p2p`, `runtime/p2p-rpc` (planned) |
-| `layers/runtime.md` | Runtime / Services — `runtime/core`, `runtime/chain`, `runtime/sync`, `runtime/duties`, `runtime/api` (planned) |
-| `layers/application.md` | Application / Entry — `node`, `lean-cli`, `bin/lean-rust` (planned) |
+| [`layers/domain.md`](layers/domain.md) | Domain / Data layer — `types`, `ssz`, `config` |
+| [`layers/protocol.md`](layers/protocol.md) | Protocol / Consensus — `protocol`, `forkchoice` |
+| [`layers/storage.md`](layers/storage.md) | Storage — `storage` |
+| [`layers/networking.md`](layers/networking.md) | Networking — `networking`, `runtime/p2p`, `runtime/p2p-rpc` |
+| [`layers/runtime.md`](layers/runtime.md) | Runtime / Services — `runtime/core`, `runtime/chain`, `runtime/sync`, `runtime/duties`, `runtime/api` |
+| [`layers/application.md`](layers/application.md) | Application / Entry — `node`, `lean-cli`, `bin/lean-rust` |
 
 PlantUML sources live in [`diagrams/`](diagrams/) next to their rendered `.svg`.
 

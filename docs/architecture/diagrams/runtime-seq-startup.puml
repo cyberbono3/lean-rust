@@ -1,0 +1,43 @@
+@startuml runtime-seq-startup
+title Runtime — Node startup / service wiring + lifecycle
+
+participant "Node" as Node
+participant "chain" as Chain
+participant "p2p" as P2p
+participant "sync" as Sync
+participant "duties" as Duties
+participant "http" as Http
+participant "metrics" as Metrics
+
+note over Node : builder: Node::new(config)\n.with_chain(..).with_p2p(..).with_sync(..)\n.with_duties(..).with_http(..).with_metrics(..)
+
+Node -> Node : start()
+activate Node
+note right of Node : SLOT_ORDER = [chain, p2p, sync, duties, http, metrics]
+Node -> Chain : start()
+Node -> P2p : start()
+Node -> Sync : start()
+Node -> Duties : start()
+Node -> Http : start()
+Node -> Metrics : start()
+alt any start() fails
+  Node -> Node : stop_services_reverse() (unwind)
+  Node --> Node : Err(NodeError::StartFailed)
+end
+Node -> Node : commit started services to state
+deactivate Node
+
+... node runs until shutdown signal ...
+
+Node -> Node : stop()
+activate Node
+note right of Node : reverse order: metrics -> http -> duties -> sync -> p2p -> chain\nbounded by NodeConfig.shutdown_timeout
+Node -> Metrics : stop(cancel)
+Node -> Http : stop(cancel)
+Node -> Duties : stop(cancel)
+Node -> Sync : stop(cancel)
+Node -> P2p : stop(cancel)
+Node -> Chain : stop(cancel)
+deactivate Node
+
+@enduml
