@@ -1,6 +1,6 @@
 # lean-rust
 
-This is WIP implementation of Lean Ethereum in Rust.
+This is the implementation of Lean Ethereum in Rust.
 
 > ⚠️ **Warning:** This code is work in progress. It is not clean and has not
 > been reviewed yet. Use at your own risk.
