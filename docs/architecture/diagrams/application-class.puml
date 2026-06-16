@@ -1,0 +1,98 @@
+@startuml application-class
+title Application / Entry Layer — Class Diagram (node, lean-cli, bin/lean-rust)
+
+skinparam linetype ortho
+skinparam shadowing false
+
+package "bin/lean-rust" #FFF4F4 {
+  class Main <<bin>> {
+    +main(): Result<()>  (#[tokio::main])
+    -run(cli: Cli): Result<()>
+    -build_devnet_config(cli: &Cli): Result<node::Config>
+    -init_tracing(cli: &Cli): Result<TracingGuard>
+    -shutdown_signal(): Result<()>
+    +{static} AGENT_VERSION / DEFAULT_HTTP_ADDR / DEFAULT_METRICS_ADDR
+  }
+}
+
+package "lean-cli" #FFEEEE {
+  class Cli <<struct>> {
+    +data_dir: Option<PathBuf>
+    +devnet_listen_addresses: Vec<String>
+    +devnet_bootnodes: Option<PathBuf>
+    +genesis_config / genesis_state: Option<PathBuf>
+    +validator_registry_path: Option<PathBuf>
+    +node_id: Option<String>
+    +private_key_path: Option<PathBuf>
+    +http_address: Option<IpAddr>
+    +http_port: Option<u16>
+    +metrics: bool
+    +metrics_address / metrics_port
+    +log_level: Verbosity
+    +command: Option<Command>
+    +listen_address(&self): Option<&str>
+    +verbosity(&self): Verbosity
+  }
+  enum Command <<enum>> {
+    DevnetConfig
+    GeneratePrivateKey { output_path }
+    PeerId { private_key_path }
+  }
+  class "genesis fns" as Genesis <<fns>> {
+    +load_chain_config(path): Result<ChainConfig>
+    +load_state(path): Result<State>
+    +load_or_synthesize_state(state, cfg, validators): Result<State>
+    +anchor_block_for_state(state): Result<Block>
+  }
+  class "keygen fns" as Keygen <<fns>> {
+    +generate_and_write(path): Result<PeerId>
+    +peer_id_from_file(path): Result<PeerId>
+  }
+}
+
+package "node" #FFE8E8 {
+  class "Config (node)" as NodeWireConfig <<struct>> {
+    +node: NodeConfig
+    +p2p: HostOptions
+    +duties: lean_duties::Config
+    +http_addr: SocketAddr
+    +metrics_addr: SocketAddr
+    +genesis_state: State
+    +genesis_block: Block
+  }
+  class "new_devnet()" as NewDevnet <<fn>> {
+    +new_devnet(config: Config): Result<Node>
+  }
+  class PublisherAdapter <<struct>> {
+    -p2p: Arc<P2pService>
+    +new(p2p: Arc<P2pService>): Self
+    +publish_block(SignedBlock): Result<(), PublishError>
+    +publish_attestation(SignedVote): Result<(), PublishError>
+  }
+  class GossipIngestService <<struct>> {
+    .. impl lean_core::Service ..
+    drains p2p block/vote receivers into chain
+  }
+  class RpcProviderAdapter <<struct>> {
+    .. impl p2p_rpc::RpcProvider ..
+    +get_block_by_root(root): Option<SignedBlock>
+    +local_status(): Status
+  }
+}
+
+' relationships
+Main ..> Cli
+Main ..> NewDevnet
+Main ..> NodeWireConfig
+Cli *-- Command
+Cli ..> Genesis
+Cli ..> Keygen
+NewDevnet ..> NodeWireConfig
+NewDevnet ..> PublisherAdapter
+NewDevnet ..> GossipIngestService
+NewDevnet ..> RpcProviderAdapter
+PublisherAdapter ..|> "lean_duties::Publisher"
+RpcProviderAdapter ..|> "p2p_rpc::RpcProvider"
+GossipIngestService ..|> "lean_core::Service"
+
+@enduml

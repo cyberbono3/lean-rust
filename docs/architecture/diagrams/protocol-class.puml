@@ -1,0 +1,201 @@
+@startuml protocol-class
+title Protocol / Consensus Layer — Class Diagram (protocol, forkchoice)
+
+skinparam linetype ortho
+skinparam shadowing false
+
+package "protocol" #F4F6FB {
+  class Slot <<struct>> {
+    -0: u64
+    +{static} ZERO: Slot
+    +{static} ONE: Slot
+    +new(value: u64): Self
+    +get(self): u64
+    +is_zero(self): bool
+    +advance(self): Option<Self>
+    +is_justifiable_after(self, finalized: Slot): bool
+  }
+  class ValidatorIndex <<struct>> {
+    -0: u64
+    +new(value: u64): Self
+    +get(self): u64
+  }
+  class Checkpoint <<struct>> {
+    +root: Bytes32
+    +slot: Slot
+    +new(root: Bytes32, slot: Slot): Self
+  }
+  class Vote <<struct>> {
+    +slot: Slot
+    +head: Checkpoint
+    +target: Checkpoint
+    +source: Checkpoint
+  }
+  class SignedVote <<struct>> {
+    +validator_id: ValidatorIndex
+    +message: Vote
+    +signature: Bytes4000
+  }
+  class BlockHeader <<struct>> {
+    +slot: Slot
+    +proposer_index: ValidatorIndex
+    +parent_root: Bytes32
+    +state_root: Bytes32
+    +body_root: Bytes32
+    +{static} MAX_ATTESTATIONS: usize
+  }
+  class BlockBody <<struct>> {
+    +attestations: Vec<SignedVote>
+  }
+  class Block <<struct>> {
+    +slot: Slot
+    +proposer_index: ValidatorIndex
+    +parent_root: Bytes32
+    +state_root: Bytes32
+    +body: BlockBody
+  }
+  class SignedBlock <<struct>> {
+    +message: Block
+    +signature: Bytes4000
+  }
+  class ProtocolConfig <<struct>> {
+    +num_validators: u64
+    +genesis_time: u64
+  }
+  class State <<struct>> {
+    +config: ProtocolConfig
+    +slot: Slot
+    +latest_block_header: BlockHeader
+    +latest_justified: Checkpoint
+    +latest_finalized: Checkpoint
+    +historical_block_hashes: Vec<Bytes32>
+    +justified_slots: Bitlist<HISTORICAL_ROOTS_LIMIT>
+    +justifications_roots: Vec<Bytes32>
+    +justifications_validators: Bitlist<JUSTIFICATIONS_VALIDATORS_LIMIT>
+    +process_slot(&mut self): Result<(), StateTransitionError>
+    +process_slots(&mut self, target: Slot): Result<(), StateTransitionError>
+    +process_block_header(&mut self, block: &Block): Result<(), StateTransitionError>
+    +process_attestations(&mut self, atts: &[SignedVote]): Result<(), StateTransitionError>
+    +state_transition(&mut self, sb: &SignedBlock, validate_root: bool): Result<(), StateTransitionError>
+  }
+  enum AttSlotKind <<enum>> {
+    Source
+    Target
+  }
+  enum ProtocolError <<enum>> {
+    Ssz(SszError)
+    Invariant { context, reason }
+  }
+  enum StateTransitionError <<enum>> {
+    TargetSlotNotInFuture { current, target }
+    SlotOverflow { slot }
+    BlockSlotMismatch { got, want }
+    BlockOlderThanLatest { slot, latest }
+    IncorrectBlockProposer { slot, proposer }
+    BlockParentRootMismatch { slot, got, want }
+    AttestationSlotOutOfRange { kind, slot, len }
+    AttestationValidatorOutOfRange { validator, num_validators }
+    StateBoundExceeded { context }
+    StateRootMismatch { slot, got, want }
+    Protocol(ProtocolError)
+  }
+  class "free functions" as ProtoFns <<fns>> {
+    +genesis_state(num_validators: u64, genesis_time: u64): State
+    +is_proposer(vi: ValidatorIndex, slot: Slot, n: u64): Result<bool, ProtocolError>
+  }
+}
+
+package "forkchoice" #EEF0FB {
+  class Time <<struct>> {
+    -0: u64
+    +{static} ZERO: Time
+    +new(t: u64): Self
+    +get(self): u64
+    +slot(self): u64
+    +interval(self): u64
+    +phase(self): Phase
+    +checked_advance(self): Option<Self>
+  }
+  enum Phase <<enum>> {
+    Proposal
+    Idle
+    UpdateSafeTarget
+    AcceptNewVotes
+  }
+  class Store <<struct>> {
+    +from_anchor(state: State, anchor: Block): Result<Self, ForkchoiceError>
+    +time(&self): Time
+    +config(&self): &ProtocolConfig
+    +head(&self): Bytes32
+    +safe_target(&self): Bytes32
+    +latest_justified(&self): Checkpoint
+    +latest_finalized(&self): Checkpoint
+    +block_order(&self): &[Bytes32]
+    +block(&self, root): Option<&Block>
+    +state(&self, root): Option<&Arc<State>>
+    +has_block(&self, root): bool
+    +current_slot/interval(&self): u64
+    +current_phase(&self): Phase
+    +tick_interval(&mut self, has_proposal: bool): Result<(), ForkchoiceError>
+    +validate_attestation(&self, sv: &SignedVote): Result<(), ForkchoiceError>
+    +process_attestation(&mut self, sv: SignedVote, from_block: bool): Result<bool, ForkchoiceError>
+    +accept_new_votes(&mut self): Result<(), ForkchoiceError>
+    +track_block(&mut self, block: Block, post: State): Result<bool, ForkchoiceError>
+    +get_proposal_head(&mut self): Result<Bytes32, ForkchoiceError>
+    +get_vote_target(&self): Result<Checkpoint, ForkchoiceError>
+    +produce_block(&mut self, slot: Slot, v: ValidatorIndex): Result<ProducedBlock, ForkchoiceError>
+    +produce_attestation_vote(&mut self, slot: Slot): Result<ProducedVote, ForkchoiceError>
+  }
+  class ProducedBlock <<struct>> {
+    +block: Block
+    +root: Bytes32
+    +parent_root: Bytes32
+    +post_state: State
+    +post_state_root: Bytes32
+  }
+  class ProducedVote <<struct>> {
+    +vote: Vote
+    +head_root: Bytes32
+    +target: Checkpoint
+    +source: Checkpoint
+    +safe_target: Bytes32
+  }
+  enum ForkchoiceError <<enum>> {
+    AnchorStateRootMismatch / AnchorTimeOverflow / TimeOverflow
+    UnknownSource/Target/Root/Head/SafeTarget Block { root }
+    SourceSlotExceedsTarget / Source|TargetCheckpointSlotMismatch
+    AttestationTooFarInFuture / AttestationFutureLimitOverflow
+    ValidatorIndexOutOfRange { validator_id, num_validators }
+    ParentBlockNotFound / NoBlocksAvailable / UnauthorizedProposer
+    BlockStateRootMismatch / StateSlotAheadOfTarget
+    StateTransition(StateTransitionError)
+    Protocol(ProtocolError)
+  }
+  class "free functions" as FcFns <<fns>> {
+    +get_fork_choice_head(blocks, root, latest_votes, min_score): Result<Bytes32, ForkchoiceError>
+  }
+}
+
+' relationships
+SignedBlock *-- Block
+Block *-- BlockBody
+BlockBody *-- "many" SignedVote
+SignedVote *-- Vote
+Vote *-- Checkpoint
+State *-- ProtocolConfig
+State *-- BlockHeader
+State *-- Checkpoint
+State ..> StateTransitionError
+StateTransitionError ..> ProtocolError
+ProtocolError ..> AttSlotKind
+
+Time ..> Phase
+Store *-- State
+Store *-- Block
+Store ..> ProducedBlock
+Store ..> ProducedVote
+Store ..> ForkchoiceError
+Store ..> FcFns
+ForkchoiceError ..> StateTransitionError
+
+@enduml

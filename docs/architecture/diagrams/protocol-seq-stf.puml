@@ -1,0 +1,30 @@
+@startuml protocol-seq-stf
+title Protocol — State transition (State::state_transition)
+
+actor Caller
+participant "State (self)" as Self
+participant "State (next clone)" as Next
+
+Caller -> Self : state_transition(&signed_block, validate_state_root)
+activate Self
+Self -> Next : clone()
+Self -> Next : process_slots(block.slot)
+activate Next
+loop until slot == block.slot
+  Next -> Next : process_slot()
+end
+deactivate Next
+Self -> Next : process_block_header(&block)
+note right : validate proposer, parent_root, slot monotonicity;\nappend history; update latest_block_header
+Self -> Next : process_attestations(&block.body.attestations)
+note right : tally votes per target; update\nlatest_justified / latest_finalized on supermajority
+alt validate_state_root == true
+  Self -> Next : hash_tree_root()
+  Next --> Self : root
+  Self -> Self : assert root == block.state_root
+end
+Self -> Self : commit next into self
+Self --> Caller : Ok(()) | Err(StateTransitionError)
+deactivate Self
+
+@enduml

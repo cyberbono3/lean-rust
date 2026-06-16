@@ -1,0 +1,56 @@
+@startuml storage-class
+title Storage Layer — Class Diagram (storage)
+
+skinparam linetype ortho
+skinparam shadowing false
+
+package "storage" #FBF8F4 {
+  interface Store <<trait>> {
+    .. Send + Sync ..
+    +save_block(&self, root: Bytes32, block: SignedBlock): Result<(), StorageError>
+    +save_state(&self, root: Bytes32, state: State): Result<(), StorageError>
+    +save_head(&self, info: HeadInfo): Result<(), StorageError>
+    +save_accepted(&self, root, block, state, head): Result<(), StorageError>
+    +has_block(&self, root: &Bytes32): Result<bool, StorageError>
+    +load_block(&self, root: &Bytes32): Result<Option<SignedBlock>, StorageError>
+    +load_state(&self, root: &Bytes32): Result<Option<State>, StorageError>
+    +load_head(&self): Result<Option<HeadInfo>, StorageError>
+  }
+  note right of Store
+    save_accepted default impl writes
+    block -> state -> head (head LAST)
+    so load_head never points at absent data
+  end note
+
+  class MemoryStore <<struct>> {
+    -inner: RwLock<Inner>
+    +new(): Self
+  }
+  class HeadInfo <<struct>> {
+    +head: Checkpoint
+    +finalized: Checkpoint
+    +new(head: Checkpoint, finalized: Checkpoint): Self
+    +try_new(head, finalized): Result<Self, HeadInfoError>
+  }
+  note bottom of HeadInfo : invariant: finalized.slot <= head.slot
+  enum HeadInfoError <<enum>> {
+    FinalizedAheadOfHead { head: u64, finalized: u64 }
+  }
+  enum StorageError <<enum>> {
+    Backend { message: String }
+  }
+}
+
+MemoryStore ..|> Store
+MemoryStore ..> StorageError
+Store ..> HeadInfo
+Store ..> StorageError
+HeadInfo ..> HeadInfoError
+
+note as N1
+  Store consumes (from protocol / types):
+  Bytes32, SignedBlock, State, Checkpoint
+end note
+N1 .. Store
+
+@enduml

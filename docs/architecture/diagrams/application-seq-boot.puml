@@ -1,0 +1,35 @@
+@startuml application-seq-boot
+title Application — boot sequence (bin -> cli -> node -> runtime)
+
+actor OS
+participant "bin/lean-rust main" as Main
+participant "lean-cli (clap)" as Cli
+participant "genesis / keygen" as Gen
+participant "node::new_devnet" as Devnet
+participant "core::Node" as Node
+
+OS -> Main : exec (#[tokio::main])
+Main -> Cli : Cli::parse()
+Cli --> Main : Cli
+Main -> Main : init_tracing(&cli)
+
+alt cli.command == Some(subcommand)
+  Main -> Gen : DevnetConfig | GeneratePrivateKey | PeerId
+  Gen --> Main : print result & return
+else None -> boot node
+  Main -> Main : build_devnet_config(&cli)
+  Main -> Gen : load_chain_config / load_or_synthesize_state / anchor_block_for_state
+  Gen --> Main : ChainConfig, State, Block
+  Main -> Devnet : new_devnet(config)
+  activate Devnet
+  Devnet -> Devnet : MemoryStore, Engine::from_anchor, ChainService
+  Devnet -> Devnet : DevnetHost::build_with_provider(RpcProviderAdapter)
+  Devnet -> Devnet : GossipIngestService, DutiesService(PublisherAdapter), Http, Metrics
+  Devnet --> Main : Node (wired, unstarted)
+  deactivate Devnet
+  Main -> Node : start()
+  Main -> Main : shutdown_signal().await  (SIGINT/SIGTERM)
+  Main -> Node : stop()
+end
+
+@enduml

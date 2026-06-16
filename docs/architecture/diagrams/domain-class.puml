@@ -1,0 +1,158 @@
+@startuml domain-class
+title Domain / Data Layer — Class Diagram (types, ssz, config)
+
+skinparam linetype ortho
+skinparam shadowing false
+
+package "types" #F4F9F4 {
+  class BasisPoint <<struct>> {
+    -0: u64
+    +{static} MAX_BASIS_POINT: u64
+    +new(value: u64): Result<Self, TypesError>
+    +get(self): u64
+  }
+  class "ByteVector<const N: usize>" as ByteVector <<struct>> {
+    +0: [u8; N]
+    +new(bytes: [u8; N]): Self
+    +as_slice(&self): &[u8]
+    +zero(): Self
+    +to_hex(&self): String
+  }
+  note bottom of ByteVector
+    type Bytes32 = ByteVector<32>  (Copy)
+    type Bytes4000 = ByteVector<4000>  (Clone-only)
+  end note
+  class ByteList <<struct>> {
+    -bytes: Vec<u8>
+    -limit: usize
+    +try_new(bytes: Vec<u8>, limit: usize): Result<Self, TypesError>
+    +as_slice(&self): &[u8]
+    +len(&self): usize
+    +is_empty(&self): bool
+    +limit(&self): usize
+    +into_inner(self): Vec<u8>
+  }
+  class "ByteListLimit<const LIMIT: usize>" as ByteListLimit <<struct>> {
+    -0: Vec<u8>
+    +try_new(bytes: Vec<u8>): Result<Self, TypesError>
+    +as_slice(&self): &[u8]
+    +len(&self): usize
+    +is_empty(&self): bool
+    +limit(&self): usize
+    +into_inner(self): Vec<u8>
+  }
+  class "Bitvector<const N: usize>" as Bitvector <<struct>> {
+    -bytes: Vec<u8>
+    +new(): Self
+    +get(&self, index: usize): Option<bool>
+    +set(&mut self, index: usize, value: bool): Result<(), TypesError>
+    +len(&self): usize
+    +is_empty(&self): bool
+    +count_ones(&self): usize
+    +iter_set_indices(&self): impl Iterator<Item = usize>
+    +as_bytes(&self): &[u8]
+    +from_bytes(data: &[u8]): Result<Self, TypesError>
+  }
+  class "Bitlist<const LIMIT: usize>" as Bitlist <<struct>> {
+    -bytes: Vec<u8>
+    -length: usize
+    +new(): Self
+    +with_length(length: usize): Result<Self, TypesError>
+    +get(&self, index: usize): Option<bool>
+    +set(&mut self, index: usize, value: bool): Result<(), TypesError>
+    +len(&self): usize
+    +is_empty(&self): bool
+    +limit(&self): usize
+    +count_ones(&self): usize
+    +iter_set_indices(&self): impl Iterator<Item = usize>
+    +as_bytes(&self): Vec<u8>
+    +from_bytes(data: &[u8]): Result<Self, TypesError>
+  }
+  enum TypesError <<enum>> {
+    InvalidByteLength { type_name, want, got }
+    InvalidBooleanByte { value: u8 }
+    BasisPointOutOfRange { value: u64 }
+    ByteListLimitExceeded { limit, got }
+    BitlistLimitExceeded { limit, got }
+    InvalidBitlistEncoding
+    InvalidBitvectorEncoding { length: usize }
+    BitvectorIndexOutOfBounds { length, got }
+  }
+  class "free functions" as TypesFns <<fns>> {
+    +decode_boolean(&[u8]): Result<bool, TypesError>
+    +decode_u8_le / u16_le / u32_le / u64_le(&[u8])
+  }
+}
+
+package "ssz" #EEF6FB {
+  interface HashTreeRoot <<trait>> {
+    +hash_tree_root(&self): [u8; 32]
+  }
+  interface Encode <<trait>>
+  interface Decode <<trait>>
+  enum SszError <<enum>> {
+    Decode { source: DecodeErrorAdapter }
+    InvalidNumLeaves { got: usize }
+    InputExceedsLimit { got, limit }
+  }
+  class DecodeErrorAdapter <<struct>> {
+    +0: eth_ssz::DecodeError
+  }
+  class "free functions" as SszFns <<fns>> {
+    +encode<T: Encode>(&T): Vec<u8>
+    +decode<T: Decode>(&[u8]): Result<T, SszError>
+    +hash_pair(&[u8;32], &[u8;32]): [u8;32]
+    +pack(&[u8]): Vec<[u8;32]>
+    +merkleize(&[[u8;32]]): [u8;32]
+    +merkleize_with_limit(chunks, limit): Result<[u8;32], SszError>
+    +merkleize_progressive(chunks, num_leaves): Result<[u8;32], SszError>
+    +mix_in_length(root, length): [u8;32]
+    +mix_in_selector(root, selector): [u8;32]
+    +zero_tree_root(width_pow2): [u8;32]
+    +encode/decode_fixed_element_list, _variable_element_list, _bytes32_list
+    +{static} BYTES_PER_CHUNK = 32
+    +{static} BYTES_PER_LENGTH_OFFSET = 4
+    +{static} ZERO_HASH
+  }
+}
+
+package "config" #FBF8F4 {
+  class Config <<struct>> {
+    +slot_duration_ms: u64
+    +seconds_per_slot: u64
+    +justification_lookback_slots: u64
+    +proposer_reorg_cutoff_bps: u64
+    +vote_due_bps: u64
+    +fast_confirm_due_bps: u64
+    +view_freeze_cutoff_bps: u64
+    +historical_roots_limit: u64
+    +validator_registry_limit: u64
+    +validate(&self): Result<(), ConfigError>
+    +from_yaml(s: &str): Result<Self, ConfigError>
+    +to_yaml(&self): Result<String, ConfigError>
+  }
+  enum ConfigError <<enum>> {
+    Yaml { source: serde_yaml::Error }
+    BasisPointOutOfRange { field, value }
+    SlotDurationMismatch { slot_duration_ms, seconds_per_slot }
+  }
+  note bottom of Config
+    const DEVNET_CONFIG: Config
+    const INTERVALS_PER_SLOT = 4
+    const SECONDS_PER_INTERVAL = 1
+  end note
+}
+
+' relationships
+ByteVector ..|> HashTreeRoot
+BasisPoint ..> TypesError
+ByteList ..> TypesError
+Bitvector ..> TypesError
+Bitlist ..> TypesError
+SszError *-- DecodeErrorAdapter
+SszFns ..> SszError
+SszFns ..> Encode
+SszFns ..> Decode
+Config ..> ConfigError
+
+@enduml

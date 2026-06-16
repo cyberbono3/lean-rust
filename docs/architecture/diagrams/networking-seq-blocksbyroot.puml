@@ -1,0 +1,27 @@
+@startuml networking-seq-blocksbyroot
+title Networking — req/resp BlocksByRoot (requester <-> responder)
+
+participant "Caller (sync)" as Caller
+participant "Host (requester)" as Host
+participant "swarm task" as Swarm
+participant "libp2p request_response" as RR
+participant "responder peer" as Peer
+participant "RpcProvider" as Provider
+participant "OutboundTable" as Table
+
+Caller -> Host : send_blocks_by_root(peer, BlocksByRootRequest)
+Host -> Swarm : HostCommand::SendRequest { peer, RpcRequest::BlocksByRoot, reply }
+Swarm -> Table : insert(request_id, peer, reply)
+Swarm -> RR : send_request(peer, request)
+RR -> Peer : SszSnappyCodec write_request (uvarint + snappy frame)
+
+Peer -> Provider : get_block_by_root(root)  (per root)
+Provider --> Peer : Option<SignedBlock>
+Peer -> Peer : BlocksByRootResponse::new(blocks)
+Peer -> RR : send_response(channel, RpcResponse::BlocksByRoot)
+RR -> Swarm : SwarmEvent Response { request_id, response }
+Swarm -> Table : fulfill(request_id, response)
+Table --> Host : reply(Ok(BlocksByRootResponse))
+Host --> Caller : Ok(BlocksByRootResponse)
+
+@enduml

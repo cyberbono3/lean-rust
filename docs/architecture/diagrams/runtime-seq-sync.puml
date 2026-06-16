@@ -1,0 +1,41 @@
+@startuml runtime-seq-sync
+title Runtime — sync loop importing peer blocks
+
+participant "PeerEventProvider" as Peers
+participant "watch loop" as Watch
+participant "PeerWorker" as PW
+participant "Network (port)" as Net
+participant "Chain (port)" as Chain
+participant "ChainService" as Svc
+participant "Engine" as Engine
+participant "Store" as Store
+
+Peers -> Watch : peer connected (mpsc::Receiver<PeerId>)
+Watch -> Watch : dedup in-flight; acquire Semaphore permit (<= max_concurrent_peer_syncs)
+Watch -> PW : spawn handle(peer)
+activate PW
+PW -> Net : send_status(peer, local_status)
+Net --> PW : peer Status
+PW -> PW : should_sync(local, peer)?
+alt peer ahead
+  loop walk back up to max_sync_depth (request_timeout each)
+    PW -> Net : request_blocks_by_root(peer, BlocksByRootRequest)
+    Net --> PW : BlocksByRootResponse
+  end
+  loop import forward (reverse order)
+    PW -> Chain : import_block(block)
+    Chain -> Svc : import_block(signed)
+    Svc -> Engine : import_block_capturing(signed)
+    Engine --> Svc : (BlockImportResult, Option<PersistPlan>)
+    alt Accepted
+      Svc -> Store : save_accepted(...)
+      Svc -> Svc : refresh_snapshot()
+    else MissingParent / Rejected
+      Svc -> Svc : warn-log & drop (expected for depth-capped walk)
+    end
+  end
+end
+PW -> PW : release permit
+deactivate PW
+
+@enduml

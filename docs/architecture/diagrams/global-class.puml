@@ -1,0 +1,150 @@
+@startuml global-class
+title lean-rust — Global Class / Crate Dependency Diagram
+
+skinparam packageStyle rectangle
+skinparam linetype ortho
+skinparam shadowing false
+left to right direction
+
+' ---- Layer: Domain / Data ----
+package "Domain / Data" #F4F9F4 {
+  package "types" {
+    class Bytes32
+    class Bytes4000
+    class BasisPoint
+    class Bitlist
+  }
+  package "ssz" {
+    interface Encode
+    interface Decode
+    class SszError
+  }
+  package "config" {
+    class Config
+  }
+}
+
+' ---- Layer: Protocol / Consensus ----
+package "Protocol / Consensus" #F4F6FB {
+  package "protocol" {
+    class SignedBlock
+    class Block
+    class BlockBody
+    class BlockHeader
+    class Checkpoint
+    class ProtocolError
+  }
+  package "forkchoice" {
+    class "Store" as FcStore
+    class ForkchoiceError
+  }
+}
+
+' ---- Layer: Storage ----
+package "Storage" #FBF8F4 {
+  package "storage" {
+    interface "Store" as StorageStore
+    class MemoryStore
+    class HeadInfo
+    class StorageError
+  }
+}
+
+' ---- Layer: Networking ----
+package "Networking" #FBF4F9 {
+  package "networking (lean-wire)" {
+    class Status
+    class BlocksByRootRequest
+    class BlocksByRootResponse
+    class NetworkingError
+  }
+  package "runtime/p2p (lean-p2p-host)" {
+    class DevnetHost
+    class Topic
+  }
+  package "runtime/p2p-rpc" {
+    class RpcHandlers
+  }
+}
+
+' ---- Layer: Runtime / Services ----
+package "Runtime / Services" #F4FBFB {
+  package "runtime/core (lean-core)" {
+    class Node
+    class NodeConfig
+  }
+  package "runtime/chain (lean-chain)" {
+    class "Service" as ChainService
+    class ChainSnapshot
+  }
+  package "runtime/sync (lean-sync)" {
+    class "Loop" as SyncLoop
+  }
+  package "runtime/duties (lean-duties)" {
+    class Publisher
+    class LocalProposers
+  }
+  package "runtime/api (lean-api)" {
+    class HttpService
+    class Server
+  }
+}
+
+' ---- Cross-cutting ----
+package "Cross-cutting" #F9F9F4 {
+  package "observability (lean-observability)" {
+    class Verbosity
+  }
+}
+
+' ---- Layer: Application / Entry ----
+package "Application / Entry" #FFF4F4 {
+  package "node" {
+    class PublisherAdapter
+  }
+  package "lean-cli" {
+    class Cli
+  }
+  package "bin/lean-rust" {
+    class Main
+  }
+}
+
+' ==== Direct cross-crate dependencies (transitive edges omitted) ====
+config ..> types
+ssz ..> types
+protocol ..> ssz
+protocol ..> config
+forkchoice ..> protocol
+storage ..> protocol
+"networking (lean-wire)" ..> protocol
+
+"runtime/chain (lean-chain)" ..> "runtime/core (lean-core)"
+"runtime/chain (lean-chain)" ..> storage
+"runtime/chain (lean-chain)" ..> forkchoice
+"runtime/chain (lean-chain)" ..> "networking (lean-wire)"
+
+"runtime/duties (lean-duties)" ..> "runtime/chain (lean-chain)"
+"runtime/sync (lean-sync)" ..> "runtime/chain (lean-chain)"
+"runtime/sync (lean-sync)" ..> storage
+"runtime/sync (lean-sync)" ..> "networking (lean-wire)"
+
+"runtime/p2p-rpc" ..> "networking (lean-wire)"
+"runtime/p2p (lean-p2p-host)" ..> "runtime/p2p-rpc"
+"runtime/p2p (lean-p2p-host)" ..> "runtime/core (lean-core)"
+"runtime/api (lean-api)" ..> "runtime/core (lean-core)"
+"runtime/api (lean-api)" ..> storage
+
+node ..> "runtime/chain (lean-chain)"
+node ..> "runtime/duties (lean-duties)"
+node ..> "runtime/p2p (lean-p2p-host)"
+node ..> "runtime/api (lean-api)"
+node ..> "runtime/core (lean-core)"
+
+"lean-cli" ..> "runtime/duties (lean-duties)"
+"lean-cli" ..> "runtime/p2p (lean-p2p-host)"
+"lean-cli" ..> "observability (lean-observability)"
+"bin/lean-rust" ..> "lean-cli"
+"bin/lean-rust" ..> node
+
+@enduml

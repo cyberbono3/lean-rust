@@ -1,0 +1,138 @@
+@startuml networking-class
+title Networking Layer — Class Diagram (networking/lean-wire, runtime/p2p, runtime/p2p-rpc)
+
+skinparam linetype ortho
+skinparam shadowing false
+
+package "networking (lean-wire)" #FBF4F9 {
+  class Status <<struct>> {
+    +finalized: Checkpoint
+    +head: Checkpoint
+  }
+  class BlocksByRootRequest <<struct>> {
+    -roots: Vec<Bytes32>
+    +new<I>(roots: I): Result<Self, NetworkingError>
+    +roots(&self): &[Bytes32]
+    +len(&self): usize
+    +is_empty(&self): bool
+  }
+  class BlocksByRootResponse <<struct>> {
+    -blocks: Vec<SignedBlock>
+    +new<I>(blocks: I): Result<Self, NetworkingError>
+    +blocks(&self): &[SignedBlock]
+    +len(&self): usize
+    +is_empty(&self): bool
+  }
+  class ProtocolId <<struct>> {
+    -0: &'static str
+    +as_str(self): &'static str
+  }
+  enum NetworkingError <<enum>> {
+    ListTooLarge { kind, len, max }
+    Ssz(SszError)
+    Io(io::Error)
+    Snappy(snap::Error)
+    MalformedFrame { reason }
+    FrameTooLarge { length, max }
+    UvarintOverflow
+  }
+  class "codec / frame fns" as WireFns <<fns>> {
+    +encode_req_resp / decode_req_resp<T>
+    +encode_gossip / decode_gossip<T>
+    +write_req_resp_frame / read_req_resp_frame
+    +compute_gossipsub_message_id(domain, topic, payload): [u8;20]
+    +{static} MAX_REQUEST_BLOCKS = 1024
+    +{static} STATUS_PROTOCOL_V1 / BLOCKS_BY_ROOT_PROTOCOL_V1
+    +{static} BLOCK_TOPIC_V1 / VOTE_TOPIC_V1
+  }
+}
+
+package "runtime/p2p-rpc" #FBF0F6 {
+  interface RpcProvider <<trait>> {
+    .. Send + Sync ..
+    +get_block_by_root(&self, root: &Bytes32): Option<SignedBlock>
+    +local_status(&self): Status
+  }
+  class NoOpRpcProvider <<struct>>
+  enum RpcError <<enum>> {
+    ChannelClosed
+    Outbound(String)
+    UnexpectedResponseKind { expected }
+  }
+  note bottom of RpcProvider : type SharedRpcProvider = Arc<dyn RpcProvider>
+}
+
+package "runtime/p2p (lean-p2p-host)" #FBEEF4 {
+  class DevnetHost <<struct>> {
+    +build(options: HostOptions): HostResult<P2pService>
+    +build_with_provider(options, provider): HostResult<P2pService>
+  }
+  class P2pService <<struct>> {
+    -peer_id: PeerId
+    -state: Mutex<State>
+    -provider: SharedRpcProvider
+    -block_rx / vote_rx: Mutex<Option<..>>
+    +take_block_receiver(&self): Option<BlockReceiver>
+    +take_vote_receiver(&self): Option<VoteReceiver>
+    +peer_id(&self): PeerId
+    +host(&self): Option<Host>
+    +bound_addr(&self): Option<Multiaddr>
+  }
+  class Host <<struct>> {
+    -peer_id: PeerId
+    -commands: mpsc::Sender<HostCommand>
+    +publish_block(&self, &SignedBlock): Result<MessageId, PublishError>
+    +publish_vote(&self, &SignedVote): Result<MessageId, PublishError>
+    +send_blocks_by_root(&self, peer, req): Result<BlocksByRootResponse, RpcError>
+  }
+  enum Topic <<enum>> {
+    Block
+    Vote
+    +as_str(self): &'static str
+    +ident(self): IdentTopic
+  }
+  class "GossipReceiver<T>" as GossipReceiver <<struct>> {
+    +recv(&mut self): Option<T>
+  }
+  note bottom of GossipReceiver
+    type BlockReceiver = GossipReceiver<SignedBlock>
+    type VoteReceiver  = GossipReceiver<SignedVote>
+  end note
+  enum PublishError <<enum>> {
+    ChannelClosed
+    Gossipsub(gossipsub::PublishError)
+  }
+  class HostOptions <<struct>> {
+    -listen_addr: ListenAddr
+    -agent_version: AgentVersion
+    -identity_path: IdentityPath
+    -bootnodes_path: Option<BootnodesPath>
+    +try_new(listen, agent, identity, bootnodes): HostResult<Self>
+  }
+  enum HostError <<enum>> {
+    EmptyListenAddr / EmptyAgentVersion / EmptyIdentityPath
+    InvalidListenAddr / InvalidIdentity / Bind / Transport
+    GossipsubInit / GossipSubscribe / AlreadyStarted ...
+  }
+}
+
+' relationships
+BlocksByRootRequest ..> NetworkingError
+BlocksByRootResponse ..> NetworkingError
+WireFns ..> NetworkingError
+
+DevnetHost ..> P2pService
+P2pService *-- Host
+P2pService o-- "SharedRpcProvider" RpcProvider
+Host ..> Topic
+Host ..> PublishError
+Host ..> RpcError
+Host ..> BlocksByRootResponse
+P2pService ..> GossipReceiver
+DevnetHost ..> HostOptions
+DevnetHost ..> HostError
+NoOpRpcProvider ..|> RpcProvider
+RpcProvider ..> Status
+RpcProvider ..> SignedBlock
+
+@enduml

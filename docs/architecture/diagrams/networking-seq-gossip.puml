@@ -1,0 +1,33 @@
+@startuml networking-seq-gossip
+title Networking — gossip publish + inbound receive
+
+actor Producer
+participant "Host" as Host
+participant "lean_wire" as Wire
+participant "swarm task" as Swarm
+participant "libp2p gossipsub" as Gossip
+participant "gossip handler" as Handler
+participant "BlockReceiver" as Rx
+actor Consumer
+
+== publish ==
+Producer -> Host : publish_block(&SignedBlock)
+Host -> Wire : encode_gossip(value)  (SSZ + snappy)
+Wire --> Host : payload
+Host -> Swarm : HostCommand::Publish { topic, payload, reply }
+Swarm -> Gossip : gossipsub.publish(topic, payload)
+Gossip --> Swarm : MessageId
+Swarm --> Host : reply(Ok(MessageId))
+Host --> Producer : Ok(MessageId)
+
+== inbound ==
+Gossip -> Swarm : SwarmEvent Gossipsub::Message
+Swarm -> Handler : route_gossipsub_message(id, msg, block_tx, vote_tx)
+Handler -> Handler : match topic == BLOCK_TOPIC_V1 / VOTE_TOPIC_V1
+Handler -> Wire : decode_gossip::<SignedBlock>(data)
+Wire --> Handler : SignedBlock
+Handler -> Rx : try_send(value)
+Consumer -> Rx : recv().await
+Rx --> Consumer : SignedBlock
+
+@enduml

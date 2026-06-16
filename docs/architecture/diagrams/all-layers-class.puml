@@ -1,0 +1,152 @@
+@startuml all-layers-class
+title lean-rust — Global All-Layers Class Diagram (curated key types + cross-layer relationships)
+
+skinparam linetype ortho
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+' ============ Domain / Data ============
+package "Domain / Data" #F4F9F4 {
+  class Bytes32 <<type>>
+  class Bytes4000 <<type>>
+  interface HashTreeRoot <<trait>>
+  class Config <<struct>>
+}
+
+' ============ Protocol / Consensus ============
+package "Protocol / Consensus" #F4F6FB {
+  class SignedBlock <<struct>>
+  class Block <<struct>>
+  class State <<struct>> {
+    +state_transition(sb, validate_root)
+  }
+  class Checkpoint <<struct>>
+  class "forkchoice::Store" as FcStore <<struct>> {
+    +produce_block(slot, validator)
+    +tick_interval(has_proposal)
+  }
+  class ProducedBlock <<struct>>
+}
+
+' ============ Storage ============
+package "Storage" #FBF8F4 {
+  interface "storage::Store" as StorageStore <<trait>> {
+    +save_accepted(root, block, state, head)
+    +load_head()
+  }
+  class MemoryStore <<struct>>
+  class HeadInfo <<struct>>
+}
+
+' ============ Networking ============
+package "Networking" #FBF4F9 {
+  class Status <<struct>>
+  class BlocksByRootRequest <<struct>>
+  class BlocksByRootResponse <<struct>>
+  interface RpcProvider <<trait>>
+  class P2pService <<struct>>
+  class Host <<struct>> {
+    +publish_block / publish_vote
+    +send_blocks_by_root
+  }
+}
+
+' ============ Runtime / Services ============
+package "Runtime / Services" #F4FBFB {
+  interface "lean_core::Service" as Service <<trait>> {
+    +start / stop / status
+  }
+  class Node <<struct>> {
+    +with_chain/p2p/sync/duties/http/metrics
+    +run(shutdown)
+  }
+  class ChainService <<struct>> {
+    +import_block / produce_block
+  }
+  class Engine <<struct>>
+  class ChainSnapshot <<struct>>
+  class "sync::Loop" as SyncLoop <<struct>>
+  interface "sync::Chain" as SyncChain <<trait>>
+  interface "sync::Network" as SyncNetwork <<trait>>
+  class DutiesService <<struct>>
+  interface "duties::Chain" as DutiesChain <<trait>>
+  interface "duties::Publisher" as DutiesPub <<trait>>
+  class LocalProposers <<struct>>
+  class HttpService <<struct>>
+}
+
+' ============ Application / Entry ============
+package "Application / Entry" #FFF4F4 {
+  class "node::new_devnet" as NewDevnet <<fn>>
+  class PublisherAdapter <<struct>>
+  class RpcProviderAdapter <<struct>>
+  class GossipIngestService <<struct>>
+  class Cli <<struct>>
+  class Main <<bin>>
+}
+
+' ---------- domain foundations ----------
+SignedBlock *-- Block
+Block o-- Bytes32
+Block ..> HashTreeRoot
+State o-- Checkpoint
+SignedBlock o-- Bytes4000 : signature (placeholder)
+
+' ---------- protocol -> forkchoice ----------
+FcStore *-- State
+FcStore *-- Block
+FcStore ..> ProducedBlock
+
+' ---------- storage persists protocol types ----------
+StorageStore ..> SignedBlock
+StorageStore ..> State
+StorageStore ..> HeadInfo
+HeadInfo o-- Checkpoint
+MemoryStore ..|> StorageStore
+
+' ---------- chain composes forkchoice + storage ----------
+Engine *-- FcStore
+ChainService *-- Engine
+ChainService o-- StorageStore
+ChainService *-- ChainSnapshot
+ChainService ..|> Service
+
+' ---------- ports realized by chain (adapters) ----------
+ChainService ..|> SyncChain : adapter
+ChainService ..|> DutiesChain : adapter
+SyncLoop o-- SyncChain
+SyncLoop o-- SyncNetwork
+SyncLoop ..|> Service
+DutiesService o-- DutiesChain
+DutiesService o-- DutiesPub
+DutiesService *-- LocalProposers
+DutiesService ..|> Service
+
+' ---------- networking realizes sync::Network + carries wire msgs ----------
+Host ..> Status
+Host ..> BlocksByRootRequest
+Host ..> BlocksByRootResponse
+P2pService *-- Host
+P2pService o-- RpcProvider
+SyncNetwork ..> Host : realized via node adapter
+
+' ---------- api reads storage ----------
+HttpService o-- StorageStore
+HttpService ..|> Service
+
+' ---------- core composes all services ----------
+Node o-- "6" Service
+
+' ---------- application wiring ----------
+NewDevnet ..> Node
+NewDevnet ..> ChainService
+NewDevnet ..> P2pService
+PublisherAdapter ..|> DutiesPub
+PublisherAdapter o-- P2pService
+RpcProviderAdapter ..|> RpcProvider
+RpcProviderAdapter o-- StorageStore
+GossipIngestService ..|> Service
+Main ..> Cli
+Main ..> NewDevnet
+
+@enduml
