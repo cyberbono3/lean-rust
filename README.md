@@ -6,6 +6,7 @@ This is the implementation of Lean Ethereum in Rust.
 > been reviewed yet. Use at your own risk.
 
 **[Download the Lean Consensus spec (PDF)](docs/lean_consensus.pdf?raw=true)**
+| [Architecture](docs/architecture/README.md)
 | [Devnet Guide](docs/local-pq-devnet0.md)
 
 ## What is lean-rust
@@ -33,7 +34,8 @@ for the full specification and background.
 
 ## Workspace
 
-lean-rust is a Cargo workspace. Core crates:
+lean-rust is a Cargo workspace. See the [architecture docs](docs/architecture/README.md)
+for layer maps and UML class/sequence diagrams. Core crates:
 
 | Crate | Purpose |
 | ----- | ------- |
