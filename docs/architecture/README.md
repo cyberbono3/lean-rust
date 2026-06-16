@@ -10,7 +10,8 @@ overview plus per-layer class and sequence diagrams.
 
 | File | Contents |
 | ---- | -------- |
-| [`global-class.md`](global-class.md) | Global class / crate-dependency diagram across all layers |
+| [`global-class.md`](global-class.md) | Global crate-dependency overview (primary type per crate + dependency edges) |
+| [`all-layers.md`](all-layers.md) | Consolidated all-layers class diagram (key types + cross-layer relationships) |
 | [`layers/domain.md`](layers/domain.md) | Domain / Data layer — `types`, `ssz`, `config` |
 | [`layers/protocol.md`](layers/protocol.md) | Protocol / Consensus — `protocol`, `forkchoice` |
 | [`layers/storage.md`](layers/storage.md) | Storage — `storage` |
