@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use lean_chain::ChainError;
 
-use super::ports::PublishError;
+use super::publisher::PublishError;
 
 /// Failures raised by the duties service.
 ///

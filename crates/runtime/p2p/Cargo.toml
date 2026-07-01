@@ -12,10 +12,11 @@ workspace = true
 
 [dependencies]
 lean-core         = { path = "../core" }
-p2p-rpc           = { path = "../p2p-rpc" }
+lean-chain        = { path = "../chain" }
 lean-wire         = { path = "../../networking" }
 protocol          = { path = "../../protocol" }
 config            = { path = "../../config" }
+storage           = { path = "../../storage" }
 ssz               = { path = "../../ssz" }
 types             = { path = "../../types" }
 tokio             = { workspace = true }
@@ -37,5 +38,9 @@ static_assertions = { workspace = true }
 
 [dev-dependencies]
 fixtures = { path = "../../fixtures" }
+# Enables the in-crate engine fixtures (`anchor_pair`) for the RPC
+# provider tests; feature-unification keeps `test-fixtures` off for a
+# plain `cargo build`.
+lean-chain  = { path = "../chain", features = ["test-fixtures"] }
 tempfile    = { workspace = true }
 tokio       = { workspace = true, features = ["test-util"] }

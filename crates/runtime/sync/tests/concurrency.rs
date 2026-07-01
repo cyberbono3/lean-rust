@@ -16,12 +16,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use lean_chain::engine::BlockImportResult;
-use lean_chain::ChainError;
+use lean_chain::Service as ChainService;
 use lean_core::Service as _;
-use lean_sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
+use lean_sync::{Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
 use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
-use protocol::{Checkpoint, SignedBlock, Slot};
+use protocol::{Checkpoint, Slot};
+use storage::{MemoryStore, Store};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use types::Bytes32;
@@ -33,15 +33,6 @@ fn cp(slot: u64) -> Checkpoint {
     Checkpoint::new(Bytes32::zero(), Slot::new(slot))
 }
 
-/// Local status pinned behind the peer so every walk proceeds past the
-/// `should_sync` check.
-fn behind() -> Status {
-    Status {
-        finalized: cp(0),
-        head: cp(0),
-    }
-}
-
 fn ahead() -> Status {
     // Non-zero head root so walk_back does not short-circuit on the
     // zero-root guard before issuing a BlocksByRoot request.
@@ -51,25 +42,15 @@ fn ahead() -> Status {
     }
 }
 
-/// Minimal chain: always behind, knows nothing, accepts imports.
-struct StubChain;
-
-#[async_trait]
-impl Chain for StubChain {
-    async fn local_status(&self) -> Result<Status, ChainError> {
-        Ok(behind())
-    }
-    async fn has_block(&self, _root: Bytes32) -> Result<bool, ChainError> {
-        Ok(false)
-    }
-    async fn import_block(&self, _block: SignedBlock) -> Result<BlockImportResult, ChainError> {
-        Ok(BlockImportResult::Accepted {
-            block_root: Bytes32::zero(),
-            parent_root: Bytes32::zero(),
-            post_state_root: Bytes32::zero(),
-            head_root: Bytes32::zero(),
-        })
-    }
+/// Genesis-fixture chain service: local status is pinned at genesis (head
+/// slot 0), behind the `ahead()` peer, and its empty store reports
+/// `has_block == false` so every walk proceeds past `should_sync` and
+/// issues a `BlocksByRoot` request.
+fn chain_service() -> Arc<ChainService> {
+    let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+    let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+    Arc::new(ChainService::new(engine, store))
 }
 
 /// Network whose `send_status` blocks on a gate (a 0-permit semaphore)
@@ -153,14 +134,14 @@ async fn concurrent_walks_capped_at_max_concurrent_peer_syncs() {
     const CAP: usize = 2;
     const PEERS: usize = 12;
 
-    let chain = Arc::new(StubChain);
+    let chain = chain_service();
     let network = Arc::new(GatedNetwork::new());
     let peers = ChannelPeers::new();
     let config = Config::default().with_max_concurrent_peer_syncs(NonZeroUsize::new(CAP).unwrap());
 
     let lp = Loop::new(
         config,
-        chain as Arc<dyn Chain>,
+        chain,
         Arc::clone(&network) as Arc<dyn Network>,
         peers.clone() as Arc<dyn PeerEventProvider>,
     );
@@ -202,13 +183,13 @@ async fn concurrent_walks_capped_at_max_concurrent_peer_syncs() {
 async fn same_peer_flap_yields_single_walk() {
     const FLAPS: usize = 100;
 
-    let chain = Arc::new(StubChain);
+    let chain = chain_service();
     let network = Arc::new(GatedNetwork::new());
     let peers = ChannelPeers::new();
 
     let lp = Loop::new(
         Config::default(),
-        chain as Arc<dyn Chain>,
+        chain,
         Arc::clone(&network) as Arc<dyn Network>,
         peers.clone() as Arc<dyn PeerEventProvider>,
     );
@@ -247,7 +228,7 @@ async fn request_timeout_aborts_walk_and_frees_permit() {
     // walk times out and frees the single permit, so peer-b's walk then
     // reaches its own request — request_calls climbs to 2 only because
     // the first walk aborted on timeout.
-    let chain = Arc::new(StubChain);
+    let chain = chain_service();
     let network = Arc::new(BlockingRpcNetwork::new());
     let peers = ChannelPeers::new();
     let config = Config::default()
@@ -256,7 +237,7 @@ async fn request_timeout_aborts_walk_and_frees_permit() {
 
     let lp = Loop::new(
         config,
-        chain as Arc<dyn Chain>,
+        chain,
         Arc::clone(&network) as Arc<dyn Network>,
         peers.clone() as Arc<dyn PeerEventProvider>,
     );
@@ -282,13 +263,13 @@ async fn stop_drains_with_peer_mid_rpc() {
     // return Ok by cancelling the per-peer child token — not hang until
     // the shutdown budget elapses or report "per-peer tasks did not
     // drain". (If cancellation regressed this test would hang.)
-    let chain = Arc::new(StubChain);
+    let chain = chain_service();
     let network = Arc::new(BlockingRpcNetwork::new());
     let peers = ChannelPeers::new();
 
     let lp = Loop::new(
         Config::default(),
-        chain as Arc<dyn Chain>,
+        chain,
         Arc::clone(&network) as Arc<dyn Network>,
         peers.clone() as Arc<dyn PeerEventProvider>,
     );

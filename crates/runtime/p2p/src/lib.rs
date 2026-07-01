@@ -19,9 +19,9 @@
 //!   `request_response::Behaviour` so multistream-select negotiates
 //!   the correct wire protocol per request. Inbound handlers source
 //!   the local `Status` and answer block-by-root queries through the
-//!   pluggable [`RpcProvider`] passed at construction; the default
-//!   [`NoOpRpcProvider`] keeps the lifecycle tests free of a storage
-//!   backend.
+//!   concrete [`RpcProvider`] passed at construction; the
+//!   [`RpcProvider::NoOp`] variant keeps the lifecycle tests free of a
+//!   storage backend.
 
 #![forbid(unsafe_code)]
 
@@ -40,5 +40,5 @@ pub use gossip::{BlockReceiver, GossipReceiver, MessageId, PublishError, Topic, 
 pub use host::keypair::load_existing_peer_id;
 pub use host::Host;
 pub use options::{AgentVersion, BootnodesPath, HostOptions, IdentityPath, ListenAddr};
-pub use rpc::{NoOpRpcProvider, RpcError, RpcProvider, RpcRequest, RpcResponse};
+pub use rpc::{RpcError, RpcProvider, RpcRequest, RpcResponse};
 pub use service::P2pService;

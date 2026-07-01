@@ -13,38 +13,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use lean_chain::engine::BlockImportResult;
-use lean_chain::ChainError;
+use lean_chain::Service as ChainService;
 use lean_core::Service as _;
-use lean_sync::{Chain, Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
+use lean_sync::{Config, Loop, Network, PeerEventProvider, PeerId, SyncError};
 use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use parking_lot::Mutex;
 use protocol::SignedBlock;
 use static_assertions::assert_impl_all;
+use storage::{MemoryStore, Store};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use types::Bytes32;
 
 assert_impl_all!(Loop: Send, Sync);
 assert_impl_all!(SyncError: Send, Sync, std::error::Error);
 
-// ---- Minimal no-op fakes --------------------------------------------------
+// ---- Fixtures -------------------------------------------------------------
 
-struct NoopChain;
-
-#[async_trait]
-impl Chain for NoopChain {
-    async fn local_status(&self) -> Result<Status, ChainError> {
-        Ok(Status::default())
-    }
-    async fn has_block(&self, _root: Bytes32) -> Result<bool, ChainError> {
-        Ok(true)
-    }
-    async fn import_block(&self, _signed: SignedBlock) -> Result<BlockImportResult, ChainError> {
-        Ok(BlockImportResult::DuplicateBlock {
-            block_root: Bytes32::zero(),
-        })
-    }
+/// Genesis-fixture chain service. The lifecycle tests never push a peer
+/// event, so the chain surface is held but not exercised.
+fn chain_service() -> Arc<ChainService> {
+    let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+    let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+    Arc::new(ChainService::new(engine, store))
 }
 
 struct NoopNetwork;
@@ -92,7 +83,7 @@ fn build_noop_loop() -> Loop {
     let (peers, _) = ScriptedPeers::new();
     Loop::new(
         Config::default(),
-        Arc::new(NoopChain),
+        chain_service(),
         Arc::new(NoopNetwork),
         peers,
     )
