@@ -4,9 +4,8 @@
 //! field of [`Config`] is an always-valid newtype ([`ValidatorsPath`],
 //! [`ValidatorGroup`], [`GenesisTimeUnix`]) whose constructor encodes
 //! the invariant. The infallible [`Config::new`] then takes pre-typed
-//! arguments; the convenience [`Config::try_new`] accepts loose input
-//! and routes it through the newtype constructors. There is no
-//! separate `validate()` step — invalid state cannot be constructed.
+//! arguments, so invalid state cannot be constructed — there is no
+//! separate `validate()` step.
 //!
 //! The same idiom is used by [`crate::sync::Config`], whose
 //! `max_sync_depth` is a [`core::num::NonZeroUsize`].
@@ -129,19 +128,6 @@ impl ValidatorsPath {
     pub fn as_path(&self) -> &Path {
         &self.0
     }
-
-    /// Returns the path as a [`&PathBuf`]. Useful when callers need to
-    /// pass `&PathBuf` to APIs that accept it by reference.
-    #[must_use]
-    pub const fn as_path_buf(&self) -> &PathBuf {
-        &self.0
-    }
-
-    /// Consumes the wrapper and returns the underlying [`PathBuf`].
-    #[must_use]
-    pub fn into_path_buf(self) -> PathBuf {
-        self.0
-    }
 }
 
 impl AsRef<Path> for ValidatorsPath {
@@ -205,12 +191,6 @@ impl ValidatorGroup {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Consumes the wrapper and returns the underlying [`String`].
-    #[must_use]
-    pub fn into_string(self) -> String {
-        self.0
-    }
 }
 
 impl AsRef<str> for ValidatorGroup {
@@ -252,16 +232,14 @@ pub struct Config {
     validator_group: ValidatorGroup,
     genesis_time_unix: GenesisTimeUnix,
     /// Slot duration in milliseconds. [`NonZeroU64`] so the scheduler
-    /// cannot divide by zero. Defaults to [`DEFAULT_SLOT_DURATION_MS`];
-    /// override through [`Config::with_slot_duration_ms`].
+    /// cannot divide by zero. Sourced from [`DEFAULT_SLOT_DURATION_MS`].
     slot_duration_ms: NonZeroU64,
 }
 
 impl Config {
     /// Builds a configuration from pre-typed inputs. Infallible: every
     /// argument is an always-valid newtype. `slot_duration_ms` is seeded
-    /// to [`DEFAULT_SLOT_DURATION_MS`]; override via
-    /// [`Self::with_slot_duration_ms`].
+    /// to [`DEFAULT_SLOT_DURATION_MS`].
     #[must_use = "building a Config without using it discards the construction"]
     pub const fn new(
         validators_path: ValidatorsPath,
@@ -274,25 +252,6 @@ impl Config {
             genesis_time_unix,
             slot_duration_ms: DEFAULT_SLOT_DURATION_MS,
         }
-    }
-
-    /// Convenience: builds a [`Config`] from loose inputs, routing
-    /// them through the newtype constructors.
-    ///
-    /// # Errors
-    /// Forwards every variant raised by [`ValidatorsPath::new`] /
-    /// [`ValidatorGroup::new`].
-    #[must_use = "building a Config without using it discards the construction"]
-    pub fn try_new(
-        validators_path: impl Into<PathBuf>,
-        validator_group: impl Into<String>,
-        genesis_time_unix: GenesisTimeUnix,
-    ) -> DutiesResult<Self> {
-        Ok(Self::new(
-            ValidatorsPath::new(validators_path)?,
-            ValidatorGroup::new(validator_group)?,
-            genesis_time_unix,
-        ))
     }
 
     /// Returns the validator-assignment file path.
@@ -365,22 +324,6 @@ impl Config {
     pub const fn with_genesis_time_unix(mut self, genesis_time_unix: GenesisTimeUnix) -> Self {
         self.genesis_time_unix = genesis_time_unix;
         self
-    }
-
-    /// Returns a copy with `slot_duration_ms` overridden, rejecting a
-    /// zero value at the loose-input boundary (the stored field is a
-    /// [`NonZeroU64`]).
-    ///
-    /// Accepts any non-zero value — in particular the spec's devnet0
-    /// value of `4000`. Only `0` is rejected.
-    ///
-    /// # Errors
-    /// [`DutiesError::ZeroSlotDuration`] when `slot_duration_ms` is `0`.
-    #[must_use = "builder returns a new Config — discarding it drops your override"]
-    pub fn with_slot_duration_ms(mut self, slot_duration_ms: u64) -> DutiesResult<Self> {
-        self.slot_duration_ms =
-            NonZeroU64::new(slot_duration_ms).ok_or(DutiesError::ZeroSlotDuration)?;
-        Ok(self)
     }
 }
 
@@ -563,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn default_matches_try_new_with_constants() {
+    fn default_matches_new_with_constants() {
         // Regression guard: `Default` routes through `Config::new` via
         // `default_validators_path()` / `default_validator_group()`, so
         // it cannot drift away from the public constructor. If anyone
@@ -571,44 +514,12 @@ mod tests {
         // newtype constructor rejects, the `unreachable!()` arm fires
         // here at test time instead of shipping silently.
         let from_default = Config::default();
-        let from_try_new = Config::try_new(
-            DEFAULT_VALIDATORS_PATH,
-            DEFAULT_VALIDATOR_GROUP,
+        let from_new = Config::new(
+            ValidatorsPath::new(DEFAULT_VALIDATORS_PATH).unwrap(),
+            ValidatorGroup::new(DEFAULT_VALIDATOR_GROUP).unwrap(),
             GenesisTimeUnix::EPOCH,
-        )
-        .unwrap();
-        assert_eq!(from_default, from_try_new);
-    }
-
-    #[test]
-    fn try_new_accepts_loose_inputs() {
-        let cfg = Config::try_new(
-            "fixtures/validators.yaml",
-            "ream",
-            GenesisTimeUnix::new(1_700_000_000),
-        )
-        .unwrap();
-        assert_eq!(cfg.validators_path(), Path::new("fixtures/validators.yaml"));
-        assert_eq!(cfg.validator_group(), "ream");
-        assert_eq!(cfg.genesis_time_unix().as_secs(), 1_700_000_000);
-    }
-
-    #[test]
-    fn try_new_trims_group_whitespace() {
-        let cfg = Config::try_new("p", "  ream  ", GenesisTimeUnix::EPOCH).unwrap();
-        assert_eq!(cfg.validator_group(), "ream");
-    }
-
-    #[test]
-    fn try_new_rejects_empty_path() {
-        let err = Config::try_new("", "ream", GenesisTimeUnix::EPOCH).unwrap_err();
-        assert!(matches!(err, DutiesError::EmptyValidatorsPath));
-    }
-
-    #[test]
-    fn try_new_rejects_empty_group() {
-        let err = Config::try_new("p", "", GenesisTimeUnix::EPOCH).unwrap_err();
-        assert!(matches!(err, DutiesError::EmptyValidatorGroup));
+        );
+        assert_eq!(from_default, from_new);
     }
 
     #[test]
@@ -646,25 +557,6 @@ mod tests {
     fn default_slot_duration_is_devnet_value() {
         assert_eq!(Config::default().slot_duration_ms().get(), 4_000);
         assert_eq!(DEFAULT_SLOT_DURATION_MS.get(), 4_000);
-    }
-
-    #[test]
-    fn with_slot_duration_ms_accepts_spec_value() {
-        // Spec guardrail: 4000 ms must be accepted, not rejected.
-        let cfg = Config::default().with_slot_duration_ms(4_000).unwrap();
-        assert_eq!(cfg.slot_duration_ms().get(), 4_000);
-    }
-
-    #[test]
-    fn with_slot_duration_ms_accepts_arbitrary_non_zero() {
-        let cfg = Config::default().with_slot_duration_ms(1).unwrap();
-        assert_eq!(cfg.slot_duration_ms().get(), 1);
-    }
-
-    #[test]
-    fn with_slot_duration_ms_rejects_zero() {
-        let err = Config::default().with_slot_duration_ms(0).unwrap_err();
-        assert!(matches!(err, DutiesError::ZeroSlotDuration), "got {err:?}");
     }
 
     // -- ensure_runnable (genesis guard) ------------------------------------
