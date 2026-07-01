@@ -1,5 +1,6 @@
-//! Verifies `sync::Chain for chain::Service` via the real engine + a
-//! `MemoryStore`. Covers `local_status` snapshot semantics and
+//! Verifies the concrete `chain::Service` surface the sync `Loop` calls
+//! (the former `sync::Chain` port collapsed to it), via the real engine +
+//! a `MemoryStore`. Covers `local_status` snapshot semantics and
 //! `has_block` consistency before / after `import_block`.
 
 #![allow(
@@ -17,7 +18,6 @@ use lean_chain::engine::test_fixtures::{
 };
 use lean_chain::engine::BlockImportResult;
 use lean_chain::Service;
-use lean_sync::Chain as SyncChain;
 use protocol::{Slot, ValidatorIndex};
 use ssz::HashTreeRoot;
 use storage::MemoryStore;
@@ -31,7 +31,7 @@ fn build_service() -> Service {
 #[tokio::test(flavor = "current_thread")]
 async fn local_status_reflects_engine_head_after_import() {
     let svc = build_service();
-    let pre = SyncChain::local_status(&svc).await.unwrap();
+    let pre = svc.local_status();
 
     // Drive one accepted import and re-read.
     let producer = sibling_engine();
@@ -42,7 +42,7 @@ async fn local_status_reflects_engine_head_after_import() {
         other => panic!("expected Accepted, got {other:?}"),
     };
 
-    let post = SyncChain::local_status(&svc).await.unwrap();
+    let post = svc.local_status();
     // Snapshot reflects the engine-reported head after import.
     assert_eq!(post.head.root, head_root_after_import);
     // Genesis finalized checkpoint did not move.
@@ -56,9 +56,9 @@ async fn has_block_reports_true_after_import() {
     let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
     let block_root: Bytes32 = signed.message.hash_tree_root().into();
 
-    assert!(!SyncChain::has_block(&svc, block_root).await.unwrap());
+    assert!(!svc.has_block(&block_root).unwrap());
     let _ = Service::import_block(&svc, signed).await.unwrap();
-    assert!(SyncChain::has_block(&svc, block_root).await.unwrap());
+    assert!(svc.has_block(&block_root).unwrap());
 }
 
 /// `Engine` access through the service requires a public hook; for tests

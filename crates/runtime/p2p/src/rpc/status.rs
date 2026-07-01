@@ -31,7 +31,7 @@ pub(crate) fn on_inbound(
     peer_status: &Status,
     channel: ResponseChannel<RpcResponse>,
     swarm: &mut Swarm<DevnetBehaviour>,
-    provider: &dyn RpcProvider,
+    provider: &RpcProvider,
 ) {
     let local = provider.local_status();
     if !validate(&local, peer_status) {
@@ -52,7 +52,7 @@ pub(crate) fn on_outbound_response(
     peer: PeerId,
     peer_status: &Status,
     swarm: &mut Swarm<DevnetBehaviour>,
-    provider: &dyn RpcProvider,
+    provider: &RpcProvider,
 ) {
     let local = provider.local_status();
     if !validate(&local, peer_status) {

@@ -14,21 +14,21 @@ use tracing::{debug, info};
 use crate::error::HostResult;
 use crate::host::{behaviour::DevnetBehaviour, bootnodes, keypair, transport};
 use crate::options::HostOptions;
-use crate::rpc::{NoOpRpcProvider, RpcProvider};
+use crate::rpc::RpcProvider;
 use crate::service::P2pService;
 
 /// Front-door builder. Construction-only — does not bind the listener.
 pub struct DevnetHost;
 
 impl DevnetHost {
-    /// Builds a [`P2pService`] with a [`NoOpRpcProvider`] — convenient
+    /// Builds a [`P2pService`] with a [`RpcProvider::NoOp`] — convenient
     /// for lifecycle tests that do not need real RPC. Operational
     /// deployments must use [`Self::build_with_provider`].
     ///
     /// # Errors
     /// Same shape as [`Self::build_with_provider`].
     pub fn build(options: HostOptions) -> HostResult<P2pService> {
-        Self::build_with_provider(options, Arc::new(NoOpRpcProvider))
+        Self::build_with_provider(options, Arc::new(RpcProvider::NoOp))
     }
 
     /// Builds a [`P2pService`] backed by the supplied [`RpcProvider`].
@@ -50,7 +50,7 @@ impl DevnetHost {
     ///   error — config is wholly internal).
     pub fn build_with_provider(
         options: HostOptions,
-        provider: Arc<dyn RpcProvider>,
+        provider: Arc<RpcProvider>,
     ) -> HostResult<P2pService> {
         let identity_path = options.identity_path().as_path().to_path_buf();
         let keypair = keypair::load_or_generate(options.identity_path())?;

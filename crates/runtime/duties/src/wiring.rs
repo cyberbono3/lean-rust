@@ -1,11 +1,11 @@
 //! Compile-time wiring proofs for the duties crate.
 //!
-//! Asserts that [`lean_chain::Service`] satisfies the
-//! [`crate::Chain`] port. The [`crate::Publisher`] port has no
-//! in-crate impl (per Decision 7 / Issue #37); the `node` crate
-//! provides the libp2p-backed adapter, and the static assertion for
-//! that lives there.
+//! The `Chain` / `Publisher` port traits were collapsed to concrete
+//! types, so the surviving proof is that the concrete [`crate::Service`]
+//! still implements the [`lean_core::Service`] lifecycle trait and is
+//! shareable across tasks (`Send + Sync`) — the composition root stores
+//! it behind `Arc<dyn lean_core::Service>`.
 
 use static_assertions::assert_impl_all;
 
-assert_impl_all!(lean_chain::Service: crate::ports::Chain);
+assert_impl_all!(crate::Service: lean_core::Service, Send, Sync);

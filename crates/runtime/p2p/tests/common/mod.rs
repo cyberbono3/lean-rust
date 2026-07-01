@@ -9,8 +9,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use lean_p2p_host::{DevnetHost, HostOptions, P2pService};
-use p2p_rpc::RpcProvider;
+use lean_p2p_host::{DevnetHost, HostOptions, P2pService, RpcProvider};
 use tempfile::{tempdir, TempDir};
 
 /// Loopback QUIC-v1 listen address with an ephemeral port. Every test
@@ -43,8 +42,8 @@ pub fn build_service() -> (TempDir, P2pService) {
 }
 
 /// Like [`build_service`] but wires the given [`RpcProvider`] instead
-/// of the default `NoOpRpcProvider`.
-pub fn build_service_with(provider: Arc<dyn RpcProvider>) -> (TempDir, P2pService) {
+/// of the default [`RpcProvider::NoOp`].
+pub fn build_service_with(provider: Arc<RpcProvider>) -> (TempDir, P2pService) {
     let dir = tempdir().unwrap();
     let service = DevnetHost::build_with_provider(options_in(dir.path(), None), provider).unwrap();
     (dir, service)

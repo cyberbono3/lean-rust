@@ -18,7 +18,7 @@ use crate::host::behaviour::DevnetBehaviour;
 /// beyond the provider lookups.
 pub(crate) fn build_response(
     request: &BlocksByRootRequest,
-    provider: &dyn RpcProvider,
+    provider: &RpcProvider,
 ) -> BlocksByRootResponse {
     let blocks = request
         .roots()
@@ -43,7 +43,7 @@ pub(crate) fn on_inbound(
     request: &BlocksByRootRequest,
     channel: ResponseChannel<RpcResponse>,
     swarm: &mut Swarm<DevnetBehaviour>,
-    provider: &dyn RpcProvider,
+    provider: &RpcProvider,
 ) {
     let response = build_response(request, provider);
     debug!(
@@ -62,38 +62,28 @@ pub(crate) fn on_inbound(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use lean_wire::Status;
     use protocol::SignedBlock;
-    use std::collections::HashMap;
+    use std::sync::Arc;
+    use storage::{MemoryStore, Store};
     use types::Bytes32;
-
-    /// Stub provider that answers from an in-memory map. Unknown roots
-    /// return `None`.
-    struct MapProvider {
-        blocks: HashMap<Bytes32, SignedBlock>,
-    }
-
-    impl RpcProvider for MapProvider {
-        fn get_block_by_root(&self, root: &Bytes32) -> Option<SignedBlock> {
-            self.blocks.get(root).cloned()
-        }
-
-        fn local_status(&self) -> Status {
-            Status::default()
-        }
-    }
 
     fn root(byte: u8) -> Bytes32 {
         Bytes32::new([byte; 32])
     }
 
-    fn provider_with(known: &[u8]) -> MapProvider {
-        MapProvider {
-            blocks: known
-                .iter()
-                .map(|&b| (root(b), SignedBlock::default()))
-                .collect(),
+    /// Builds a `Chain` provider whose block store is seeded with the
+    /// given roots (each mapped to a default block). Unknown roots return
+    /// `None`. The chain handle is a genesis fixture; only the store is
+    /// exercised by `get_block_by_root`.
+    fn provider_with(known: &[u8]) -> RpcProvider {
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+        for &b in known {
+            store.save_block(root(b), SignedBlock::default()).unwrap();
         }
+        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+        let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
+        let chain = Arc::new(lean_chain::Service::new(engine, Arc::clone(&store)));
+        RpcProvider::chain(chain, store)
     }
 
     #[test]
