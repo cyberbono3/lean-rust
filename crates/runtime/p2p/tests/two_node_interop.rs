@@ -16,16 +16,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use lean_core::Service;
-use lean_p2p_host::{DevnetHost, Host, NoOpRpcProvider, P2pService, PublishError, RpcProvider};
-use lean_wire::{BlocksByRootRequest, Status};
+use lean_p2p_host::{DevnetHost, Host, P2pService, PublishError, RpcProvider};
+use lean_wire::BlocksByRootRequest;
 use libp2p::{Multiaddr, PeerId};
-use protocol::{Block, BlockBody, Checkpoint, SignedBlock, Slot, ValidatorIndex};
+use protocol::{Block, BlockBody, SignedBlock, Slot, ValidatorIndex};
+use storage::{MemoryStore, Store};
 
 mod common;
 use common::options_in;
@@ -47,24 +48,6 @@ const PUBLISH_BACKOFF: Duration = Duration::from_millis(50);
 /// Bound on draining the inbound block channel for a target root.
 const GOSSIP_DELIVERY_DEADLINE: Duration = Duration::from_secs(5);
 
-/// In-memory [`RpcProvider`] holding a fixed block set and a static
-/// `Status` value. Mirrors the shape of the in-`src/` `MapProvider`
-/// kept here so the integration crate stays free-standing.
-struct StoreProvider {
-    blocks: HashMap<Bytes32, SignedBlock>,
-    status: Status,
-}
-
-impl RpcProvider for StoreProvider {
-    fn get_block_by_root(&self, root: &Bytes32) -> Option<SignedBlock> {
-        self.blocks.get(root).cloned()
-    }
-
-    fn local_status(&self) -> Status {
-        self.status
-    }
-}
-
 /// Builds a [`SignedBlock`] with a non-default `slot`/`proposer_index`
 /// pair so two seeds produce distinct tree roots. Returns the block and
 /// its hash-tree-root keyed by the [`StoreProvider`].
@@ -84,18 +67,19 @@ fn block_with_seed(slot: u64, proposer: u64) -> (SignedBlock, Bytes32) {
     (signed, root)
 }
 
-/// Constructs a `StoreProvider` from a slice of `(block, root)` pairs and
-/// a matching `Status`.
-fn store_provider(blocks: &[(SignedBlock, Bytes32)], status: Status) -> Arc<StoreProvider> {
-    let map = blocks
-        .iter()
-        .cloned()
-        .map(|(b, r)| (r, b))
-        .collect::<HashMap<_, _>>();
-    Arc::new(StoreProvider {
-        blocks: map,
-        status,
-    })
+/// Builds a `Chain` [`RpcProvider`] over a genesis-fixture engine whose
+/// store is pre-seeded with `blocks`. Two providers built this way share
+/// the same genesis, so their `local_status` values match and the Status
+/// handshake accepts on both sides.
+fn chain_provider_with_blocks(blocks: &[(SignedBlock, Bytes32)]) -> Arc<RpcProvider> {
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+    for (block, root) in blocks {
+        store.save_block(*root, block.clone()).unwrap();
+    }
+    let (state, anchor) = lean_chain::engine::test_fixtures::anchor_pair(4);
+    let engine = lean_chain::engine::Engine::from_anchor(state, anchor).unwrap();
+    let chain = Arc::new(lean_chain::Service::new(engine, Arc::clone(&store)));
+    Arc::new(RpcProvider::chain(chain, store))
 }
 
 /// Writes a one-line bootnodes YAML pointing at `peer_id` reachable at
@@ -127,7 +111,7 @@ struct NodeHandle {
 }
 
 /// Builds a service backed by `provider` and starts it.
-async fn start_node(provider: Arc<dyn RpcProvider>, bootnodes: Option<&Path>) -> NodeHandle {
+async fn start_node(provider: Arc<RpcProvider>, bootnodes: Option<&Path>) -> NodeHandle {
     let dir = tempdir().unwrap();
     let service =
         DevnetHost::build_with_provider(options_in(dir.path(), bootnodes), provider).unwrap();
@@ -150,8 +134,8 @@ async fn start_node(provider: Arc<dyn RpcProvider>, bootnodes: Option<&Path>) ->
 /// then B starts with a bootnodes file pointing at A. The returned
 /// [`TempDir`] holds the bootnodes file and must outlive both nodes.
 async fn start_pair(
-    provider_a: Arc<dyn RpcProvider>,
-    provider_b: Arc<dyn RpcProvider>,
+    provider_a: Arc<RpcProvider>,
+    provider_b: Arc<RpcProvider>,
 ) -> (NodeHandle, NodeHandle, TempDir) {
     let a = start_node(provider_a, None).await;
     let bootnodes_dir = tempdir().unwrap();
@@ -174,7 +158,7 @@ async fn status_handshake_completes_on_dial() {
         // a bootnodes file pointing at A the swarm task fires the
         // Status handshake automatically on `ConnectionEstablished`.
         let (a, b, _bootnodes_dir) =
-            start_pair(Arc::new(NoOpRpcProvider), Arc::new(NoOpRpcProvider)).await;
+            start_pair(Arc::new(RpcProvider::NoOp), Arc::new(RpcProvider::NoOp)).await;
 
         // Proof: an RPC round-trip succeeds. A mismatched Status would
         // have triggered `disconnect_peer_id` in the inbound handler,
@@ -206,15 +190,14 @@ async fn gossip_and_blocks_by_root_converge() {
         let (b1, r1) = block_with_seed(2, 2);
         assert_ne!(r0, r1, "seeds must produce distinct block roots");
 
-        // Both providers report the same `Status`, so the handshake
-        // accepts on both sides.
-        let status = Status {
-            finalized: Checkpoint::new(Bytes32::zero(), Slot::new(0)),
-            head: Checkpoint::new(Bytes32::zero(), Slot::new(0)),
-        };
-        let provider_a = store_provider(&[(b0.clone(), r0), (b1.clone(), r1)], status);
+        // Both providers are Chain-backed over the same genesis fixture,
+        // so their `local_status` matches and the handshake accepts on
+        // both sides. A's store is seeded with the two blocks; B's is
+        // empty (it converges via gossip + BlocksByRoot).
+        let provider_a = chain_provider_with_blocks(&[(b0.clone(), r0), (b1.clone(), r1)]);
+        let provider_b = chain_provider_with_blocks(&[]);
 
-        let (a, b, _bootnodes_dir) = start_pair(provider_a, Arc::new(NoOpRpcProvider)).await;
+        let (a, b, _bootnodes_dir) = start_pair(provider_a, provider_b).await;
 
         let mut block_rx = b
             .service

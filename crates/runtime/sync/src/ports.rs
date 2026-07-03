@@ -1,14 +1,14 @@
-//! Port traits consumed by the sync [`Loop`](super::Loop).
+//! Network port traits consumed by the sync [`Loop`](super::Loop).
 //!
-//! Following the dependency-inversion pattern: this module declares
-//! the traits, and adapters in the `node` crate (libp2p-backed) and
-//! the [`crate::Service`] adapter implement them. The sync module
-//! compiles with zero `libp2p` exposure on its dependency graph.
+//! The chain surface was collapsed to the concrete
+//! [`lean_chain::Service`]; the outbound [`Network`] and
+//! [`PeerEventProvider`] ports remain as traits until the concrete p2p
+//! handle lands, so tests still supply in-memory fakes.
 //!
 //! # Trait bounds
 //!
 //! Each trait carries `Send + Sync + 'static` because [`Loop`] holds
-//! its ports as `Arc<dyn Trait>` and shares them across spawned tasks.
+//! these ports as `Arc<dyn Trait>` and shares them across spawned tasks.
 //!
 //! # Cancellation
 //!
@@ -19,36 +19,11 @@
 //! this contract MUST document the deviation per method.
 
 use async_trait::async_trait;
-use lean_chain::engine::BlockImportResult;
 use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
-use protocol::SignedBlock;
 use tokio::sync::mpsc;
-use types::Bytes32;
-
-use lean_chain::ChainError;
 
 use crate::error::SyncError;
 use crate::peer_id::PeerId;
-
-/// Narrow chain-facing surface required by the sync loop.
-///
-/// Implemented by [`crate::Service`] in this crate; consumers that mock
-/// the chain in tests supply their own implementation.
-#[async_trait]
-pub trait Chain: Send + Sync + 'static {
-    /// Returns the local node's current [`Status`] for the handshake.
-    ///
-    /// Backed by the eventually-consistent
-    /// [`ChainSnapshot`](crate::ChainSnapshot); peer handshake tolerates
-    /// a snapshot lag of one tick / one accepted import.
-    async fn local_status(&self) -> Result<Status, ChainError>;
-
-    /// Reports whether `root` is already known to local storage.
-    async fn has_block(&self, root: Bytes32) -> Result<bool, ChainError>;
-
-    /// Imports `block` through the engine.
-    async fn import_block(&self, block: SignedBlock) -> Result<BlockImportResult, ChainError>;
-}
 
 /// Outbound peer RPC surface required by the sync loop.
 ///

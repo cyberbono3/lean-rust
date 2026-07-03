@@ -7,15 +7,12 @@ use anyhow::Context;
 use lean_api::{HttpService, MetricsService, Recorder};
 use lean_chain::Service as ChainService;
 use lean_core::{Node, NodeConfig};
-use lean_p2p_host::{DevnetHost, HostOptions};
-use p2p_rpc::RpcProvider;
+use lean_p2p_host::{DevnetHost, HostOptions, RpcProvider};
 use protocol::{Block, Checkpoint, SignedBlock, Slot, State};
 use storage::{HeadInfo, MemoryStore, Store};
 use types::{Bytes32, Bytes4000};
 
 use crate::gossip_ingest::GossipIngestService;
-use crate::publisher_adapter::PublisherAdapter;
-use crate::rpc_provider::RpcProviderAdapter;
 
 /// Result type returned by node composition.
 pub type Result<T> = anyhow::Result<T>;
@@ -87,10 +84,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     )?;
     let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
 
-    let rpc_provider: Arc<dyn RpcProvider> = Arc::new(RpcProviderAdapter::new(
-        Arc::clone(&chain),
-        Arc::clone(&store),
-    ));
+    let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
     let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider)?);
     let gossip_ingest = Arc::new(GossipIngestService::new(
         Arc::clone(&p2p),
@@ -100,7 +94,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     let duties = Arc::new(lean_duties::Service::new(
         duties,
         chain.clone(),
-        Arc::new(PublisherAdapter::new(Arc::clone(&p2p))),
+        Arc::new(lean_duties::Publisher::new(Arc::clone(&p2p))),
     ));
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));

@@ -14,7 +14,6 @@ members = [
     "crates/runtime/sync",
     "crates/runtime/duties",
     "crates/runtime/p2p",
-    "crates/runtime/p2p-rpc",
     "crates/runtime/api",
     "crates/node",
     "crates/lean-cli",

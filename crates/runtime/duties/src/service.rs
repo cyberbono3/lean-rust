@@ -23,10 +23,12 @@ use tokio::time::{sleep_until, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
 
+use lean_chain::Service as ChainService;
+
 use super::config::{Config, GenesisTimeUnix};
 use super::error::{DutiesError, DutiesResult};
-use super::ports::{Chain, Publisher};
 use super::proposer::LocalProposers;
+use super::publisher::Publisher;
 use super::validators::ValidatorAssignments;
 
 /// Handle to the running scheduler worker: the spawned `JoinHandle` and
@@ -39,18 +41,15 @@ struct RunHandle {
 
 /// Narrow devnet0 duties service.
 ///
-/// Construct via [`Service::new`]; supply impls of [`Chain`] (the chain
-/// service in production, an in-memory fake in tests) and [`Publisher`]
-/// (the `node`-level libp2p adapter in production, a mock in tests).
-///
-/// Generic over the concrete `Chain` / `Publisher` impls (`Arc<C>` /
-/// `Arc<P>`, not trait objects) so the native `async fn` ports avoid a
-/// boxed-future allocation per call (#27). The composition root stores
-/// the constructed `Service<C, P>` behind `Arc<dyn lean_core::Service>`.
-pub struct Service<C: Chain, P: Publisher> {
+/// Construct via [`Service::new`] with the concrete [`ChainService`]
+/// (block/attestation production) and the concrete [`Publisher`] (the
+/// libp2p gossip host). The former `Chain` / `Publisher` port traits
+/// collapsed to these concrete handles; the composition root stores the
+/// constructed `Service` behind `Arc<dyn lean_core::Service>`.
+pub struct Service {
     config: Config,
-    chain: Arc<C>,
-    publisher: Arc<P>,
+    chain: Arc<ChainService>,
+    publisher: Arc<Publisher>,
     /// Cached `(slot_duration, vote_due_offset)` derived from
     /// `config::DEVNET_CONFIG`. Cached so the scheduler doesn't
     /// re-multiply on every iteration.
@@ -130,7 +129,7 @@ impl PublishHealth {
     }
 }
 
-impl<C: Chain, P: Publisher> core::fmt::Debug for Service<C, P> {
+impl core::fmt::Debug for Service {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let state = self.state.lock();
         f.debug_struct("Service")
@@ -143,7 +142,7 @@ impl<C: Chain, P: Publisher> core::fmt::Debug for Service<C, P> {
     }
 }
 
-impl<C: Chain, P: Publisher> Service<C, P> {
+impl Service {
     /// Builds a duties service. [`Config`] is already validated at
     /// construction (parse-don't-validate), so this method is
     /// infallible at the field level — it cannot reject a malformed
@@ -151,7 +150,7 @@ impl<C: Chain, P: Publisher> Service<C, P> {
     /// [`Service::start`], not here, so a missing fixture file does
     /// not prevent service composition.
     #[must_use]
-    pub fn new(config: Config, chain: Arc<C>, publisher: Arc<P>) -> Self {
+    pub fn new(config: Config, chain: Arc<ChainService>, publisher: Arc<Publisher>) -> Self {
         let slot_duration_ms = config.slot_duration_ms().get();
         let slot_duration = Duration::from_millis(slot_duration_ms);
         // Integer math: slot_duration_ms * bps / 10_000. The
@@ -186,7 +185,7 @@ impl<C: Chain, P: Publisher> Service<C, P> {
     }
 }
 
-impl<C: Chain, P: Publisher> Drop for Service<C, P> {
+impl Drop for Service {
     /// Best-effort cleanup if the service is dropped without going
     /// through [`lean_core::Service::stop`]: cancel the shared token
     /// so the worker exits on its next iteration. The handle detaches;
@@ -200,7 +199,7 @@ impl<C: Chain, P: Publisher> Drop for Service<C, P> {
 }
 
 #[async_trait]
-impl<C: Chain, P: Publisher> lean_core::Service for Service<C, P> {
+impl lean_core::Service for Service {
     fn name(&self) -> &'static str {
         "duties"
     }
@@ -388,9 +387,9 @@ impl Progress {
     }
 }
 
-struct Worker<C: Chain, P: Publisher> {
-    chain: Arc<C>,
-    publisher: Arc<P>,
+struct Worker {
+    chain: Arc<ChainService>,
+    publisher: Arc<Publisher>,
     /// Shared immutable slice of locally assigned validators.
     /// `Arc<[T]>` (vs `Arc<Vec<T>>`) keeps one heap allocation and
     /// drops the unused `capacity` field — idiomatic Rust for
@@ -410,7 +409,7 @@ struct Worker<C: Chain, P: Publisher> {
     health: HealthSink,
 }
 
-impl<C: Chain, P: Publisher> Worker<C, P> {
+impl Worker {
     #[instrument(level = "debug", name = "duties.worker", skip_all)]
     async fn run(mut self) {
         loop {
@@ -624,48 +623,41 @@ impl<C: Chain, P: Publisher> Worker<C, P> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::ports::PublishError;
     use anyhow::anyhow;
-    use protocol::{SignedBlock, SignedVote};
+    use storage::{MemoryStore, Store};
+    use tempfile::TempDir;
 
-    /// Trivial chain that produces zero-shaped blocks/votes for the
-    /// construction-time tests below.
-    struct NoopChain;
-
-    impl Chain for NoopChain {
-        async fn produce_block(
-            &self,
-            _slot: Slot,
-            _validator: ValidatorIndex,
-        ) -> Result<SignedBlock, lean_chain::ChainError> {
-            Ok(SignedBlock::default())
-        }
-        async fn produce_attestation(
-            &self,
-            _slot: Slot,
-            _validator: ValidatorIndex,
-        ) -> Result<SignedVote, lean_chain::ChainError> {
-            Ok(SignedVote::default())
-        }
+    /// Genesis-fixture chain service backed by an in-memory store.
+    fn chain() -> Arc<ChainService> {
+        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+        let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+        Arc::new(ChainService::new(engine, store))
     }
 
-    struct NoopPublisher;
-
-    impl Publisher for NoopPublisher {
-        async fn publish_block(&self, _b: SignedBlock) -> Result<(), PublishError> {
-            Ok(())
-        }
-        async fn publish_attestation(&self, _v: SignedVote) -> Result<(), PublishError> {
-            Err(anyhow!("test transport down").into())
-        }
-    }
-
-    fn service() -> Service<NoopChain, NoopPublisher> {
-        Service::new(
-            Config::default(),
-            Arc::new(NoopChain),
-            Arc::new(NoopPublisher),
+    /// Concrete publisher over a constructed (not started) p2p host, so
+    /// publishes surface "host is not running" — tolerated by the
+    /// scheduler. The `TempDir` backs the identity file and must outlive
+    /// the publisher.
+    fn publisher() -> (TempDir, Arc<Publisher>) {
+        let dir = tempfile::tempdir().unwrap();
+        let options = lean_p2p_host::HostOptions::try_new(
+            "/ip4/127.0.0.1/udp/0/quic-v1",
+            "test/0.1.0",
+            &dir.path().join("id"),
+            None,
         )
+        .unwrap();
+        let p2p = Arc::new(lean_p2p_host::DevnetHost::build(options).unwrap());
+        (dir, Arc::new(Publisher::new(p2p)))
+    }
+
+    /// Builds a concrete in-memory duties service for the
+    /// construction-time tests. The returned `TempDir` keeps the p2p
+    /// identity file alive for the test's duration.
+    fn service() -> (TempDir, Service) {
+        let (dir, publisher) = publisher();
+        (dir, Service::new(Config::default(), chain(), publisher))
     }
 
     #[test]
@@ -682,7 +674,7 @@ mod tests {
 
     #[test]
     fn timing_derives_from_devnet_config() {
-        let svc = service();
+        let (_dir, svc) = service();
         let (slot_duration, vote_due_offset) = svc.timing();
         // 4 000 ms slots, 5 000 bps → 2 000 ms vote-due offset.
         assert_eq!(slot_duration, Duration::from_millis(4_000));
@@ -691,7 +683,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_before_start_errors() {
-        let svc = service();
+        let (_dir, svc) = service();
         assert!(lean_core::Service::status(&svc).await.is_err());
     }
 

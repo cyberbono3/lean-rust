@@ -39,7 +39,7 @@ use crate::host::{
 use crate::options::HostOptions;
 use crate::rpc::{
     blocks_by_root as blocks_handler, outbound::OutboundTable, status as status_handler,
-    RpcProvider, SharedRpcProvider,
+    RpcProvider,
 };
 
 /// Per-topic inbound channel capacity. Sized to absorb a brief burst of
@@ -59,11 +59,11 @@ const BIND_DEADLINE: Duration = Duration::from_secs(2);
 pub struct P2pService {
     peer_id: PeerId,
     state: Mutex<State>,
-    /// Pluggable provider that supplies the local `Status` and answers
+    /// Provider that supplies the local `Status` and answers
     /// `BlocksByRoot` lookups. Cloned into the swarm-poll task at
     /// [`Service::start`] so request handlers can call it without
     /// touching `&self`.
-    provider: SharedRpcProvider,
+    provider: Arc<RpcProvider>,
     /// One-shot inbound channel for decoded `SignedBlock` payloads.
     /// Populated by [`Service::start`]; consumed once via
     /// [`Self::take_block_receiver`].
@@ -113,7 +113,7 @@ impl P2pService {
         peer_id: PeerId,
         swarm: Swarm<DevnetBehaviour>,
         bootnodes: Vec<Bootnode>,
-        provider: SharedRpcProvider,
+        provider: Arc<RpcProvider>,
     ) -> Self {
         Self {
             peer_id,
@@ -457,7 +457,7 @@ async fn swarm_task(
     cancel: CancellationToken,
     block_tx: mpsc::Sender<SignedBlock>,
     vote_tx: mpsc::Sender<SignedVote>,
-    provider: SharedRpcProvider,
+    provider: Arc<RpcProvider>,
 ) {
     info!(local_peer = %swarm.local_peer_id(), "p2p swarm-poll task up");
     // Pin once outside the loop: the cancellation future is monotonic
@@ -535,7 +535,7 @@ fn handle_swarm_event(
     block_tx: &mpsc::Sender<SignedBlock>,
     vote_tx: &mpsc::Sender<SignedVote>,
     outbound: &mut OutboundTable,
-    provider: &dyn RpcProvider,
+    provider: &RpcProvider,
 ) {
     match event {
         SwarmEvent::Behaviour(DevnetBehaviourEvent::Gossipsub(gossipsub::Event::Message {
@@ -588,7 +588,7 @@ fn handle_swarm_event(
 fn initiate_status_handshake(
     peer_id: PeerId,
     swarm: &mut Swarm<DevnetBehaviour>,
-    provider: &dyn RpcProvider,
+    provider: &RpcProvider,
 ) {
     debug!(peer = %peer_id, "initiating status handshake");
     let local = provider.local_status();
@@ -605,7 +605,7 @@ fn initiate_status_handshake(
 fn handle_status_rr_event(
     event: request_response::Event<RpcRequest, RpcResponse>,
     swarm: &mut Swarm<DevnetBehaviour>,
-    provider: &dyn RpcProvider,
+    provider: &RpcProvider,
 ) {
     match event {
         request_response::Event::Message { peer, message, .. } => match message {
@@ -645,7 +645,7 @@ fn handle_blocks_rr_event(
     event: request_response::Event<RpcRequest, RpcResponse>,
     swarm: &mut Swarm<DevnetBehaviour>,
     outbound: &mut OutboundTable,
-    provider: &dyn RpcProvider,
+    provider: &RpcProvider,
 ) {
     match event {
         request_response::Event::Message { peer, message, .. } => match message {

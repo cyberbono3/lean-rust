@@ -1,8 +1,14 @@
 //! Integration tests for the duties scheduler.
 //!
 //! Uses `#[tokio::test(start_paused = true)]` so `tokio::time::advance`
-//! drives the scheduler deterministically. The chain port and publisher
-//! port are stubbed with in-memory fakes that record every call.
+//! drives the scheduler deterministically. The `Chain` / `Publisher`
+//! port traits were collapsed to concrete types, so these tests build a
+//! real genesis-fixture [`lean_chain::Service`] and a [`Publisher`] over
+//! a constructed-but-not-started p2p host: every publish surfaces "host
+//! is not running", which the scheduler tolerates by folding the failure
+//! into its publish-health counter. Assertions therefore cover config
+//! rejection, lifecycle, and publish-health degradation rather than the
+//! former mock call-count checks.
 
 #![allow(
     missing_docs,
@@ -14,135 +20,18 @@
 
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use lean_core::Service as _;
 use lean_duties::{
-    Chain as DutiesChain, Config as DutiesConfig, DutiesError, GenesisTimeUnix, PublishError,
-    Publisher, Service as DutiesService,
+    Config as DutiesConfig, DutiesError, GenesisTimeUnix, Publisher, Service as DutiesService,
 };
-use parking_lot::Mutex;
-use protocol::{
-    Block, BlockBody, BlockHeader, Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex, Vote,
-};
+use lean_p2p_host::{DevnetHost, HostOptions};
+use storage::{MemoryStore, Store};
+use tempfile::TempDir;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
-use types::{Bytes32, Bytes4000};
 
-/// In-memory `Chain` fake. Returns deterministic `SignedBlock` /
-/// `SignedVote` shaped values; records every `produce_*` call so tests
-/// can assert call ordering.
-#[derive(Default)]
-struct FakeChain {
-    produced_blocks: Mutex<Vec<(Slot, ValidatorIndex)>>,
-    produced_attestations: Mutex<Vec<(Slot, ValidatorIndex)>>,
-}
-
-impl FakeChain {
-    fn block_calls(&self) -> Vec<(Slot, ValidatorIndex)> {
-        self.produced_blocks.lock().clone()
-    }
-    fn attestation_calls(&self) -> Vec<(Slot, ValidatorIndex)> {
-        self.produced_attestations.lock().clone()
-    }
-}
-
-impl DutiesChain for FakeChain {
-    async fn produce_block(
-        &self,
-        slot: Slot,
-        validator: ValidatorIndex,
-    ) -> Result<SignedBlock, lean_chain::ChainError> {
-        self.produced_blocks.lock().push((slot, validator));
-        Ok(SignedBlock {
-            message: Block {
-                slot,
-                proposer_index: validator,
-                parent_root: Bytes32::zero(),
-                state_root: Bytes32::zero(),
-                body: BlockBody::default(),
-            },
-            signature: Bytes4000::new([0; 4000]),
-        })
-    }
-    async fn produce_attestation(
-        &self,
-        slot: Slot,
-        validator: ValidatorIndex,
-    ) -> Result<SignedVote, lean_chain::ChainError> {
-        self.produced_attestations.lock().push((slot, validator));
-        let _ = BlockHeader::default(); // keep the import live
-        Ok(SignedVote {
-            validator_id: validator,
-            message: Vote {
-                slot,
-                head: Checkpoint::new(Bytes32::zero(), slot),
-                target: Checkpoint::new(Bytes32::zero(), slot),
-                source: Checkpoint::new(Bytes32::zero(), Slot::ZERO),
-            },
-            signature: Bytes4000::new([0; 4000]),
-        })
-    }
-}
-
-/// In-memory `Publisher` fake. Captures every payload + supports an
-/// "errors on next call" toggle for the publish-error tests.
-#[derive(Default)]
-struct MockPublisher {
-    blocks: Mutex<Vec<SignedBlock>>,
-    attestations: Mutex<Vec<SignedVote>>,
-    fail_next: Mutex<bool>,
-    fail_always: Mutex<bool>,
-    block_attestations: Mutex<bool>,
-}
-
-impl MockPublisher {
-    fn block_count(&self) -> usize {
-        self.blocks.lock().len()
-    }
-    fn attestation_count(&self) -> usize {
-        self.attestations.lock().len()
-    }
-    fn fail_once(&self) {
-        *self.fail_next.lock() = true;
-    }
-    fn fail_all(&self) {
-        *self.fail_always.lock() = true;
-    }
-    fn block_attestations(&self) {
-        *self.block_attestations.lock() = true;
-    }
-    fn should_fail(&self) -> bool {
-        *self.fail_always.lock() || std::mem::replace(&mut *self.fail_next.lock(), false)
-    }
-    fn should_block(&self) -> bool {
-        *self.block_attestations.lock()
-    }
-}
-
-impl Publisher for MockPublisher {
-    async fn publish_block(&self, block: SignedBlock) -> Result<(), PublishError> {
-        if self.should_fail() {
-            return Err(anyhow!("test publish failure").into());
-        }
-        self.blocks.lock().push(block);
-        Ok(())
-    }
-    async fn publish_attestation(&self, vote: SignedVote) -> Result<(), PublishError> {
-        if self.should_block() {
-            // Park forever (paused clock never advances): the test fires
-            // a cancel mid-pass and asserts shutdown does not wait on us.
-            std::future::pending::<()>().await;
-        }
-        if self.should_fail() {
-            return Err(anyhow!("test publish failure").into());
-        }
-        self.attestations.lock().push(vote);
-        Ok(())
-    }
-}
-
-/// Repository-relative path resolved against the lean-chain crate
-/// root, mirroring how production callers feed `validators_path`.
+/// Repository-relative paths resolved against the duties crate root,
+/// mirroring how production callers feed `validators_path`.
 const FIXTURE_PATH: &str = "tests/fixtures/validators.yaml";
 const MALFORMED_PATH: &str = "tests/fixtures/validators_malformed.yaml";
 
@@ -150,9 +39,9 @@ fn config(group: &str) -> DutiesConfig {
     // Genesis at the current wall-clock second. Under `start_paused`,
     // `SystemTime::now()` is still the real clock, so mapping genesis ≈
     // now onto the frozen tokio `Instant` makes the anchor land at
-    // `Instant::now()` — the worker fires at slot 0 immediately, same
-    // as the old `GenesisTimeUnix::new(0)`. A non-epoch value is
-    // required now that `Config::ensure_runnable` rejects epoch genesis.
+    // `Instant::now()` — the worker fires at slot 0 immediately. A
+    // non-epoch value is required now that `Config::ensure_runnable`
+    // rejects epoch genesis.
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock is after the Unix epoch")
@@ -165,17 +54,37 @@ fn config(group: &str) -> DutiesConfig {
         .with_genesis_time_unix(GenesisTimeUnix::new(now_unix))
 }
 
-fn build(
-    group: &str,
-) -> (
-    DutiesService<FakeChain, MockPublisher>,
-    Arc<FakeChain>,
-    Arc<MockPublisher>,
-) {
-    let chain = Arc::new(FakeChain::default());
-    let publisher = Arc::new(MockPublisher::default());
-    let service = DutiesService::new(config(group), Arc::clone(&chain), Arc::clone(&publisher));
-    (service, chain, publisher)
+/// Genesis-fixture chain service backed by an in-memory store.
+fn chain_service() -> Arc<lean_chain::Service> {
+    let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+    let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+    Arc::new(lean_chain::Service::new(engine, store))
+}
+
+/// Concrete publisher over a constructed (not started) p2p host: every
+/// publish fails with "host is not running", exercising the scheduler's
+/// tolerant publish-failure path. The `TempDir` backs the identity file
+/// and must outlive the publisher.
+fn publisher() -> (TempDir, Arc<Publisher>) {
+    let dir = tempfile::tempdir().unwrap();
+    let options = HostOptions::try_new(
+        "/ip4/127.0.0.1/udp/0/quic-v1",
+        "test/0.1.0",
+        &dir.path().join("id"),
+        None,
+    )
+    .unwrap();
+    let p2p = Arc::new(DevnetHost::build(options).unwrap());
+    (dir, Arc::new(Publisher::new(p2p)))
+}
+
+/// Builds a concrete duties service over a fixture chain + non-started
+/// publisher. The returned `TempDir` keeps the p2p identity file alive.
+fn build(group: &str) -> (DutiesService, TempDir) {
+    let (dir, publisher) = publisher();
+    let service = DutiesService::new(config(group), chain_service(), publisher);
+    (service, dir)
 }
 
 async fn yield_runtime() {
@@ -187,113 +96,57 @@ async fn yield_runtime() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposer_publishes_block_at_slot_boundary() {
-    // ream group owns indices [0, 3, 6, ..., 27]; index 3 proposes slot
-    // 3 (3 % 30 = 3). We need to advance three slot durations to land
-    // on a ream-owned proposer slot.
-    let (service, chain, publisher) = build("ream");
-    service.start().await.unwrap();
-    yield_runtime().await;
-
-    let (slot_duration, _) = service.timing();
-    // Three full slots = slot 3 (the first ream-owned proposer slot).
-    for _ in 0..3 {
-        time::advance(slot_duration).await;
-        yield_runtime().await;
-    }
-
-    let blocks = chain.block_calls();
-    assert!(
-        blocks
-            .iter()
-            .any(|(s, v)| *v == ValidatorIndex::new(3) && *s == Slot::new(3)),
-        "expected validator 3 to produce slot-3 block; got {blocks:?}",
-    );
-    assert!(publisher.block_count() >= 1);
-
-    let cancel = CancellationToken::new();
-    service.stop(cancel).await.unwrap();
-}
-
-#[tokio::test(start_paused = true)]
-async fn attester_publishes_at_vote_due() {
-    let (service, chain, publisher) = build("ream");
-    service.start().await.unwrap();
-    yield_runtime().await;
-
-    let (_, vote_due_offset) = service.timing();
-    // Half a slot puts us right at the vote-due deadline for slot 0.
-    time::advance(vote_due_offset).await;
-    yield_runtime().await;
-
-    let attestations = chain.attestation_calls();
-    let group_size = 10; // ream has 10 validators
-    let slot_zero_count = attestations
-        .iter()
-        .filter(|(s, _)| *s == Slot::ZERO)
-        .count();
-    assert_eq!(
-        slot_zero_count, group_size,
-        "expected every ream validator to attest slot 0; got {attestations:?}",
-    );
-    assert!(publisher.attestation_count() >= group_size);
-
-    let cancel = CancellationToken::new();
-    service.stop(cancel).await.unwrap();
-}
-
-#[tokio::test(start_paused = true)]
 async fn unknown_validator_group_is_rejected_at_start() {
-    let chain = Arc::new(FakeChain::default());
-    let publisher = Arc::new(MockPublisher::default());
-    let service = DutiesService::new(config("does-not-exist"), chain, publisher);
+    let (dir, publisher) = publisher();
+    let service = DutiesService::new(config("does-not-exist"), chain_service(), publisher);
     let err = service.start().await.unwrap_err();
     let formatted = format!("{err:?}");
     assert!(
         formatted.contains("UnknownValidatorGroup") || formatted.contains("does-not-exist"),
         "expected UnknownValidatorGroup, got {formatted}",
     );
+    drop(dir);
 }
 
 #[tokio::test(start_paused = true)]
 async fn malformed_yaml_is_rejected_at_start() {
-    let chain = Arc::new(FakeChain::default());
-    let publisher = Arc::new(MockPublisher::default());
     // Genesis must be set (non-epoch) so `start` reaches the YAML load
     // rather than short-circuiting on the genesis guard.
+    let (dir, publisher) = publisher();
     let cfg = config("ream").with_validators_path(MALFORMED_PATH).unwrap();
-    let service = DutiesService::new(cfg, chain, publisher);
+    let service = DutiesService::new(cfg, chain_service(), publisher);
     let err = service.start().await.unwrap_err();
     let formatted = format!("{err:?}").to_lowercase();
     assert!(
         formatted.contains("yaml") || formatted.contains("parse"),
         "expected YAML parse error, got {formatted}",
     );
+    drop(dir);
 }
 
 #[tokio::test(start_paused = true)]
 async fn epoch_genesis_is_rejected_at_start() {
     // `DutiesConfig::default()` leaves genesis at the Unix epoch; the
     // service must refuse to start rather than schedule fictitious slots.
-    let chain = Arc::new(FakeChain::default());
-    let publisher = Arc::new(MockPublisher::default());
+    let (dir, publisher) = publisher();
     let cfg = DutiesConfig::default()
         .with_validators_path(FIXTURE_PATH)
         .unwrap()
         .with_validator_group("ream")
         .unwrap();
-    let service = DutiesService::new(cfg, chain, publisher);
+    let service = DutiesService::new(cfg, chain_service(), publisher);
     let err = service.start().await.unwrap_err();
     let formatted = format!("{err:?}");
     assert!(
         formatted.contains("GenesisTimeUnset") || formatted.contains("genesis_time_unix"),
         "expected GenesisTimeUnset, got {formatted}",
     );
+    drop(dir);
 }
 
 #[tokio::test(start_paused = true)]
 async fn double_start_returns_already_started() {
-    let (service, _chain, _publisher) = build("ream");
+    let (service, _dir) = build("ream");
     service.start().await.unwrap();
     let err = service.start().await.unwrap_err();
     let formatted = format!("{err:?}");
@@ -301,52 +154,19 @@ async fn double_start_returns_already_started() {
         formatted.contains("AlreadyStarted") || formatted.contains("already started"),
         "expected AlreadyStarted, got {formatted}",
     );
-    let cancel = CancellationToken::new();
-    service.stop(cancel).await.unwrap();
+    service.stop(CancellationToken::new()).await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn publisher_error_does_not_stop_scheduler() {
-    let (service, _chain, publisher) = build("ream");
-    publisher.fail_once();
+async fn publish_failures_degrade_status_but_keep_scheduler_running() {
+    // With a non-started publisher every publish fails; the slot-0
+    // attester pass publishes for all ream validators, crossing the K=3
+    // consecutive-failure threshold. status() must flip to degraded
+    // (not "task exited"), and the service must still stop cleanly.
+    let (service, _dir) = build("ream");
     service.start().await.unwrap();
     yield_runtime().await;
-
-    let (_, vote_due_offset) = service.timing();
-    // First attester pass at slot 0 will swallow the failure.
-    time::advance(vote_due_offset).await;
-    yield_runtime().await;
-
-    // Advance into slot 1, then through its vote-due deadline.
-    let (slot_duration, _) = service.timing();
-    time::advance(slot_duration).await;
-    yield_runtime().await;
-    time::advance(vote_due_offset).await;
-    yield_runtime().await;
-
-    // Scheduler kept running: more attestations published on the
-    // second cycle than the (failed) first.
-    assert!(
-        publisher.attestation_count() >= 10,
-        "expected slot-1 attestations to publish after failure, got {}",
-        publisher.attestation_count(),
-    );
-
-    let cancel = CancellationToken::new();
-    service.stop(cancel).await.unwrap();
-}
-
-#[tokio::test(start_paused = true)]
-async fn status_flips_to_err_after_consecutive_publish_failures() {
-    // A publisher that always fails: the slot-0 attester pass publishes
-    // ten attestations, all failing, which crosses the K=3 consecutive
-    // threshold. status() must then report degraded publish health —
-    // the old `last_err` slot never recorded publish failures at all.
-    let (service, _chain, publisher) = build("ream");
-    publisher.fail_all();
-    service.start().await.unwrap();
-    yield_runtime().await;
-    // status starts Ok (no failures yet).
+    // status starts Ok (below the failure threshold).
     service.status().await.unwrap();
 
     let (_, vote_due_offset) = service.timing();
@@ -362,53 +182,49 @@ async fn status_flips_to_err_after_consecutive_publish_failures() {
         "expected degraded publish status, got {err}",
     );
 
-    let cancel = CancellationToken::new();
-    service.stop(cancel).await.unwrap();
+    // Degraded, but the worker is alive and shutdown is clean.
+    service.stop(CancellationToken::new()).await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn stop_cancels_inflight_attestation_duties() {
-    // A publisher that parks forever on every attestation. Once the
-    // slot-0 attester pass spawns its concurrent duties, they all block
-    // in publish. `stop` fires the worker's cancel token, which the
-    // drive loop's `select!` observes and breaks on — shutdown must not
-    // wait on the stuck duties. If cancellation regressed, the worker
-    // would never join and this test would hang.
-    let (service, _chain, publisher) = build("ream");
-    publisher.block_attestations();
+async fn scheduler_runs_across_slot_boundaries_without_panicking() {
+    // Drive several slot durations: proposer + attester passes fire and
+    // fail-to-publish each slot, but the worker never wedges or panics.
+    let (service, _dir) = build("ream");
     service.start().await.unwrap();
     yield_runtime().await;
 
-    let (_, vote_due_offset) = service.timing();
-    time::advance(vote_due_offset).await;
-    yield_runtime().await;
+    let (slot_duration, _) = service.timing();
+    for _ in 0..3 {
+        time::advance(slot_duration).await;
+        yield_runtime().await;
+    }
 
-    let cancel = CancellationToken::new();
-    service.stop(cancel).await.unwrap();
+    service.stop(CancellationToken::new()).await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
 async fn stop_without_start_is_noop() {
-    let (service, _chain, _publisher) = build("ream");
-    let cancel = CancellationToken::new();
+    let (service, _dir) = build("ream");
     // Stopping a never-started service is well-defined.
-    service.stop(cancel).await.unwrap();
+    service.stop(CancellationToken::new()).await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
 async fn status_returns_error_before_start() {
-    let (service, _chain, _publisher) = build("ream");
+    let (service, _dir) = build("ream");
     assert!(service.status().await.is_err());
 }
 
 #[tokio::test(start_paused = true)]
 async fn status_returns_ok_while_running() {
-    let (service, _chain, _publisher) = build("ream");
+    let (service, _dir) = build("ream");
     service.start().await.unwrap();
     yield_runtime().await;
+    // A single slot-0 proposer failure is below the degradation
+    // threshold, so status is still Ok immediately after start.
     service.status().await.unwrap();
-    let cancel = CancellationToken::new();
-    service.stop(cancel).await.unwrap();
+    service.stop(CancellationToken::new()).await.unwrap();
 }
 
 #[test]

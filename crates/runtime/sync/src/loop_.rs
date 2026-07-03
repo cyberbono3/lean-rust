@@ -4,7 +4,7 @@
 //! compares heads, and—if the peer is ahead—walks backwards from the
 //! peer's head one root at a time via `BlocksByRoot` up to
 //! [`Config::max_sync_depth`], then imports the recovered chain in
-//! forward order through the [`Chain`] port.
+//! forward order through the concrete [`lean_chain::Service`].
 //!
 //! Per-block import errors are warn-logged and dropped: an unknown
 //! parent at the deepest layer (when the cap is hit before the walk
@@ -28,10 +28,12 @@ use tokio_util::task::TaskTracker;
 use tracing::{debug, info, instrument, warn, Instrument, Span};
 use types::Bytes32;
 
+use lean_chain::Service as ChainService;
+
 use crate::config::Config;
 use crate::error::SyncError;
 use crate::peer_id::PeerId;
-use crate::ports::{Chain, Network, PeerEventProvider};
+use crate::ports::{Network, PeerEventProvider};
 
 /// Handle to the running watch task: the spawned `JoinHandle`, the
 /// `TaskTracker` that owns each per-peer `on_connect` task, and the
@@ -44,9 +46,10 @@ struct RunHandle {
 
 /// Single-watcher sync orchestrator.
 ///
-/// Construct with [`Loop::new`]; supply impls of [`Chain`], [`Network`],
-/// and [`PeerEventProvider`] (the chain port is satisfied by
-/// `Arc<crate::Service>` in production; tests use in-memory fakes).
+/// Construct with [`Loop::new`]; supply the concrete
+/// [`lean_chain::Service`] plus impls of [`Network`] and
+/// [`PeerEventProvider`] (the network ports still carry their in-memory
+/// fakes in tests until the p2p handle lands).
 ///
 /// Spawned per-peer `on_connect` tasks are owned by an internal
 /// [`TaskTracker`]; [`Loop::stop`] cancels the shared token and awaits
@@ -54,7 +57,7 @@ struct RunHandle {
 /// always observe cancellation before the loop returns.
 pub struct Loop {
     config: Config,
-    chain: Arc<dyn Chain>,
+    chain: Arc<ChainService>,
     network: Arc<dyn Network>,
     peers: Arc<dyn PeerEventProvider>,
     run: Mutex<Option<RunHandle>>,
@@ -75,7 +78,7 @@ impl Loop {
     #[must_use]
     pub fn new(
         config: Config,
-        chain: Arc<dyn Chain>,
+        chain: Arc<ChainService>,
         network: Arc<dyn Network>,
         peers: Arc<dyn PeerEventProvider>,
     ) -> Self {
@@ -265,7 +268,7 @@ async fn watch_loop(
 #[derive(Clone)]
 struct PeerWorker {
     config: Config,
-    chain: Arc<dyn Chain>,
+    chain: Arc<ChainService>,
     network: Arc<dyn Network>,
     cancel: CancellationToken,
 }
@@ -282,7 +285,7 @@ impl PeerWorker {
             return;
         }
         let Ok((local_status, peer_status)) =
-            status_exchange(&*self.chain, &*self.network, &peer).await
+            status_exchange(&self.chain, &*self.network, &peer).await
         else {
             return;
         };
@@ -299,8 +302,11 @@ impl PeerWorker {
             peer_head = peer_status.head.slot.get(),
             "sync started",
         );
-        self.sync_with_peer(&peer, peer_status.head.root, &cancel)
-            .await;
+        // `Box::pin`: the future embeds the concrete `ChainService`
+        // (no longer behind a trait object), so it exceeds the
+        // large-future lint threshold; box it to keep the parent frame
+        // small.
+        Box::pin(self.sync_with_peer(&peer, peer_status.head.root, &cancel)).await;
     }
 
     /// Walks back from `start_root` then imports the recovered chain in
@@ -309,7 +315,9 @@ impl PeerWorker {
         let Ok(pending) = self.walk_back(peer, start_root, cancel).await else {
             return;
         };
-        import_chain(&*self.chain, pending, cancel).await;
+        // `Box::pin`: import future embeds the concrete `ChainService`;
+        // box it to stay under the large-future lint threshold.
+        Box::pin(import_chain(&self.chain, pending, cancel)).await;
     }
 
     /// Walks back from `start_root` collecting unknown ancestors up to
@@ -344,7 +352,7 @@ impl PeerWorker {
             // THIS peer's walk rather than propagating out (which would
             // tear down the spawned per-peer task with no diagnostic and
             // appear to the caller as silent sync death).
-            match self.chain.has_block(next_root).await {
+            match self.chain.has_block(&next_root) {
                 Ok(true) => break,
                 Ok(false) => {}
                 Err(err) => {
@@ -428,11 +436,11 @@ impl PeerWorker {
     err(Display, level = "warn")
 )]
 async fn status_exchange(
-    chain: &dyn Chain,
+    chain: &ChainService,
     network: &dyn Network,
     peer: &PeerId,
 ) -> Result<(Status, Status), SyncError> {
-    let local = chain.local_status().await?;
+    let local = chain.local_status();
     let peer_status = network.send_status(peer, local).await?;
     Ok((local, peer_status))
 }
@@ -441,7 +449,7 @@ async fn status_exchange(
 /// resolved by the time the engine sees it. Per-block failures are
 /// warn-logged and skipped; cancellation aborts remaining imports.
 #[instrument(level = "debug", name = "sync.import_chain", skip_all)]
-async fn import_chain(chain: &dyn Chain, blocks: Vec<SignedBlock>, cancel: &CancellationToken) {
+async fn import_chain(chain: &ChainService, blocks: Vec<SignedBlock>, cancel: &CancellationToken) {
     for block in blocks.into_iter().rev() {
         if cancel.is_cancelled() {
             return;
