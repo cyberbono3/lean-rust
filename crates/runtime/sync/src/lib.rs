@@ -4,7 +4,7 @@
 //! `Status` handshake and—if the peer is ahead—walks backwards from
 //! the peer's head one root at a time via `BlocksByRoot` up to
 //! [`Config::max_sync_depth`], then imports the recovered chain in
-//! forward order through the [`Chain`] port.
+//! forward order through the concrete [`lean_chain::Service`].
 //!
 //! The chain surface is the concrete [`lean_chain::Service`], called
 //! directly by the [`Loop`]. The outbound [`Network`] /
