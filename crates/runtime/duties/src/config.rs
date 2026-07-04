@@ -3,10 +3,14 @@
 //! "Parse, don't validate" is enforced at the **type** level: every
 //! field of [`Config`] is an always-valid newtype ([`ValidatorsPath`],
 //! [`ValidatorGroup`], [`GenesisTimeUnix`]) whose constructor encodes
-//! the invariant. The infallible [`Config::new`] then takes pre-typed
-//! arguments; the `with_*` builders route loose overrides through the
-//! newtype constructors. There is no separate `validate()` step —
-//! invalid state cannot be constructed.
+//! the invariant. The infallible [`Config::new`] takes pre-typed
+//! arguments. The `with_*` builders split into two groups:
+//! [`Config::with_validators_path`] and [`Config::with_validator_group`]
+//! are **fallible** and accept loose (`impl Into<…>`) input, routing it
+//! through the newtype constructors; [`Config::with_genesis_time_unix`]
+//! is **infallible** and accepts an already-typed [`GenesisTimeUnix`],
+//! because every `u64` is a valid timestamp. There is no separate
+//! `validate()` step — invalid state cannot be constructed.
 //!
 //! The same idiom is used by [`crate::sync::Config`], whose
 //! `max_sync_depth` is a [`core::num::NonZeroUsize`].
