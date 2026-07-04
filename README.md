@@ -46,8 +46,7 @@ for layer maps and UML class/sequence diagrams. Core crates:
 | `forkchoice` | Fork-choice rule |
 | `storage` | Persistence layer |
 | `networking` | P2P networking primitives |
-| `observability` | Metrics and logging |
-| `runtime/*` | Node runtime (core, chain, sync, duties, p2p, p2p-rpc, api) |
+| `runtime` | Node runtime — one crate with modules `core`, `chain`, `sync`, `duties`, `p2p`, `api`, `observability` |
 | `node` | Node assembly |
 | `lean-cli` | Command-line interface |
 | `fixtures` | Test fixtures and devnet assets |

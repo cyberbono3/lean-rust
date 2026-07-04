@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
 use config::Config as ChainConfig;
-use lean_duties::ValidatorAssignments;
 use protocol::{Block, BlockBody, BlockHeader, ProtocolConfig, State};
+use runtime::duties::ValidatorAssignments;
 use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
 

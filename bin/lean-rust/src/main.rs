@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use lean_core::NodeConfig;
-use lean_observability::{FileSink, TracingGuard};
-use lean_p2p_host::HostOptions;
+use runtime::core::NodeConfig;
+use runtime::observability::{FileSink, TracingGuard};
+use runtime::p2p::HostOptions;
 use tracing::{info, warn};
 
 use lean_cli::cli::{Cli, Command};
@@ -18,7 +18,7 @@ const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:5052";
 const DEFAULT_IDENTITY_PATH: &str = "p2p_priv_key";
 const DEFAULT_LOG_PREFIX: &str = "lean-rust";
 const DEFAULT_METRICS_ADDR: &str = "127.0.0.1:9090";
-const DEFAULT_VALIDATORS_PATH: &str = "crates/runtime/duties/tests/fixtures/validators.yaml";
+const DEFAULT_VALIDATORS_PATH: &str = "crates/runtime/tests/duties_fixtures/validators.yaml";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -80,7 +80,8 @@ fn warn_unwired_flags(cli: &Cli) {
 }
 
 fn init_tracing(cli: &Cli) -> Result<TracingGuard> {
-    lean_observability::init_tracing(cli.verbosity(), file_sink(cli)?).context("initialize tracing")
+    runtime::observability::init_tracing(cli.verbosity(), file_sink(cli)?)
+        .context("initialize tracing")
 }
 
 fn log_startup_config(cli: &Cli) {
@@ -154,12 +155,12 @@ fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
     )
     .context("build p2p host options")?;
 
-    let duties = lean_duties::Config::default()
+    let duties = runtime::duties::Config::default()
         .with_validators_path(validators_path)
         .context("build duties config")?
         .with_validator_group(selected_validator_group(cli))
         .context("build duties config")?
-        .with_genesis_time_unix(lean_duties::GenesisTimeUnix::new(
+        .with_genesis_time_unix(runtime::duties::GenesisTimeUnix::new(
             genesis_state.config.genesis_time,
         ));
 
@@ -218,9 +219,11 @@ fn selected_validators_path(cli: &Cli) -> PathBuf {
 }
 
 fn selected_validator_group(cli: &Cli) -> String {
-    cli.node_id
-        .clone()
-        .unwrap_or_else(|| lean_duties::Config::default().validator_group().to_owned())
+    cli.node_id.clone().unwrap_or_else(|| {
+        runtime::duties::Config::default()
+            .validator_group()
+            .to_owned()
+    })
 }
 
 fn selected_identity_path(cli: &Cli) -> PathBuf {

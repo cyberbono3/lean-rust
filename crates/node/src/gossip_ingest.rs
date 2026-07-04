@@ -9,11 +9,11 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use lean_chain::engine::{AttestationImportResult, BlockImportResult};
-use lean_chain::Service as ChainService;
-use lean_core::Service;
-use lean_p2p_host::{BlockReceiver, P2pService, VoteReceiver};
 use parking_lot::Mutex;
+use runtime::chain::engine::{AttestationImportResult, BlockImportResult};
+use runtime::chain::Service as ChainService;
+use runtime::core::Service;
+use runtime::p2p::{BlockReceiver, P2pService, VoteReceiver};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
