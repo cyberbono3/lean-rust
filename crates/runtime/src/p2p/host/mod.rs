@@ -36,8 +36,8 @@ pub(crate) enum HostCommand {
     Shutdown,
     /// Publish a gossipsub message and reply with the resulting
     /// [`gossipsub::MessageId`] or libp2p [`gossipsub::PublishError`].
-    /// Constructed by [`crate::p2p::gossip::Host::publish_block`] /
-    /// [`crate::p2p::gossip::Host::publish_vote`].
+    /// Constructed by [`crate::p2p::Host::publish_block`] /
+    /// [`crate::p2p::Host::publish_vote`].
     Publish {
         /// Pre-built libp2p topic (constructed from the canonical
         /// [`lean_wire::BLOCK_TOPIC_V1`] / [`lean_wire::VOTE_TOPIC_V1`]

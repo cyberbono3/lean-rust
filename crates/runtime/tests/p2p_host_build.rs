@@ -1,4 +1,4 @@
-//! Integration tests for the `lean-p2p-host` host lifecycle.
+//! Integration tests for the `runtime::p2p` host lifecycle.
 //!
 //! Covers the construction → start → stop happy path, bind-failure
 //! fail-fast, idempotent stop, and the host-handle availability

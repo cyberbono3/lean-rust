@@ -8,7 +8,7 @@
 use forkchoice::ForkchoiceError;
 use protocol::StateTransitionError;
 
-/// Failure surface exposed by [`crate::chain::Engine`].
+/// Failure surface exposed by [`crate::chain::engine::Engine`].
 ///
 /// Engine never raises its own variants — both inner enums already cover the
 /// states encountered along the import / produce paths. `#[from]` keeps the

@@ -6,7 +6,7 @@
 //! produced slot-1 block into a fresh importer engine; the produce + genesis
 //! setup is excluded from the measurement via `iter_batched`.
 //!
-//! Run: `cargo bench -p lean-chain --bench engine_import`.
+//! Run: `cargo bench -p runtime --bench engine_import`.
 
 // `criterion_group!` expands to an undocumented `pub fn`; benches are not part
 // of the public API surface, so the workspace `missing_docs` lint is waived here.

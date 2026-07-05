@@ -1,55 +1,62 @@
 # runtime/
 
-Tier-5 and Tier-6 crates: the runtime shell that hosts the consensus
-engine, drives proposer/attester duties, exposes the network, and
-serves the HTTP API + Prometheus metrics.
+Tier-5 and Tier-6 runtime shell: hosts the consensus engine, drives
+proposer/attester duties, exposes the network, and serves the HTTP API +
+Prometheus metrics. Consolidated from the former seven per-crate shells into a
+single crate — each is now an internal module.
 
-## Crates
+## Modules
 
-| Crate              | Tier | Status      | One-liner                                            |
-| ------------------ | ---- | ----------- | ---------------------------------------------------- |
-| [`lean-core`]   | 5    | implemented | `Service` trait + `Node` lifecycle composition root. |
-| [`lean-chain`]  | 6    | implemented | Single engine writer + tick driver.                  |
-| [`lean-sync`]   | 6    | implemented | Peer-driven `BlocksByRoot` backfill loop.            |
-| [`lean-duties`] | 6    | implemented | Devnet0 proposer / attester scheduler.               |
-| [`runtime-p2p`]    | 6    | scaffold    | libp2p QUIC-v1 host (lands in a later issue).        |
-| [`lean-api`]    | 6    | scaffold    | Lean HTTP API + Prometheus metrics (later issue).    |
+| Module            | Tier | Status      | One-liner                                            |
+| ----------------- | ---- | ----------- | ---------------------------------------------------- |
+| [`core`]          | 5    | implemented | `Service` trait + `Node` lifecycle composition root. |
+| [`chain`]         | 6    | implemented | Single engine writer + tick driver.                  |
+| [`sync`]          | 6    | implemented | Peer-driven `BlocksByRoot` backfill loop.            |
+| [`duties`]        | 6    | implemented | Devnet0 proposer / attester scheduler.               |
+| [`p2p`]           | 6    | scaffold    | libp2p QUIC-v1 host.                                  |
+| [`api`]           | 6    | scaffold    | Lean HTTP API + Prometheus metrics.                  |
+| [`observability`] | 6    | implemented | Tracing / log-verbosity init.                        |
 
-[`lean-core`]: ./core
-[`lean-chain`]: ./chain
-[`lean-sync`]: ./sync
-[`lean-duties`]: ./duties
-[`runtime-p2p`]: ./p2p
-[`lean-api`]: ./api
+[`core`]: ./src/core/mod.rs
+[`chain`]: ./src/chain/mod.rs
+[`sync`]: ./src/sync/mod.rs
+[`duties`]: ./src/duties/mod.rs
+[`p2p`]: ./src/p2p/mod.rs
+[`api`]: ./src/api/mod.rs
+[`observability`]: ./src/observability/mod.rs
 
 ## Dependency graph
 
 ```
-lean-sync   ──▶ lean-chain ──▶ lean-core
-lean-duties ──▶ lean-chain ──▶ lean-core
-runtime-p2p    ──▶ lean-chain ──▶ lean-core
-lean-api    ──▶ lean-chain ──▶ lean-core
+sync   ──▶ chain ──▶ core
+duties ──▶ chain ──▶ core
+p2p    ──▶ chain ──▶ core
+api    ──▶ chain ──▶ core
 ```
 
-All Tier-6 services implement [`lean_core::Service`] (start / stop /
-status); `Node` is the composition root that owns the slots and
-enforces ordered startup (`chain → p2p → sync → duties → http →
-metrics`) and reverse-ordered shutdown.
+All Tier-6 services implement [`core::Service`] (start / stop / status); `Node`
+is the composition root that owns the slots and enforces ordered startup
+(`chain → p2p → sync → duties → http → metrics`) and reverse-ordered shutdown.
 
-[`lean_core::Service`]: ./core/src/service.rs
+[`core::Service`]: ./src/core/service.rs
 
 ## Design notes
 
-- **Single engine writer.** Only `lean-chain::Service` holds the
-  mutable handle into the forkchoice store. Sync and duties drive it
-  through narrow async ports (`sync::Chain`, `duties::Chain`).
-- **Dependency Inversion.** Outbound surfaces (publish, network RPCs)
-  are declared as traits in the consumer crate; concrete impls live in
-  the `node` composition root. See [Decision 7] in the project plan.
-- **Tier ordering.** Lower tiers (`types`, `protocol`, `engine`,
-  `storage`) never depend on `runtime/*`. Runtime crates depend down
-  through the tiers, not sideways across them — except for the
-  intra-Tier-6 deps shown above.
+- **Single engine writer.** Only `chain::Service` holds the mutable handle into
+  the forkchoice store. Sync and duties drive it through narrow async ports
+  (`sync::Chain`, `duties::Chain`).
+- **Dependency Inversion.** Outbound surfaces (publish, network RPCs) are
+  declared as traits in the consumer module; concrete impls live in the `node`
+  composition root. See [Decision 7] in the project plan.
+- **Module isolation (review convention).** `p2p`, `chain`, and `api` are
+  sibling modules that must not reach into each other's internals. This was
+  formerly a Cargo crate boundary; after consolidation it is a review
+  convention, not a compiler barrier — keep truly-internal items scoped with
+  `pub(in crate::<module>)` / `pub(super)` rather than `pub(crate)`.
+- **Audit boundary preserved.** The seven sync-core crates (`types`, `ssz`,
+  `config`, `protocol`, `forkchoice`, `storage`, `networking`) stay separate so
+  `cargo tree` keeps consensus logic free of `tokio`/`libp2p`/`axum`. `libp2p`
+  is confined to `p2p`; `axum`/`prometheus` to `api`.
 
 [Decision 7]: ../../.claude/PROJECT-KNOWLEDGE.md
 

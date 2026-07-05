@@ -17,7 +17,7 @@
 //!
 //! This file is gated `#![cfg(loom)]`: the default `cargo test` / clippy build
 //! compiles it to an empty crate and never pulls `loom`. Run the model with:
-//! `RUSTFLAGS="--cfg loom" cargo test -p lean-chain --test loom_import`.
+//! `RUSTFLAGS="--cfg loom" cargo test -p runtime --test chain_loom_import`.
 
 #![cfg(loom)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]

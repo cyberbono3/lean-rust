@@ -11,10 +11,9 @@
 //! - [`NodeError`] — typed lifecycle errors with the offending slot
 //!   label preserved.
 //!
-//! Tracing-subscriber setup lives in the sibling `lean-observability`
-//! crate; the shared axum-server shell lives in `lean-api::httpsvc`.
-//! Service implementations (and the leanlog formatter) land in later
-//! issues; this crate carries no business logic.
+//! Tracing-subscriber setup lives in the sibling `observability`
+//! module; the shared axum-server shell lives in `api::httpsvc`.
+//! This module carries no business logic.
 
 mod config;
 mod error;

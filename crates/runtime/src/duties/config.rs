@@ -12,7 +12,7 @@
 //! because every `u64` is a valid timestamp. There is no separate
 //! `validate()` step — invalid state cannot be constructed.
 //!
-//! The same idiom is used by [`crate::duties::sync::Config`], whose
+//! The same idiom is used by [`crate::sync::Config`], whose
 //! `max_sync_depth` is a [`core::num::NonZeroUsize`].
 
 use std::fmt;
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use super::error::{DutiesError, DutiesResult};
 
 /// Repository-relative default for the devnet0 validator-assignment
-/// file. Resolved against the `lean-chain` crate root when fed to
+/// file. Resolved against the `runtime` crate root when fed to
 /// [`super::ValidatorAssignments::load`].
 pub const DEFAULT_VALIDATORS_PATH: &str = "internal/testdata/devnet0/validators.yaml";
 
