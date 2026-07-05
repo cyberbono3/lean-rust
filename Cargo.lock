@@ -1350,9 +1350,9 @@ name = "fixtures"
 version = "0.1.0"
 dependencies = [
  "hex",
- "lean-duties",
  "libp2p",
  "protocol",
+ "runtime",
  "serde_yaml",
  "ssz",
  "storage",
@@ -2231,53 +2231,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
-name = "lean-api"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "lean-core",
- "parking_lot",
- "prometheus",
- "protocol",
- "serde",
- "serde_json",
- "storage",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tower 0.4.13",
- "tracing",
- "types",
-]
-
-[[package]]
-name = "lean-chain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "config",
- "criterion",
- "forkchoice",
- "lean-chain",
- "lean-core",
- "lean-wire",
- "loom",
- "parking_lot",
- "protocol",
- "ssz",
- "static_assertions",
- "storage",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "types",
-]
-
-[[package]]
 name = "lean-cli"
 version = "0.1.0"
 dependencies = [
@@ -2286,96 +2239,12 @@ dependencies = [
  "config",
  "fixtures",
  "hex",
- "lean-duties",
- "lean-observability",
- "lean-p2p-host",
  "libp2p",
  "protocol",
+ "runtime",
  "ssz",
  "tempfile",
  "tracing",
-]
-
-[[package]]
-name = "lean-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "parking_lot",
- "static_assertions",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "lean-duties"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "config",
- "criterion",
- "futures",
- "lean-chain",
- "lean-core",
- "lean-p2p-host",
- "parking_lot",
- "protocol",
- "serde",
- "serde_yaml",
- "static_assertions",
- "storage",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "types",
-]
-
-[[package]]
-name = "lean-observability"
-version = "0.1.0"
-dependencies = [
- "serial_test",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "lean-p2p-host"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "config",
- "fixtures",
- "futures",
- "hex",
- "lean-chain",
- "lean-core",
- "lean-wire",
- "libp2p",
- "parking_lot",
- "protocol",
- "serde",
- "serde_yaml",
- "snap",
- "ssz",
- "static_assertions",
- "storage",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "types",
 ]
 
 [[package]]
@@ -2387,36 +2256,12 @@ dependencies = [
  "config",
  "fixtures",
  "lean-cli",
- "lean-core",
- "lean-duties",
- "lean-observability",
- "lean-p2p-host",
  "node",
+ "runtime",
  "ssz",
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "lean-sync"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "lean-chain",
- "lean-core",
- "lean-wire",
- "parking_lot",
- "protocol",
- "ssz",
- "static_assertions",
- "storage",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "types",
 ]
 
 [[package]]
@@ -3091,14 +2936,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "lean-api",
- "lean-chain",
- "lean-core",
- "lean-duties",
- "lean-p2p-host",
  "lean-wire",
  "parking_lot",
  "protocol",
+ "runtime",
  "storage",
  "tempfile",
  "tokio",
@@ -3818,6 +3659,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 
 [[package]]
+name = "runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "config",
+ "criterion",
+ "fixtures",
+ "forkchoice",
+ "futures",
+ "hex",
+ "lean-wire",
+ "libp2p",
+ "loom",
+ "parking_lot",
+ "prometheus",
+ "protocol",
+ "runtime",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "snap",
+ "ssz",
+ "static_assertions",
+ "storage",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower 0.4.13",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "types",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3962,15 +3842,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scc"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46e6f046b7fef48e2660c57ed794263155d713de679057f2d0c169bfc6e756cc"
-dependencies = [
- "sdd",
-]
-
-[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3981,12 +3852,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
-name = "sdd"
-version = "3.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
 name = "sec1"
@@ -4107,24 +3972,23 @@ dependencies = [
 
 [[package]]
 name = "serial_test"
-version = "3.4.0"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "911bd979bf1070a3f3aa7b691a3b3e9968f339ceeec89e08c280a8a22207a32f"
+checksum = "699f4197115b8a7e7ff19c9a315a4bd6fffec26cc4626ef45ecaea389e081c6d"
 dependencies = [
  "futures-executor",
  "futures-util",
  "log",
  "once_cell",
  "parking_lot",
- "scc",
  "serial_test_derive",
 ]
 
 [[package]]
 name = "serial_test_derive"
-version = "3.4.0"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a7d91949b85b0d2fb687445e448b40d322b6b3e4af6b44a29b21d9a5f33e6d9"
+checksum = "94e153fc76e1c6a068703d6d29c508a0b15c061c4b7e43da59cc097bc342673c"
 dependencies = [
  "proc-macro2",
  "quote",

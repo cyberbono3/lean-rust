@@ -5,8 +5,8 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use lean_p2p_host::{load_existing_peer_id, IdentityPath};
 use libp2p::{identity::Keypair, PeerId};
+use runtime::p2p::{load_existing_peer_id, IdentityPath};
 
 /// Generates a new Ed25519 libp2p keypair and writes it to `output_path`.
 ///

@@ -4,11 +4,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context;
-use lean_api::{HttpService, MetricsService, Recorder};
-use lean_chain::Service as ChainService;
-use lean_core::{Node, NodeConfig};
-use lean_p2p_host::{DevnetHost, HostOptions, RpcProvider};
 use protocol::{Block, Checkpoint, SignedBlock, Slot, State};
+use runtime::api::{HttpService, MetricsService, Recorder};
+use runtime::chain::Service as ChainService;
+use runtime::core::{Node, NodeConfig};
+use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use storage::{HeadInfo, MemoryStore, Store};
 use types::{Bytes32, Bytes4000};
 
@@ -30,7 +30,7 @@ pub struct Config {
     /// libp2p host options.
     pub p2p: HostOptions,
     /// Validator duty scheduler options.
-    pub duties: lean_duties::Config,
+    pub duties: runtime::duties::Config,
     /// HTTP API bind address.
     pub http_addr: SocketAddr,
     /// Prometheus metrics bind address.
@@ -71,7 +71,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         message: genesis_block.clone(),
         signature: Bytes4000::default(),
     };
-    let engine = lean_chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
+    let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
     let anchor_root = engine.head();
     let finalized = engine.latest_finalized();
     persist_anchor(
@@ -91,10 +91,10 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         Arc::clone(&chain),
     ));
 
-    let duties = Arc::new(lean_duties::Service::new(
+    let duties = Arc::new(runtime::duties::Service::new(
         duties,
         chain.clone(),
-        Arc::new(lean_duties::Publisher::new(Arc::clone(&p2p))),
+        Arc::new(runtime::duties::Publisher::new(Arc::clone(&p2p))),
     ));
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));
@@ -172,11 +172,11 @@ fn persist_anchor(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use lean_duties::GenesisTimeUnix;
+    use runtime::duties::GenesisTimeUnix;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    const VALIDATORS_PATH: &str = "../runtime/duties/tests/fixtures/validators.yaml";
+    const VALIDATORS_PATH: &str = "../runtime/tests/duties_fixtures/validators.yaml";
 
     fn loopback() -> SocketAddr {
         "127.0.0.1:0".parse().unwrap()
@@ -202,11 +202,11 @@ mod tests {
             None,
         )
         .unwrap();
-        let duties = lean_duties::Config::default()
+        let duties = runtime::duties::Config::default()
             .with_validators_path(validators_path())
             .unwrap()
             .with_genesis_time_unix(future_genesis());
-        let (genesis_state, genesis_block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+        let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
 
         Config {
             node: NodeConfig::default(),
@@ -234,8 +234,8 @@ mod tests {
     fn register_chain_gauges_freezes_without_collision() {
         // The wired chain gauges must not collide with each other or the
         // baseline gauges, so `freeze` succeeds.
-        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
-        let engine = lean_chain::engine::Engine::from_anchor(state, block).unwrap();
+        let (state, block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
+        let engine = runtime::chain::engine::Engine::from_anchor(state, block).unwrap();
         let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
         let chain = Arc::new(ChainService::new(engine, store));
 
@@ -247,9 +247,10 @@ mod tests {
     #[test]
     fn persist_anchor_seeds_head_block_and_state() {
         let store = MemoryStore::default();
-        let (state, block) = lean_chain::engine::test_fixtures::anchor_pair(4);
+        let (state, block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
         let slot = block.slot;
-        let engine = lean_chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+        let engine =
+            runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
         let root = engine.head();
         let finalized = engine.latest_finalized();
         let signed = SignedBlock {

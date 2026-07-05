@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use lean_observability::Verbosity;
+use runtime::observability::Verbosity;
 
 /// Default libp2p QUIC-v1 listen address for devnet nodes.
 pub const DEFAULT_DEVNET_LISTEN_ADDRESS: &str = "/ip4/0.0.0.0/udp/9000/quic-v1";

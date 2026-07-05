@@ -11,11 +11,7 @@ description   = "Composition root wiring concrete runtime services into a Node."
 workspace = true
 
 [dependencies]
-lean-core   = { path = "../runtime/core" }
-lean-chain  = { path = "../runtime/chain" }
-lean-duties = { path = "../runtime/duties" }
-lean-p2p-host = { path = "../runtime/p2p" }
-lean-api    = { path = "../runtime/api" }
+runtime = { path = "../runtime" }
 lean-wire   = { path = "../networking" }
 protocol    = { path = "../protocol" }
 storage     = { path = "../storage" }
@@ -28,5 +24,5 @@ tokio-util  = { workspace = true }
 tracing     = { workspace = true }
 
 [dev-dependencies]
-lean-chain = { path = "../runtime/chain", features = ["test-fixtures"] }
+runtime = { path = "../runtime", features = ["test-fixtures"] }
 tempfile   = { workspace = true }

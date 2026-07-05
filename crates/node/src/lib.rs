@@ -2,7 +2,7 @@
 //!
 //! The runtime sibling crates intentionally stay decoupled. This crate
 //! is the place where concrete services are assembled, narrow ports are
-//! adapted, and a [`lean_core::Node`] is returned ready for lifecycle
+//! adapted, and a [`runtime::core::Node`] is returned ready for lifecycle
 //! management.
 
 #![forbid(unsafe_code)]
