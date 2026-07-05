@@ -9,6 +9,6 @@
 
 pub mod devnet;
 
-mod gossip_ingest;
+mod consensus_loop;
 
 pub use devnet::{new_devnet, Config, Result};

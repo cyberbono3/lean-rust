@@ -1,22 +1,19 @@
-//! Duties service — the narrow devnet0 validator-duty scheduler.
+//! Duties helpers — validator-assignment loading + local proposer lookup.
 //!
-//! Loads local validator assignments
-//! from YAML, schedules proposers at slot boundaries and attesters at
-//! the `vote_due_bps` deadline. Production calls the concrete
-//! [`crate::chain::Service`] directly; publish goes through the concrete
-//! [`Publisher`] over the running [`crate::p2p::P2pService`] — the
-//! former `Chain`/`Publisher` port traits collapsed to concrete types.
+//! The devnet0 duty scheduler moved into the self-driving consensus loop
+//! (`node` crate), which owns the genesis-anchored interval loop and drives
+//! propose/attest inline. This module now provides the pure helpers that
+//! loop consumes: [`ValidatorAssignments`] (YAML loader), [`LocalProposers`]
+//! (O(1) proposer lookup over the local set), and [`Config`] (validated
+//! paths + genesis time). Production + publish happen in the consensus loop
+//! directly against [`crate::chain::Service`] and [`crate::p2p::P2pService`].
 //!
-//! Out of scope (deliberate): aggregator duties,
-//! direct forkchoice mutation, optional metrics hooks.
+//! Out of scope (deliberate): aggregator duties, direct forkchoice mutation.
 
 mod config;
 mod error;
 mod proposer;
-mod publisher;
-mod service;
 mod validators;
-mod wiring;
 
 pub use config::{
     Config, GenesisTimeUnix, ValidatorGroup, ValidatorsPath, DEFAULT_VALIDATORS_PATH,
@@ -24,6 +21,4 @@ pub use config::{
 };
 pub use error::{DutiesError, DutiesResult};
 pub use proposer::LocalProposers;
-pub use publisher::{PublishError, Publisher};
-pub use service::Service;
 pub use validators::ValidatorAssignments;

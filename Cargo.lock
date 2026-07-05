@@ -2936,6 +2936,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "config",
+ "futures",
  "lean-wire",
  "parking_lot",
  "protocol",

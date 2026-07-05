@@ -54,6 +54,13 @@ impl LocalProposers {
         let proposer = ValidatorIndex::new(slot.get() % self.total_validators);
         self.local.contains(&proposer).then_some(proposer)
     }
+
+    /// Iterates the local validator set (order unspecified). Lets the
+    /// consensus driver's attester pass reuse this set instead of holding a
+    /// separate validator slice.
+    pub fn local(&self) -> impl Iterator<Item = ValidatorIndex> + '_ {
+        self.local.iter().copied()
+    }
 }
 
 #[cfg(test)]

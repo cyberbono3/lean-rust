@@ -180,6 +180,82 @@ async fn status_handshake_completes_on_dial() {
     .expect("status_handshake_completes_on_dial exceeded TEST_DEADLINE");
 }
 
+/// Polls `cond` every 50 ms until it holds or `deadline` elapses.
+async fn poll_until(deadline: Duration, cond: impl Fn() -> bool) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        if cond() {
+            return true;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    cond()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn outbound_api_surfaces_peer_view_and_blocks_by_root() {
+    timeout(TEST_DEADLINE, async {
+        let (b0, r0) = block_with_seed(1, 1);
+        let provider_a = chain_provider_with_blocks(&[(b0.clone(), r0)]);
+        let provider_b = chain_provider_with_blocks(&[]);
+
+        // Start A alone, subscribe to its connect events BEFORE B dials in,
+        // then start B pointed at A so A observes the `ConnectionEstablished`.
+        let a = start_node(provider_a, None).await;
+        let mut a_events = a.service.subscribe_connected_peers(8);
+        let bootnodes_dir = tempdir().unwrap();
+        let bootnodes_path = write_bootnodes(bootnodes_dir.path(), a.peer_id, &a.bound);
+        let b = start_node(provider_b, Some(&bootnodes_path)).await;
+
+        let b_id = b.peer_id.to_base58();
+        let a_id = a.peer_id.to_base58();
+
+        // subscribe_connected_peers: A receives a connect event for B.
+        let event = timeout(RPC_DEADLINE, a_events.recv())
+            .await
+            .expect("connect event within deadline")
+            .expect("event channel open");
+        assert_eq!(event, b_id, "connect event must carry B's base-58 peer id");
+
+        // connected_peers snapshot: A lists B.
+        assert!(
+            poll_until(RPC_DEADLINE, || a.service.connected_peers().contains(&b_id)).await,
+            "A.connected_peers() must include B",
+        );
+
+        // peer_status cache: A caches B's handshaked Status (populated on the
+        // ConnectionEstablished handshake).
+        assert!(
+            poll_until(RPC_DEADLINE, || a.service.peer_status(&b_id).is_some()).await,
+            "A.peer_status(B) must be populated after the handshake",
+        );
+
+        // request_blocks_by_root: B recovers b0 from A over the concrete
+        // outbound API (base-58 peer id in, wire response out).
+        let request = BlocksByRootRequest::new([r0]).unwrap();
+        let response = timeout(
+            RPC_DEADLINE,
+            b.service.request_blocks_by_root(&a_id, request),
+        )
+        .await
+        .expect("request_blocks_by_root within deadline")
+        .expect("request_blocks_by_root must succeed against A");
+        let roots: HashSet<Bytes32> = response.blocks().iter().map(root_of).collect();
+        assert_eq!(roots, HashSet::from([r0]));
+
+        // Invalid peer id surfaces an error rather than panicking.
+        let bad = b
+            .service
+            .request_blocks_by_root("not-a-peer-id", BlocksByRootRequest::new([r0]).unwrap())
+            .await;
+        assert!(bad.is_err(), "invalid base-58 peer id must be an error");
+
+        stop_both(a, b).await;
+    })
+    .await
+    .expect("outbound_api_surfaces_peer_view_and_blocks_by_root exceeded TEST_DEADLINE");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gossip_and_blocks_by_root_converge() {
     timeout(TEST_DEADLINE, async {

@@ -20,6 +20,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::StreamExt;
+use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
 use parking_lot::Mutex;
 use protocol::{SignedBlock, SignedVote};
@@ -37,8 +38,9 @@ use crate::p2p::host::{
     Host, HostCommand, COMMAND_CHANNEL_CAPACITY,
 };
 use crate::p2p::options::HostOptions;
+use crate::p2p::peers::PeerRegistry;
 use crate::p2p::rpc::{
-    blocks_by_root as blocks_handler, outbound::OutboundTable, status as status_handler,
+    blocks_by_root as blocks_handler, outbound::OutboundTable, status as status_handler, RpcError,
     RpcProvider,
 };
 
@@ -72,6 +74,11 @@ pub struct P2pService {
     /// Populated by [`Service::start`]; consumed once via
     /// [`Self::take_vote_receiver`].
     vote_rx: Mutex<Option<VoteReceiver>>,
+    /// Shared outbound peer view: connected set, per-peer handshaked
+    /// `Status` cache, and connect-event subscribers. Cloned into the
+    /// swarm-poll task (writer); read by the `connected_peers` /
+    /// `peer_status` / `subscribe_connected_peers` surface (reader).
+    registry: Arc<PeerRegistry>,
 }
 
 enum State {
@@ -125,7 +132,55 @@ impl P2pService {
             provider,
             block_rx: Mutex::new(None),
             vote_rx: Mutex::new(None),
+            registry: Arc::new(PeerRegistry::default()),
         }
+    }
+
+    /// Requests blocks by root from `peer` (base-58 peer id). Parses the id
+    /// to a `libp2p::PeerId` at this boundary so callers (notably `sync`)
+    /// stay `libp2p`-free. Returns the wire response unchanged.
+    ///
+    /// # Errors
+    /// - [`RpcError::Outbound`] if `peer` is not a valid base-58 peer id.
+    /// - [`RpcError::ChannelClosed`] if the host is not running.
+    /// - Any [`RpcError`] surfaced by the underlying `BlocksByRoot` RPC.
+    pub async fn request_blocks_by_root(
+        &self,
+        peer: &str,
+        request: BlocksByRootRequest,
+    ) -> Result<BlocksByRootResponse, RpcError> {
+        let peer_id: PeerId = peer
+            .parse()
+            .map_err(|_| RpcError::Outbound(format!("invalid peer id: {peer}")))?;
+        let host = self.host().ok_or(RpcError::ChannelClosed)?;
+        host.send_blocks_by_root(peer_id, request).await
+    }
+
+    /// Returns `peer`'s last handshaked [`Status`], or `None` if `peer` is
+    /// not a valid base-58 id or the connect handshake has not completed.
+    ///
+    /// Cheap cache readback (the `Status` is captured from the
+    /// `ConnectionEstablished` handshake), avoiding a net-new outbound
+    /// Status RPC.
+    #[must_use]
+    pub fn peer_status(&self, peer: &str) -> Option<Status> {
+        let peer_id: PeerId = peer.parse().ok()?;
+        self.registry.status_of(&peer_id)
+    }
+
+    /// Snapshot of currently-connected peers as base-58 strings.
+    #[must_use]
+    pub fn connected_peers(&self) -> Vec<String> {
+        self.registry.connected()
+    }
+
+    /// Subscribes to connect events over a **bounded** channel of base-58
+    /// peer strings. Each `ConnectionEstablished` pushes the peer id;
+    /// a full channel drops the event (bounded, lossy — the sync loop
+    /// dedups and retries).
+    #[must_use]
+    pub fn subscribe_connected_peers(&self, bound: usize) -> mpsc::Receiver<String> {
+        self.registry.subscribe(bound)
     }
 
     /// Consumes the inbound block channel. Returns `Some` exactly once
@@ -279,6 +334,7 @@ impl Service for P2pService {
             block_tx,
             vote_tx,
             Arc::clone(&self.provider),
+            Arc::clone(&self.registry),
         ));
 
         *self.block_rx.lock() = Some(BlockReceiver::new(block_rx));
@@ -458,6 +514,7 @@ async fn swarm_task(
     block_tx: mpsc::Sender<SignedBlock>,
     vote_tx: mpsc::Sender<SignedVote>,
     provider: Arc<RpcProvider>,
+    registry: Arc<PeerRegistry>,
 ) {
     info!(local_peer = %swarm.local_peer_id(), "p2p swarm-poll task up");
     // Pin once outside the loop: the cancellation future is monotonic
@@ -522,6 +579,7 @@ async fn swarm_task(
                     &vote_tx,
                     &mut outbound,
                     provider.as_ref(),
+                    registry.as_ref(),
                 );
             }
         }
@@ -536,6 +594,7 @@ fn handle_swarm_event(
     vote_tx: &mpsc::Sender<SignedVote>,
     outbound: &mut OutboundTable,
     provider: &RpcProvider,
+    registry: &PeerRegistry,
 ) {
     match event {
         SwarmEvent::Behaviour(DevnetBehaviourEvent::Gossipsub(gossipsub::Event::Message {
@@ -552,7 +611,7 @@ fn handle_swarm_event(
             handler::route_gossipsub_message(&message_id, &message, block_tx, vote_tx);
         }
         SwarmEvent::Behaviour(DevnetBehaviourEvent::StatusRr(event)) => {
-            handle_status_rr_event(event, swarm, provider);
+            handle_status_rr_event(event, swarm, provider, registry);
         }
         SwarmEvent::Behaviour(DevnetBehaviourEvent::BlocksRr(event)) => {
             handle_blocks_rr_event(event, swarm, outbound, provider);
@@ -560,10 +619,12 @@ fn handle_swarm_event(
         SwarmEvent::Behaviour(inner) => debug!(?inner, "behaviour event"),
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
             info!(peer = %peer_id, "connection established");
+            registry.on_connect(peer_id);
             initiate_status_handshake(peer_id, swarm, provider);
         }
         SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
             debug!(peer = %peer_id, ?cause, "connection closed");
+            registry.on_disconnect(&peer_id);
             // Wake any in-flight outbound requests to this peer so their
             // entries do not leak in the table for the task's lifetime.
             outbound.fail_all_for_peer(peer_id, "peer connection closed");
@@ -606,6 +667,7 @@ fn handle_status_rr_event(
     event: request_response::Event<RpcRequest, RpcResponse>,
     swarm: &mut Swarm<DevnetBehaviour>,
     provider: &RpcProvider,
+    registry: &PeerRegistry,
 ) {
     match event {
         request_response::Event::Message { peer, message, .. } => match message {
@@ -613,6 +675,10 @@ fn handle_status_rr_event(
                 request, channel, ..
             } => match request {
                 RpcRequest::Status(s) => {
+                    // The peer sent us its `Status` (both sides handshake on
+                    // connect) — cache it so `peer_status` can read it back
+                    // without a second round-trip.
+                    registry.set_status(peer, s);
                     status_handler::on_inbound(peer, &s, channel, swarm, provider);
                 }
                 RpcRequest::BlocksByRoot(_) => {
@@ -621,6 +687,7 @@ fn handle_status_rr_event(
             },
             request_response::Message::Response { response, .. } => match response {
                 RpcResponse::Status(s) => {
+                    registry.set_status(peer, s);
                     status_handler::on_outbound_response(peer, &s, swarm, provider);
                 }
                 RpcResponse::BlocksByRoot(_) => {

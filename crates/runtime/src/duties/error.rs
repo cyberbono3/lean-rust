@@ -1,20 +1,15 @@
-//! Error type for the duties [`Service`](super::Service).
+//! Error type for the duties helpers (config + YAML loader).
 
 use std::path::PathBuf;
 
 use thiserror::Error;
 
-use crate::chain::ChainError;
-
-use super::publisher::PublishError;
-
-/// Failures raised by the duties service.
+/// Failures raised by the duties helpers.
 ///
-/// Per-slot production / publish errors are *not* terminal: they are
-/// warn-logged and folded into the scheduler's publish-health counter
-/// (see [`super::Service`]). The variants
-/// below cover construction (invalid config, missing group) and the YAML
-/// loader.
+/// The variants below cover config construction (invalid path / group,
+/// unset genesis) and the YAML validator-assignment loader. Per-slot
+/// production / publish errors are handled by the consensus loop in the
+/// `node` crate (warn-and-continue), not here.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DutiesError {
@@ -81,22 +76,6 @@ pub enum DutiesError {
         cap: u64,
     },
 
-    /// A per-validator attestation duty (produce + publish) did not
-    /// complete within its slot budget and was cancelled by the
-    /// per-future timeout. Recorded in publish health like any other
-    /// duty failure.
-    #[error("duties attestation for validator {validator} timed out after {timeout_ms} ms")]
-    DutyTimeout {
-        /// Validator whose duty timed out.
-        validator: u64,
-        /// Per-validator budget in milliseconds.
-        timeout_ms: u64,
-    },
-
-    /// `Service::start` was called twice.
-    #[error("duties service already started")]
-    AlreadyStarted,
-
     /// YAML deserialization failed. Carries the resolved file path the
     /// parse was attempted against — `PathBuf::new()` for test-only
     /// in-memory parses via [`super::ValidatorAssignments::from_bytes`].
@@ -119,22 +98,6 @@ pub enum DutiesError {
         #[source]
         source: std::io::Error,
     },
-
-    /// Chain production / persistence path failed during a scheduled
-    /// duty. Surfaces only via `Service::status()` (the scheduler does
-    /// not terminate on a single failure). Display is forwarded
-    /// verbatim from the inner [`ChainError`] so log output reads
-    /// `"storage: ..."` / `"engine: ..."` without a redundant prefix.
-    #[error(transparent)]
-    Chain(#[from] ChainError),
-
-    /// Publishing a produced block / attestation failed. Recorded in
-    /// the scheduler's [`super::Service`] publish-health counter rather
-    /// than terminating the worker — a single transport flake is not a
-    /// service-terminal condition. Display forwards the inner
-    /// [`PublishError`] verbatim.
-    #[error(transparent)]
-    Publish(#[from] PublishError),
 }
 
 /// Convenience alias for `Result<T, DutiesError>`. Mirrors the

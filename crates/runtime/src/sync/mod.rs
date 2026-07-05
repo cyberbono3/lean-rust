@@ -6,20 +6,19 @@
 //! [`Config::max_sync_depth`], then imports the recovered chain in
 //! forward order through the concrete [`crate::chain::Service`].
 //!
-//! The chain surface is the concrete [`crate::chain::Service`], called
-//! directly by the [`Loop`]. The outbound [`Network`] /
-//! [`PeerEventProvider`] ports have no in-crate impl yet — the
-//! `lean-p2p-host` / `node` crates provide the libp2p-backed handle in a
-//! later issue; tests use in-memory fakes until then.
+//! Both surfaces are concrete: the chain is [`crate::chain::Service`] and
+//! the outbound RPC + connect events come from [`crate::p2p::P2pService`]
+//! (the former `Network` / `PeerEventProvider` port traits collapsed to
+//! this one handle). `P2pService` speaks base-58 `String` peer ids and
+//! maps its `RpcError` into [`SyncError`], so this module never compiles
+//! against `libp2p`.
 
 mod config;
 mod error;
 mod loop_;
 mod peer_id;
-mod ports;
 
 pub use config::Config;
 pub use error::SyncError;
 pub use loop_::Loop;
 pub use peer_id::PeerId;
-pub use ports::{Network, PeerEventProvider};
