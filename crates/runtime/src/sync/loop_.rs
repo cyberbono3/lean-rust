@@ -313,7 +313,11 @@ impl PeerWorker {
         }
         let Some((local_status, peer_status)) = status_exchange(&self.chain, &self.p2p, &peer)
         else {
-            debug!(%peer, "peer status not yet cached; skipping (retried on next connect)");
+            // The peer-ready event fires only after the handshake caches the
+            // status, so reaching here means the peer disconnected between
+            // the event and this read (its status was evicted). Skip; a later
+            // reconnect/handshake re-fires the event.
+            debug!(%peer, "peer status unavailable (peer disconnected before walk); skipping");
             return;
         };
         if !should_sync(&local_status, &peer_status) {
