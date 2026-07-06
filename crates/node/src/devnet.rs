@@ -124,8 +124,10 @@ pub fn new_devnet(config: Config) -> Result<Node> {
 
 /// Registers chain-state gauges. Each closure captures a cloned
 /// `Arc<ChainService>` and reads the engine on demand via `snapshot()` per
-/// scrape — cheap, and decoupled from the writer path. Closes the fixture §8
-/// gap where `/metrics` exposed only the two baseline process gauges.
+/// scrape. The read acquires the engine lock, so a scrape serializes behind
+/// any in-progress writer for that writer's lock hold — acceptable because a
+/// scrape has no deadline. Closes the fixture §8 gap where `/metrics` exposed
+/// only the two baseline process gauges.
 ///
 /// A connected-peer gauge is intentionally not wired here: the p2p host
 /// exposes no synchronous connected-peer count today, so that gauge is
