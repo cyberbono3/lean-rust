@@ -3,11 +3,20 @@
 use std::net::IpAddr;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use runtime::observability::Verbosity;
 
 /// Default libp2p QUIC-v1 listen address for devnet nodes.
 pub const DEFAULT_DEVNET_LISTEN_ADDRESS: &str = "/ip4/0.0.0.0/udp/9000/quic-v1";
+
+/// Persistence backend selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum StorageBackend {
+    /// In-memory, non-durable (default).
+    Memory,
+    /// Durable on-disk store (requires `--storage-path`).
+    Persistent,
+}
 
 /// Parsed `lean-rust` CLI.
 #[derive(Debug, Parser)]
@@ -70,6 +79,15 @@ pub struct Cli {
     /// Metrics listen port.
     #[arg(long)]
     pub metrics_port: Option<u16>,
+
+    /// Persistence backend: in-memory (default) or a durable on-disk store.
+    #[arg(long, value_enum, default_value_t = StorageBackend::Memory)]
+    pub storage: StorageBackend,
+
+    /// Filesystem path for the persistent store (required when
+    /// `--storage persistent`).
+    #[arg(long)]
+    pub storage_path: Option<PathBuf>,
 
     /// Log level used when `RUST_LOG` is not set.
     #[arg(long = "log-level", default_value_t = Verbosity::Info)]
@@ -339,5 +357,27 @@ mod tests {
             .expect("parse debug flag");
 
         assert_eq!(cli.verbosity(), Verbosity::Trace);
+    }
+
+    #[test]
+    fn parses_persistent_storage_flags() {
+        let cli = Cli::try_parse_from([
+            "lean-rust",
+            "--storage",
+            "persistent",
+            "--storage-path",
+            "/data/db",
+        ])
+        .expect("parse storage flags");
+
+        assert_eq!(cli.storage, StorageBackend::Persistent);
+        assert_eq!(cli.storage_path, Some(PathBuf::from("/data/db")));
+    }
+
+    #[test]
+    fn storage_defaults_to_memory() {
+        let cli = Cli::try_parse_from(["lean-rust"]).expect("parse defaults");
+        assert_eq!(cli.storage, StorageBackend::Memory);
+        assert_eq!(cli.storage_path, None);
     }
 }

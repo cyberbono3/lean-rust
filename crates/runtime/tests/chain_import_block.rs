@@ -60,6 +60,9 @@ impl Store for CountingStore {
     fn has_block(&self, root: &Bytes32) -> Result<bool, StorageError> {
         self.inner.has_block(root)
     }
+    fn has_state(&self, root: &Bytes32) -> Result<bool, StorageError> {
+        self.inner.has_state(root)
+    }
     fn load_block(&self, root: &Bytes32) -> Result<Option<SignedBlock>, StorageError> {
         self.inner.load_block(root)
     }

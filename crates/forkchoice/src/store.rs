@@ -86,6 +86,68 @@ impl Store {
     /// - [`ForkchoiceError::AnchorTimeOverflow`] when
     ///   `anchor_block.slot * INTERVALS_PER_SLOT` overflows `u64`.
     pub fn from_anchor(state: State, anchor_block: Block) -> Result<Self, ForkchoiceError> {
+        // `latest_justified` / `latest_finalized` are `Copy`; read them before
+        // `state` moves into `seed_anchor`.
+        let justified = state.latest_justified;
+        let finalized = state.latest_finalized;
+        Self::seed_anchor(state, anchor_block, |anchor_root, anchor_slot| {
+            (
+                normalize_genesis_checkpoint(justified, anchor_slot, anchor_root),
+                normalize_genesis_checkpoint(finalized, anchor_slot, anchor_root),
+            )
+        })
+    }
+
+    /// Resume constructor: trusts `anchor_block` as this node's own persisted
+    /// head and seeds BOTH `latest_justified` and `latest_finalized` to the
+    /// anchor itself — `(anchor_root, anchor_block.slot)`.
+    ///
+    /// Unlike [`Self::from_anchor`], which copies the justified/finalized
+    /// checkpoints out of `state`, this pins them to the anchor. That is
+    /// required when re-anchoring a restarted single node at its persisted head:
+    /// `from_anchor` would seed `latest_justified` from the state, whose root is
+    /// an ancestor block absent from the anchor-only block map, so the first
+    /// LMD-GHOST head walk ([`crate::helpers::get_fork_choice_head`], which
+    /// requires its start root to be tracked) would fail with
+    /// [`ForkchoiceError::UnknownRootBlock`]. Anchoring justified and finalized
+    /// at the head keeps the walk's start root in the map.
+    ///
+    /// Semantics: the reported finalized slot becomes the head slot — always
+    /// `>=` the pre-restart finalized slot, so finalization stays monotonic.
+    /// This is the weak-subjectivity trusted-restart model appropriate for a
+    /// standalone node that never reorgs its own chain. The store's
+    /// `latest_finalized` (pinned here at the anchor) therefore diverges from
+    /// the anchor `state.latest_finalized` (the true lower-slot ancestor) until
+    /// a post-restart block finalizes at `slot > anchor.slot` and the
+    /// checkpoint-adoption path re-adopts; the store field is never fed back
+    /// into the state-transition function, so this is intentional, not an
+    /// inconsistency.
+    ///
+    /// Scope: this over-reports finalization (it asserts `finalized == justified
+    /// == head`), which is sound only for a standalone node that trusts its own
+    /// persisted head. If this store is ever wired into multi-peer finalization
+    /// exchange, the anchor-pinned `latest_finalized` MUST NOT be gossiped as a
+    /// real FFG checkpoint — use a reconstruction that preserves the true
+    /// finalized ancestor instead.
+    ///
+    /// # Errors
+    /// Same as [`Self::from_anchor`].
+    pub fn from_trusted_head(state: State, anchor_block: Block) -> Result<Self, ForkchoiceError> {
+        Self::seed_anchor(state, anchor_block, |anchor_root, anchor_slot| {
+            let cp = Checkpoint::new(anchor_root, anchor_slot);
+            (cp, cp)
+        })
+    }
+
+    /// Shared body of [`Self::from_anchor`] and [`Self::from_trusted_head`]:
+    /// validates state-root parity and the anchor clock, then builds the
+    /// single-anchor store with the caller-selected `(justified, finalized)`
+    /// checkpoints (given the derived anchor root and slot).
+    fn seed_anchor(
+        state: State,
+        anchor_block: Block,
+        checkpoints: impl FnOnce(Bytes32, Slot) -> (Checkpoint, Checkpoint),
+    ) -> Result<Self, ForkchoiceError> {
         // 1. State-root parity check (cheap; runs before any move).
         let want_state_root: Bytes32 = state.hash_tree_root().into();
         if anchor_block.state_root != want_state_root {
@@ -108,14 +170,8 @@ impl Store {
             })?;
 
         // 3. Build the store with the seeded fields; remaining fields
-        //    (maps, block_order, vote maps) take their `Default` empty
-        //    values. `state.config` / `latest_justified` / `latest_finalized`
-        //    are `Copy`, so they are read inline before `state` moves into
-        //    `insert_block`.
-        let latest_justified =
-            normalize_genesis_checkpoint(state.latest_justified, anchor_block.slot, anchor_root);
-        let latest_finalized =
-            normalize_genesis_checkpoint(state.latest_finalized, anchor_block.slot, anchor_root);
+        //    (maps, block_order, vote maps) take their `Default` empty values.
+        let (latest_justified, latest_finalized) = checkpoints(anchor_root, anchor_block.slot);
         let mut store = Self {
             time,
             config: state.config,
@@ -742,6 +798,50 @@ mod tests {
         let (state, block) = anchor_pair(4);
         let store = Store::from_anchor(state, block).unwrap();
         assert_eq!(store.time(), Time::ZERO);
+    }
+
+    // -- Resume: from_trusted_head fixes the non-genesis head walk ----------
+
+    #[test]
+    fn from_trusted_head_resumes_where_from_anchor_would_break() {
+        // Real, non-zero genesis block root — the root we make justified point
+        // at, and which is NOT inserted into the slot-1 single-anchor map. Note
+        // it must be non-zero: get_fork_choice_head treats a zero start root as
+        // the min-slot-block sentinel, so a zero justified root would NOT
+        // reproduce the bug.
+        let (_g_state, g_block) = anchor_pair(4);
+        let g_root: Bytes32 = g_block.hash_tree_root().into();
+        assert_ne!(g_root, Bytes32::zero());
+
+        // Slot-1 anchor pair; pin justified at the absent genesis root and
+        // recompute the block's state_root AFTER the mutation so from_anchor's
+        // parity check still holds.
+        let (mut state1, mut block1) = anchor_pair_at_slot(Slot::new(1), 4);
+        state1.latest_justified = Checkpoint::new(g_root, Slot::ZERO);
+        block1.state_root = state1.hash_tree_root().into();
+        let anchor_root: Bytes32 = block1.hash_tree_root().into();
+        assert_ne!(state1.latest_justified.root, anchor_root);
+
+        // from_anchor seeds justified at the absent, non-zero genesis root, so
+        // the head walk cannot resolve its start root.
+        let mut broken = Store::from_anchor(state1.clone(), block1.clone()).unwrap();
+        assert!(
+            matches!(
+                broken.accept_new_votes(),
+                Err(ForkchoiceError::UnknownRootBlock { .. })
+            ),
+            "from_anchor at a non-genesis head must fail the head walk on the absent justified root",
+        );
+
+        // from_trusted_head seeds justified + finalized at the anchor, so the
+        // head walk starts from a tracked root and resolves.
+        let mut resumed = Store::from_trusted_head(state1, block1).unwrap();
+        assert_eq!(resumed.latest_justified().root, anchor_root);
+        assert_eq!(resumed.latest_finalized().root, anchor_root);
+        resumed
+            .accept_new_votes()
+            .expect("resumed head walk resolves from the anchor root");
+        assert_eq!(resumed.head(), anchor_root);
     }
 
     #[test]

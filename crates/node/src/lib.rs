@@ -11,4 +11,4 @@ pub mod devnet;
 
 mod consensus_loop;
 
-pub use devnet::{new_devnet, Config, Result};
+pub use devnet::{new_devnet, Config, Result, StorageKind};

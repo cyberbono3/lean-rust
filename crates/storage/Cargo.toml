@@ -13,9 +13,12 @@ workspace = true
 [dependencies]
 types       = { path = "../types" }
 protocol    = { path = "../protocol" }
+ssz         = { path = "../ssz" }
+redb        = { workspace = true }
 parking_lot = { workspace = true }
 thiserror   = { workspace = true }
 
 [dev-dependencies]
 fixtures          = { path = "../fixtures" }
 static_assertions = { workspace = true }
+tempfile          = { workspace = true }
