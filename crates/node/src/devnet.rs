@@ -132,6 +132,14 @@ pub fn new_devnet(config: Config) -> Result<Node> {
 /// A connected-peer gauge is intentionally not wired here: the p2p host
 /// exposes no synchronous connected-peer count today, so that gauge is
 /// deferred to a p2p-touching change that adds the counter.
+///
+/// Each gauge samples its own `snapshot()`, so one scrape reads the three
+/// slots across three independent engine-lock acquisitions rather than one
+/// coherent tuple. Reintroducing a per-scrape shared snapshot would re-add
+/// the derived cache this refactor deletes, so it is deliberately not done:
+/// the three slots are monotonic and the ordering invariant
+/// `finalized <= justified <= current` holds under any interleaving, so a
+/// torn read never exports an inconsistent ordering.
 fn register_chain_gauges(recorder: &mut Recorder, chain: &Arc<ChainService>) {
     let slot_src = Arc::clone(chain);
     recorder.gauge(
