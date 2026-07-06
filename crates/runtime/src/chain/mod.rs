@@ -4,8 +4,10 @@
 //!
 //! - [`chain::Service`] — wraps [`crate::chain::engine::Engine`] + [`storage::Store`],
 //!   exposes async `import_block` / `import_attestation` /
-//!   `produce_block` / `produce_attestation`, and drives the
-//!   forkchoice tick loop on a `tokio` background task.
+//!   `produce_block` / `produce_attestation` / `tick_interval`, each
+//!   funnelling through the single engine mutex. It owns no background
+//!   task: the self-driving consensus loop (`node` crate) drives the
+//!   forkchoice clock by calling `tick_interval` once per interval.
 //! - [`chain::ChainSnapshot`] — projection of engine state for
 //!   hot-read callers (`api`, `p2p`).
 //! - [`chain::ChainError`] — infrastructure failures (storage,
@@ -13,10 +15,10 @@
 //!   transition errors); logical import outcomes stay in the engine's
 //!   sum types.
 //!
-//! The sync backfill loop lives in the sibling `sync` module;
-//! the proposer / attester scheduler lives in `duties`. Each
-//! drives this module's [`Service`] through a narrow async port whose
-//! adapter `impl` lives in the consumer module (orphan rule).
+//! The sync backfill loop lives in the sibling `sync` module. Proposer /
+//! attester scheduling and forkchoice tick-driving moved into the
+//! self-driving consensus loop in the `node` crate; this module stays a
+//! passive engine funnel that all of them drive through its async API.
 
 // The chain service lives in a `chain` submodule of the `chain` module (a
 // relic of the former standalone `lean-chain` crate); the re-export below is

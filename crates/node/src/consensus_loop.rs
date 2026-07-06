@@ -272,12 +272,14 @@ impl Runner {
                     let slot = Slot::new(tick / INTERVALS_PER_SLOT);
                     let interval = tick % INTERVALS_PER_SLOT;
                     if interval == 0 {
-                        // Reset + set for this slot; sticky through the slot's
-                        // remaining intervals so the interval-3 `tick_interval`
-                        // (forkchoice's sole `Phase::Proposal` branch) sees the
-                        // slot's true proposal outcome. Single-node owns every
-                        // proposer, so this is always `true` at each boundary;
-                        // multi-node signalling is out of scope here.
+                        // Reset + set for this slot from the proposer pass:
+                        // `true` iff this node produced this slot's block.
+                        // Sticky through the slot's remaining intervals so the
+                        // interval-3 `tick_interval` (forkchoice's sole
+                        // `Phase::Proposal` branch) sees the slot's true
+                        // proposal outcome. A node owning only a subset of
+                        // proposers signals `true` on its own proposer slots and
+                        // `false` otherwise.
                         has_proposal = Box::pin(self.maybe_propose(slot)).await;
                     } else if interval == VOTE_DUE_INTERVAL {
                         Box::pin(self.run_attesters(slot, &cancel)).await;
