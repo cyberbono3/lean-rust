@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn slot_interval_maps_intervals_within_the_first_slot() {
-        // INTERVALS_PER_SLOT == 4: indices 0..4 are slot 0, intervals 0..4.
+        // Indices 0..INTERVALS_PER_SLOT are slot 0, intervals 0..INTERVALS_PER_SLOT-1.
         assert_eq!(slot_interval_at(0), (Slot::new(0), 0));
         assert_eq!(slot_interval_at(1), (Slot::new(0), 1));
         assert_eq!(slot_interval_at(2), (Slot::new(0), 2));
