@@ -295,7 +295,15 @@ fn build_filter(env: &str, verbosity: Verbosity) -> (EnvFilter, FilterChoice) {
 /// Whether the stderr `fmt` layer should emit ANSI color escapes:
 /// only when stderr is connected to a terminal.
 fn stderr_ansi_enabled() -> bool {
-    io::stderr().is_terminal()
+    ansi_enabled(io::stderr().is_terminal())
+}
+
+/// Pure ANSI-gating policy: color escapes are emitted only when the sink
+/// is a terminal. Split out from [`stderr_ansi_enabled`] so the decision
+/// is unit-testable without depending on the ambient stderr state (fd 2
+/// is a TTY under an interactive `cargo test`, a pipe under CI).
+fn ansi_enabled(is_terminal: bool) -> bool {
+    is_terminal
 }
 
 #[cfg(test)]
@@ -328,10 +336,14 @@ mod tests {
     }
 
     #[test]
-    fn stderr_ansi_disabled_when_not_a_terminal() {
-        // Under the test harness stderr is captured (piped), so ANSI
-        // must be gated off — no escape bytes leak into redirected logs.
-        assert!(!stderr_ansi_enabled());
+    fn ansi_gated_on_terminal_state() {
+        // ANSI escapes must be emitted only for a terminal sink. Asserting
+        // both branches of the pure policy keeps this deterministic: the
+        // previous form called `stderr_ansi_enabled()`, whose result is
+        // decided by fd 2 (a TTY under interactive `cargo test`, a pipe
+        // under CI) rather than by the test.
+        assert!(!ansi_enabled(false));
+        assert!(ansi_enabled(true));
     }
 
     #[test]
