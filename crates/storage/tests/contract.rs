@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use static_assertions::{assert_impl_all, assert_obj_safe};
-use storage::{MemoryStore, Store};
+use storage::{MemoryStore, RedbStore, Store};
 
 use fixtures::storage::{sample_head, sample_root, sample_signed_block, sample_state};
 
@@ -34,6 +34,8 @@ pub fn run_store_contract<S: Store>(factory: impl Fn() -> S) {
     head_round_trip(&factory());
     has_block_false_for_unknown(&factory());
     has_block_true_after_save(&factory());
+    has_state_false_for_unknown(&factory());
+    has_state_true_after_save(&factory());
     load_block_none_for_unknown(&factory());
     load_state_none_for_unknown(&factory());
     load_head_none_before_first_save(&factory());
@@ -71,6 +73,16 @@ fn has_block_true_after_save(store: &impl Store) {
     let root = sample_root(1);
     store.save_block(root, sample_signed_block(1)).unwrap();
     assert!(store.has_block(&root).unwrap());
+}
+
+fn has_state_false_for_unknown(store: &impl Store) {
+    assert!(!store.has_state(&sample_root(7)).unwrap());
+}
+
+fn has_state_true_after_save(store: &impl Store) {
+    let root = sample_root(1);
+    store.save_state(root, sample_state(1)).unwrap();
+    assert!(store.has_state(&root).unwrap());
 }
 
 fn load_block_none_for_unknown(store: &impl Store) {
@@ -133,9 +145,23 @@ fn memory_store_passes_contract() {
 }
 
 #[test]
+fn redb_store_passes_contract() {
+    // One temp dir; each factory call gets a uniquely-named fresh DB file so
+    // scenarios never share state.
+    let dir = tempfile::TempDir::new().unwrap();
+    let counter = std::cell::Cell::new(0_u32);
+    run_store_contract(|| {
+        let n = counter.get();
+        counter.set(n + 1);
+        RedbStore::new(dir.path().join(format!("contract-{n}.redb"))).unwrap()
+    });
+}
+
+#[test]
 fn store_is_object_safe_and_send_sync() {
     assert_obj_safe!(Store);
     assert_impl_all!(MemoryStore: Store, Send, Sync);
+    assert_impl_all!(RedbStore: Store, Send, Sync);
 }
 
 #[test]
@@ -183,6 +209,10 @@ impl Store for FailingStateStore {
 
     fn has_block(&self, root: &types::Bytes32) -> Result<bool, storage::StorageError> {
         self.inner.has_block(root)
+    }
+
+    fn has_state(&self, root: &types::Bytes32) -> Result<bool, storage::StorageError> {
+        self.inner.has_state(root)
     }
 
     fn load_block(

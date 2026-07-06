@@ -150,6 +150,17 @@ pub trait Store: Send + Sync {
     /// Backend-specific failures via [`StorageError`].
     fn has_block(&self, root: &Bytes32) -> Result<bool, StorageError>;
 
+    /// Reports whether a post-state keyed by `root` is currently tracked.
+    ///
+    /// Symmetric with [`Self::has_block`]: adapters that can answer existence
+    /// without materializing the full state (e.g. KV-store key probes) should
+    /// implement this directly rather than falling back through
+    /// [`Self::load_state`].
+    ///
+    /// # Errors
+    /// Backend-specific failures via [`StorageError`].
+    fn has_state(&self, root: &Bytes32) -> Result<bool, StorageError>;
+
     /// Resolves a persisted signed block by `root`.
     ///
     /// # Errors

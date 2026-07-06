@@ -164,6 +164,25 @@ fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
             genesis_state.config.genesis_time,
         ));
 
+    let storage = match cli.storage {
+        lean_cli::cli::StorageBackend::Memory => {
+            if let Some(path) = cli.storage_path.as_deref() {
+                warn!(
+                    path = %path.display(),
+                    "--storage-path is ignored because --storage is memory; pass --storage persistent to use it",
+                );
+            }
+            node::StorageKind::Memory
+        }
+        lean_cli::cli::StorageBackend::Persistent => {
+            let path = cli
+                .storage_path
+                .clone()
+                .context("--storage persistent requires --storage-path")?;
+            node::StorageKind::Persistent(path)
+        }
+    };
+
     // `--metrics` is accepted for local-pq CLI compatibility. Metrics are
     // already always wired into the current devnet node composition.
     Ok(node::Config {
@@ -178,6 +197,7 @@ fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
         )?,
         genesis_state,
         genesis_block,
+        storage,
     })
 }
 
@@ -389,6 +409,48 @@ mod tests {
             build_devnet_config(&with_metrics).expect("build config with metrics flag");
 
         assert_eq!(without_metrics.metrics_addr, with_metrics.metrics_addr);
+    }
+
+    #[test]
+    fn build_devnet_config_defaults_to_memory_storage() {
+        let cli = Cli::try_parse_from(["lean-rust"]).expect("parse defaults");
+        let config = build_devnet_config(&cli).expect("build config");
+        assert!(matches!(config.storage, node::StorageKind::Memory));
+    }
+
+    #[test]
+    fn memory_backend_ignores_storage_path() {
+        // --storage-path under the memory backend is ignored (with a startup
+        // warning); the resolved backend stays Memory.
+        let cli = Cli::try_parse_from(["lean-rust", "--storage-path", "/tmp/ignored"])
+            .expect("parse memory with stray storage path");
+        let config = build_devnet_config(&cli).expect("build config");
+        assert!(matches!(config.storage, node::StorageKind::Memory));
+    }
+
+    #[test]
+    fn persistent_storage_without_path_is_rejected() {
+        let cli = Cli::try_parse_from(["lean-rust", "--storage", "persistent"])
+            .expect("parse persistent without path");
+        let err = build_devnet_config(&cli).expect_err("missing storage path must fail");
+        assert!(err.to_string().contains("--storage-path"), "got {err}");
+    }
+
+    #[test]
+    fn build_devnet_config_maps_persistent_storage_path() {
+        let cli = Cli::try_parse_from([
+            "lean-rust",
+            "--storage",
+            "persistent",
+            "--storage-path",
+            "/tmp/lean-store",
+        ])
+        .expect("parse persistent storage flags");
+        let config = build_devnet_config(&cli).expect("build config");
+        assert!(matches!(
+            config.storage,
+            node::StorageKind::Persistent(ref p) if p == Path::new("/tmp/lean-store")
+        ));
     }
 
     #[test]

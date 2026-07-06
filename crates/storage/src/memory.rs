@@ -81,6 +81,10 @@ impl Store for MemoryStore {
         Ok(self.inner.read().blocks.contains_key(root))
     }
 
+    fn has_state(&self, root: &Bytes32) -> Result<bool, StorageError> {
+        Ok(self.inner.read().states.contains_key(root))
+    }
+
     fn load_block(&self, root: &Bytes32) -> Result<Option<SignedBlock>, StorageError> {
         Ok(self.inner.read().blocks.get(root).cloned())
     }

@@ -42,6 +42,9 @@ panic       = "deny"
 # beyond the workspace's `rust-version = "1.80"`. Narrow pin keeps
 # `cargo build` succeeding under Rust 1.80 in CI.
 ruint     = { version = "~1.12", features = ["std"] }
+# redb pinned to ~2.1 (>=2.1.0, <2.2.0): keeps the embedded-DB MSRV within the
+# workspace's `rust-version = "1.80"`. Narrow pin per the ruint precedent above.
+redb      = "~2.1"
 sha2      = "0.10"
 thiserror = "2"
 anyhow    = "1"

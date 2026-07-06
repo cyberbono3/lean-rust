@@ -1,6 +1,7 @@
 //! Devnet composition entry point.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -10,13 +11,28 @@ use runtime::chain::Service as ChainService;
 use runtime::core::{Node, NodeConfig};
 use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
-use storage::{HeadInfo, MemoryStore, Store};
+use storage::{HeadInfo, MemoryStore, RedbStore, Store};
 use types::{Bytes32, Bytes4000};
 
 use crate::consensus_loop::ConsensusLoop;
 
 /// Result type returned by node composition.
 pub type Result<T> = anyhow::Result<T>;
+
+/// Selects the persistence backend for the devnet node.
+#[derive(Debug, Clone)]
+pub enum StorageKind {
+    /// In-memory, non-durable (devnet default — fast, ephemeral).
+    Memory,
+    /// Durable embedded key-value store rooted at the given path.
+    Persistent(PathBuf),
+}
+
+impl Default for StorageKind {
+    fn default() -> Self {
+        Self::Memory
+    }
+}
 
 /// Devnet service wiring inputs.
 ///
@@ -40,6 +56,8 @@ pub struct Config {
     pub genesis_state: State,
     /// Trusted genesis block used to anchor the engine.
     pub genesis_block: Block,
+    /// Persistence backend selector. Defaults to in-memory.
+    pub storage: StorageKind,
 }
 
 /// Builds a devnet [`Node`] with concrete runtime services.
@@ -64,26 +82,36 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         metrics_addr,
         genesis_state,
         genesis_block,
+        storage,
     } = config;
 
-    let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
-    let anchor_slot = genesis_block.slot;
-    let anchor_state = genesis_state.clone();
-    let signed_anchor = SignedBlock {
-        message: genesis_block.clone(),
-        signature: Bytes4000::default(),
+    let store = build_store(&storage)?;
+
+    // Restart-continue: if the store already holds a head (persistent backend,
+    // prior run), re-anchor the engine there and skip re-persisting the anchor.
+    // Otherwise anchor at genesis and seed the store as before.
+    let engine = if let Some((state, block)) = resume_anchor(store.as_ref())? {
+        runtime::chain::engine::Engine::from_anchor(state, block)?
+    } else {
+        let anchor_slot = genesis_block.slot;
+        let anchor_state = genesis_state.clone();
+        let signed_anchor = SignedBlock {
+            message: genesis_block.clone(),
+            signature: Bytes4000::default(),
+        };
+        let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
+        let anchor_root = engine.head();
+        let finalized = engine.latest_finalized();
+        persist_anchor(
+            store.as_ref(),
+            anchor_root,
+            anchor_slot,
+            finalized,
+            signed_anchor,
+            anchor_state,
+        )?;
+        engine
     };
-    let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
-    let anchor_root = engine.head();
-    let finalized = engine.latest_finalized();
-    persist_anchor(
-        store.as_ref(),
-        anchor_root,
-        anchor_slot,
-        finalized,
-        signed_anchor,
-        anchor_state,
-    )?;
     let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
 
     let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
@@ -163,6 +191,41 @@ fn register_chain_gauges(recorder: &mut Recorder, chain: &Arc<ChainService>) {
     );
 }
 
+/// Builds the selected `Store` backend as an `Arc<dyn Store>`.
+fn build_store(kind: &StorageKind) -> Result<Arc<dyn Store>> {
+    match kind {
+        StorageKind::Memory => Ok(Arc::new(MemoryStore::default())),
+        StorageKind::Persistent(path) => {
+            let store = RedbStore::new(path).context("open persistent store")?;
+            Ok(Arc::new(store))
+        }
+    }
+}
+
+/// Loads the persisted head anchor `(state, block)` when a prior run left one on
+/// disk, so a restarted node resumes from its own head instead of genesis.
+///
+/// Returns `Ok(None)` for a fresh store, or when a head is recorded but its
+/// block/state payload is absent (an inconsistent on-disk view — fall back to a
+/// clean genesis anchor rather than resuming from it).
+fn resume_anchor(store: &dyn Store) -> Result<Option<(State, Block)>> {
+    let Some(head) = store.load_head().context("load persisted head")? else {
+        return Ok(None);
+    };
+    let head_root = head.head.root;
+    let (Some(block), Some(state)) = (
+        store
+            .load_block(&head_root)
+            .context("load persisted head block")?,
+        store
+            .load_state(&head_root)
+            .context("load persisted head state")?,
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some((state, block.message)))
+}
+
 fn persist_anchor(
     store: &dyn Store,
     anchor_root: Bytes32,
@@ -236,6 +299,7 @@ mod tests {
             metrics_addr: loopback(),
             genesis_state,
             genesis_block,
+            storage: StorageKind::Memory,
         }
     }
 
@@ -406,6 +470,213 @@ mod tests {
         assert_eq!(
             store.load_head().unwrap(),
             Some(HeadInfo::new(Checkpoint::new(root, slot), finalized))
+        );
+    }
+
+    // Test A: the production `resume_anchor` helper across all three branches.
+    // `State`/`Block` compare via their derived `PartialEq`, so no hash-tree-root
+    // import is needed to assert the resumed anchor matches what was persisted.
+    #[test]
+    fn resume_anchor_covers_empty_seeded_and_inconsistent() {
+        // (1) Fresh store → no head → None (genesis path).
+        let empty = MemoryStore::default();
+        assert!(resume_anchor(&empty).unwrap().is_none());
+
+        // Build a valid anchor and persist it head-consistently.
+        let (state, block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
+        let engine =
+            runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+        let root = engine.head();
+        let slot = block.slot;
+        let finalized = engine.latest_finalized();
+        let signed = SignedBlock {
+            message: block.clone(),
+            signature: Bytes4000::default(),
+        };
+
+        // (2) Head + block + state present → Some((state, block)) at the head.
+        let full = MemoryStore::default();
+        persist_anchor(&full, root, slot, finalized, signed, state.clone()).unwrap();
+        let (got_state, got_block) = resume_anchor(&full).unwrap().expect("resume from head");
+        assert_eq!(
+            got_block, block,
+            "resumed block matches persisted head block"
+        );
+        assert_eq!(
+            got_state, state,
+            "resumed state matches persisted head state"
+        );
+
+        // (3) Head recorded but payload absent → None (inconsistent-view fallback).
+        let head_only = MemoryStore::default();
+        head_only
+            .save_head(HeadInfo::new(Checkpoint::new(root, slot), finalized))
+            .unwrap();
+        assert!(
+            resume_anchor(&head_only).unwrap().is_none(),
+            "head without block/state payload must fall back to a clean anchor"
+        );
+    }
+
+    // Test B: the production `new_devnet` resume arm. Seed a persistent store,
+    // drop it, then construct a node pointed at the same path and assert it
+    // builds/starts/stops via the `Some(resume)` branch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn new_devnet_resumes_from_persistent_store() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("chain.redb");
+
+        // Seed the store with a head-consistent genesis anchor, then drop it so
+        // redb releases the file lock before new_devnet reopens the same path.
+        {
+            let store = RedbStore::new(&db_path).unwrap();
+            let (state, block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
+            let engine =
+                runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+            let root = engine.head();
+            let signed = SignedBlock {
+                message: block.clone(),
+                signature: Bytes4000::default(),
+            };
+            persist_anchor(
+                &store,
+                root,
+                block.slot,
+                engine.latest_finalized(),
+                signed,
+                state,
+            )
+            .unwrap();
+        }
+
+        let identity_dir = tempfile::tempdir().unwrap();
+        let mut config = build_config(identity_dir.path());
+        config.storage = StorageKind::Persistent(db_path);
+        // Resume branch executes here; node must build, start, and stop cleanly.
+        let node = new_devnet(config).unwrap();
+        node.start().await.unwrap();
+        node.stop().await.unwrap();
+    }
+
+    // Test C: end-to-end restart durability. Drive a persistent node to
+    // finalization (mirrors `self_driving_node_proposes_attests_and_advances`),
+    // drop it, reopen the same path, and assert head/finalized reload and the
+    // re-anchored engine resumes at the persisted head.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn persistent_node_restarts_and_resumes_from_head() {
+        use crate::consensus_loop::ConsensusLoop;
+        use runtime::core::Service as _;
+        use tokio_util::sync::CancellationToken;
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("chain.redb");
+        let identity_dir = tempfile::tempdir().unwrap();
+
+        // ----- Run 1: advance to finalization, then drop the store -----
+        let (head_root, finalized_slot) = {
+            let duties = runtime::duties::Config::default()
+                .with_validators_path(single_node_validators_path())
+                .unwrap()
+                .with_validator_group("solo")
+                .unwrap()
+                .with_genesis_time_unix(past_genesis());
+            let p2p_options = HostOptions::try_new(
+                "/ip4/127.0.0.1/udp/0/quic-v1",
+                "test/0.1.0",
+                &identity_dir.path().join("id"),
+                None,
+            )
+            .unwrap();
+
+            let store: Arc<dyn Store> = Arc::new(RedbStore::new(&db_path).unwrap());
+            let (genesis_state, genesis_block) =
+                runtime::chain::engine::test_fixtures::anchor_pair(4);
+            let anchor_slot = genesis_block.slot;
+            let signed_anchor = SignedBlock {
+                message: genesis_block.clone(),
+                signature: Bytes4000::default(),
+            };
+            let engine =
+                runtime::chain::engine::Engine::from_anchor(genesis_state.clone(), genesis_block)
+                    .unwrap();
+            let anchor_root = engine.head();
+            let finalized = engine.latest_finalized();
+            persist_anchor(
+                store.as_ref(),
+                anchor_root,
+                anchor_slot,
+                finalized,
+                signed_anchor,
+                genesis_state,
+            )
+            .unwrap();
+            let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
+            let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
+            let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider).unwrap());
+            let sync = Arc::new(SyncLoop::new(
+                SyncConfig::default(),
+                Arc::clone(&chain),
+                Arc::clone(&p2p),
+            ));
+            let driver = ConsensusLoop::new(
+                Arc::clone(&chain),
+                Arc::clone(&p2p),
+                Arc::clone(&sync),
+                &duties,
+            )
+            .unwrap();
+
+            p2p.start().await.unwrap();
+            driver.start().await.unwrap();
+            for _ in 0..(6 * config::INTERVALS_PER_SLOT + 2) {
+                tokio::time::advance(Duration::from_secs(config::SECONDS_PER_INTERVAL)).await;
+                tokio::task::yield_now().await;
+            }
+            let snap = chain.snapshot();
+            assert!(
+                snap.latest_finalized.slot.get() > 0,
+                "run 1 must finalize before restart, got finalized slot {}",
+                snap.latest_finalized.slot.get(),
+            );
+            driver.stop(CancellationToken::new()).await.unwrap();
+            p2p.stop(CancellationToken::new()).await.unwrap();
+            let result = (snap.head_root, snap.latest_finalized.slot.get());
+            // Drop every Arc<dyn Store> holder (store, chain, rpc_provider, p2p,
+            // sync, driver are all scoped to this block) so redb releases the
+            // on-disk file lock BEFORE run 2 reopens the same path. Run 2 would
+            // fail to open the database if any holder outlived this scope.
+            drop((store, chain, sync, driver, p2p));
+            result
+        };
+
+        // ----- Run 2: reopen the same path, assert reload + re-anchor -----
+        // First confirm the raw head/finalized records reload verbatim.
+        let store: Arc<dyn Store> = Arc::new(RedbStore::new(&db_path).unwrap());
+        let head = store.load_head().unwrap().expect("head reloads from disk");
+        assert_eq!(head.head.root, head_root, "head root reloads from disk");
+        assert_eq!(
+            head.finalized.slot.get(),
+            finalized_slot,
+            "finalized slot reloads from disk"
+        );
+
+        // Then drive the PRODUCTION resume path against this genuinely
+        // finalized-past-genesis store: `resume_anchor` must return the head
+        // anchor, and re-anchoring there resumes the exact head with finalized
+        // status intact. This exercises the same helper `new_devnet` calls, on a
+        // store whose head is well past the genesis anchor.
+        let (state, block) = resume_anchor(store.as_ref())
+            .unwrap()
+            .expect("resume_anchor recovers the persisted head anchor");
+        let engine = runtime::chain::engine::Engine::from_anchor(state, block).unwrap();
+        assert_eq!(
+            engine.head(),
+            head_root,
+            "re-anchored engine resumes at the persisted head"
+        );
+        assert!(
+            engine.latest_finalized().slot.get() > 0,
+            "finalized status resumes after restart"
         );
     }
 }
