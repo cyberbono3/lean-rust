@@ -289,8 +289,7 @@ impl Runner {
                     // otherwise blow the `large_futures` lint on the enclosing
                     // `select!` (same reason the sync `Loop` boxes its walks).
                     Box::pin(self.drain_gossip()).await;
-                    let slot = Slot::new(tick / INTERVALS_PER_SLOT);
-                    let interval = tick % INTERVALS_PER_SLOT;
+                    let (slot, interval) = slot_interval_at(tick);
                     if interval == 0 {
                         // Reset + set for this slot from the proposer pass:
                         // `true` iff this node produced this slot's block.
@@ -447,6 +446,24 @@ impl Runner {
     }
 }
 
+/// Pure genesis-relative mapping: a tick index maps to its
+/// `(slot, interval-within-slot)`.
+///
+/// Depends only on `tick_index`, never on process-start time. It counts ticker
+/// fires, not elapsed time: absent scheduler stalls the fire counter equals the
+/// intervals elapsed since genesis, so `(slot, interval)` tracks genesis-relative
+/// wall-clock for a fixed genesis — but under `MissedTickBehavior::Delay` a stall
+/// longer than one period leaves the counter lagging wall-clock. Kept free of the
+/// loop so the later single-clock convergence can drive it from a
+/// wall-clock-derived index (closing that lag) without a rewrite.
+#[must_use]
+const fn slot_interval_at(tick_index: u64) -> (Slot, u64) {
+    (
+        Slot::new(tick_index / INTERVALS_PER_SLOT),
+        tick_index % INTERVALS_PER_SLOT,
+    )
+}
+
 /// Maps `genesis_time_unix` onto the `tokio::time` clock.
 ///
 /// Past (or zero) genesis anchors at `Instant::now()` (slot 0 starts
@@ -558,6 +575,118 @@ mod tests {
         // rather than panicking on the `Instant + Duration` overflow.
         let anchor = anchor_from(Duration::new(u64::MAX, 0), Duration::ZERO, now);
         assert_eq!(anchor, now);
+    }
+
+    // --- slot_interval_at pure mapping ---
+
+    #[test]
+    fn slot_interval_maps_intervals_within_the_first_slot() {
+        // Indices 0..INTERVALS_PER_SLOT are slot 0, intervals 0..INTERVALS_PER_SLOT-1.
+        assert_eq!(slot_interval_at(0), (Slot::new(0), 0));
+        assert_eq!(slot_interval_at(1), (Slot::new(0), 1));
+        assert_eq!(slot_interval_at(2), (Slot::new(0), 2));
+        assert_eq!(slot_interval_at(3), (Slot::new(0), 3));
+    }
+
+    #[test]
+    fn slot_interval_wraps_to_the_next_slot_at_the_boundary() {
+        // Index INTERVALS_PER_SLOT is the first interval of slot 1.
+        assert_eq!(
+            slot_interval_at(INTERVALS_PER_SLOT),
+            (Slot::new(1), 0),
+            "the slot boundary is interval 0 of the next slot",
+        );
+        assert_eq!(
+            slot_interval_at(INTERVALS_PER_SLOT + VOTE_DUE_INTERVAL),
+            (Slot::new(1), VOTE_DUE_INTERVAL),
+            "vote-due recurs every slot",
+        );
+    }
+
+    #[test]
+    fn slot_interval_is_monotonic_and_partitions_each_slot() {
+        // For any index, interval < INTERVALS_PER_SLOT and slot advances every
+        // INTERVALS_PER_SLOT ticks — the invariant the loop dispatch relies on.
+        for tick in 0..(INTERVALS_PER_SLOT * 3) {
+            let (slot, interval) = slot_interval_at(tick);
+            assert!(interval < INTERVALS_PER_SLOT);
+            assert_eq!(slot.get(), tick / INTERVALS_PER_SLOT);
+        }
+    }
+
+    // --- deterministic clock: (slot, interval) is a function of genesis-relative
+    //     wall-clock, independent of process start ---
+
+    #[tokio::test(start_paused = true)]
+    async fn genesis_anchored_ticker_fires_in_lockstep_with_wall_clock() {
+        // Build the same genesis-anchored ticker the Runner builds. Under the
+        // paused clock a past genesis anchors at the current instant (slot 0
+        // starts immediately), so the ticker's index-0 fire is one period later
+        // at `start`. NON-TAUTOLOGICAL: the expected (slot, interval) is derived
+        // from each fire's ACTUAL returned deadline (`fired_at`), not from the
+        // loop ordinal — so the assertion fails if the ticker does not fire, or
+        // fires off the genesis-relative boundary.
+        let anchor = genesis_anchor(GenesisTimeUnix::new(1_000));
+        let start = anchor + TICK_PERIOD;
+        let mut ticker = interval_at(start, TICK_PERIOD);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+        for index in 0..=(INTERVALS_PER_SLOT * 2) {
+            // Advancing exactly one period releases exactly the next fire (the
+            // proven pattern in devnet's `self_driving_node_proposes_attests_and_advances`).
+            tokio::time::advance(TICK_PERIOD).await;
+            let fired_at = ticker.tick().await;
+            // Independent derivation: how many whole periods past the
+            // genesis-relative `start` did this fire actually land? Read off the
+            // returned deadline — this is the wall-clock fact under test. The
+            // deadline is an integer multiple of the whole-second `TICK_PERIOD`,
+            // so second-granularity division is exact (no truncation).
+            let periods_since_start =
+                fired_at.saturating_duration_since(start).as_secs() / TICK_PERIOD.as_secs();
+            assert_eq!(
+                periods_since_start, index,
+                "fire {index} lands exactly {index} periods after the genesis-relative start",
+            );
+            // The wall-clock-derived index maps to the expected genesis-relative
+            // (slot, interval), computed here independently of the helper.
+            let expected = (
+                Slot::new(index / INTERVALS_PER_SLOT),
+                index % INTERVALS_PER_SLOT,
+            );
+            assert_eq!(
+                slot_interval_at(periods_since_start),
+                expected,
+                "wall-clock-derived (slot, interval) matches the genesis-relative expectation",
+            );
+        }
+    }
+
+    #[test]
+    fn genesis_relative_offset_is_independent_of_process_start_instant() {
+        // Process-start independence, stated on the pure anchor mapping. A
+        // FUTURE genesis produces a non-trivial anchor offset (a past genesis
+        // would collapse to `now_instant`, making this vacuous). Two processes
+        // with different monotonic epochs (`start_a`, `start_b`) but the same
+        // genesis and wall-clock must place the anchor the same distance ahead
+        // of their own "now" — the offset depends only on `genesis - now_wall`,
+        // never on the absolute instant.
+        let genesis = Duration::from_secs(1_003); // 3s in the future
+        let now_wall = Duration::from_secs(1_000);
+        let start_a = Instant::now();
+        let start_b = start_a + Duration::from_secs(42); // a differently-aged process
+        let anchor_a = anchor_from(genesis, now_wall, start_a);
+        let anchor_b = anchor_from(genesis, now_wall, start_b);
+        let offset_a = anchor_a.saturating_duration_since(start_a);
+        let offset_b = anchor_b.saturating_duration_since(start_b);
+        assert_eq!(
+            offset_a,
+            Duration::from_secs(3),
+            "anchor sits (genesis - now_wall) ahead of now",
+        );
+        assert_eq!(
+            offset_a, offset_b,
+            "genesis-relative offset is process-start independent",
+        );
     }
 
     // --- shutdown helper (stop()'s clean-join / abort / panic branches) ---
