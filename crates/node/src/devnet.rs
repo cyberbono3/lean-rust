@@ -122,35 +122,34 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         .with_metrics(metrics))
 }
 
-/// Registers chain-state gauges that read the chain service's hot
-/// snapshot (`Arc<RwLock<ChainSnapshot>>`). Each closure takes a read
-/// lock per scrape — cheap, and decoupled from the engine mutex. Closes
-/// the fixture §8 gap where `/metrics` exposed only the two baseline
-/// process gauges.
+/// Registers chain-state gauges. Each closure captures a cloned
+/// `Arc<ChainService>` and reads the engine on demand via `snapshot()` per
+/// scrape — cheap, and decoupled from the writer path. Closes the fixture §8
+/// gap where `/metrics` exposed only the two baseline process gauges.
 ///
 /// A connected-peer gauge is intentionally not wired here: the p2p host
 /// exposes no synchronous connected-peer count today, so that gauge is
 /// deferred to a p2p-touching change that adds the counter.
 fn register_chain_gauges(recorder: &mut Recorder, chain: &Arc<ChainService>) {
-    let head = chain.snapshot();
+    let slot_src = Arc::clone(chain);
     recorder.gauge(
         "lean_chain_slot",
         "Current forkchoice slot (clock).",
-        move || head.read().current_slot,
+        move || slot_src.snapshot().current_slot,
     );
 
-    let justified = chain.snapshot();
+    let justified_src = Arc::clone(chain);
     recorder.gauge(
         "lean_chain_justified_slot",
         "Slot of the latest justified checkpoint.",
-        move || justified.read().latest_justified.slot.get(),
+        move || justified_src.snapshot().latest_justified.slot.get(),
     );
 
-    let finalized = chain.snapshot();
+    let finalized_src = Arc::clone(chain);
     recorder.gauge(
         "lean_chain_finalized_slot",
         "Slot of the latest finalized checkpoint.",
-        move || finalized.read().latest_finalized.slot.get(),
+        move || finalized_src.snapshot().latest_finalized.slot.get(),
     );
 }
 
@@ -314,7 +313,6 @@ mod tests {
         p2p.start().await.unwrap();
         driver.start().await.unwrap();
 
-        let snapshot = chain.snapshot();
         // Advance enough intervals to cross several slot boundaries and a
         // finalization window. Each `advance` fires exactly one ticker tick;
         // the driver processes that tick's drain/propose/attest/advance
@@ -327,7 +325,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
 
-        let snap = *snapshot.read();
+        let snap = chain.snapshot();
         assert!(
             snap.current_slot >= 3,
             "forkchoice clock must advance >= 3 slots, got {}",

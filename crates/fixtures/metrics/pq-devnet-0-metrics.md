@@ -158,9 +158,10 @@ The first four are the chain-state metrics lean-rust does NOT yet
 expose. If you want comparable chain-state metrics on the lean-rust
 side, the wiring point is `crates/node/src/devnet.rs` when
 `MetricsService::new(metrics_addr, Recorder::new())` is constructed —
-add `recorder.gauge("lean_head_slot", ..., || chain.snapshot().read().head_slot.get())`
-and friends there. (See design-doc #6 + Pass-D PR-B `FrozenRecorder`
-proposal.)
+add `recorder.gauge("lean_head_slot", ..., move || chain.snapshot().current_slot)`
+and friends there (capture a cloned `Arc<ChainService>` and read the
+by-value snapshot per scrape). (See design-doc #6 + Pass-D PR-B
+`FrozenRecorder` proposal.)
 
 ---
 
