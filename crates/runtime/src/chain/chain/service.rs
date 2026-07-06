@@ -8,6 +8,49 @@
 //!
 //! See [`Service::import_block`] for the storage / engine divergence
 //! contract on persistence failure.
+//!
+//! # Concurrency model
+//!
+//! The engine `Mutex` is the sole write-serialization primitive: no derived
+//! `RwLock` cache, no command channel. Every mutation and every read funnels
+//! through it. Writers pay no post-write refresh; readers pay a microsecond
+//! `Copy` under the same lock (and wait out any writer holding it).
+//!
+//! ```text
+//!   WRITERS (latency-critical)              READERS (no deadline)
+//!   ─────────────────────────               ─────────────────────
+//!   ConsensusLoop (node task)               p2p swarm task
+//!     ├ tick_interval                         └ local_status() ─ RPC handshake
+//!     ├ produce_block / produce_attestation  /metrics scrape
+//!     └ import_block / import_attestation      ├ lean_chain_slot
+//!   sync Loop                                  ├ lean_chain_justified_slot
+//!     └ import_block / import_attestation      └ lean_chain_finalized_slot
+//!   gossip drain                            (each gauge samples its own
+//!     └ import_*                             snapshot() — see below)
+//!         │  &self, sync lock,                    │  snapshot() =
+//!         │  guard never crosses .await           │  ChainSnapshot::from_engine
+//!         ▼                                       ▼
+//!   ┌──────────────────────────────────────────────────────────┐
+//!   │                       ChainService                        │
+//!   │   write ─►  engine : Mutex< forkchoice store >  ◄─ read   │
+//!   │              lock() ─ STF + SSZ-HTR (hot path) ─ unlock    │
+//!   │            store : Arc<dyn Store>   (persist plan)         │
+//!   └──────────────────────────────────────────────────────────┘
+//!        one lock · one funnel · writers serialize each other
+//! ```
+//!
+//! Trade-off (accepted): a read takes the *same* lock, so it serializes
+//! behind an in-progress writer for that writer's lock hold — a read is **not**
+//! decoupled from writes. A read on a latency-sensitive task (the swarm loop's
+//! [`Service::local_status`]) inherits the STF+HTR hold as tail latency, which
+//! scales with future state / PQ cost. The three `/metrics` gauges each sample
+//! their own [`Service::snapshot`], so one scrape spans three independent lock
+//! acquisitions; a torn read is possible but the ordering invariant
+//! `finalized <= justified <= current` holds under any interleaving.
+//!
+//! The deleted design decoupled reads through an `Arc<RwLock<ChainSnapshot>>`
+//! cache refreshed after every write (eventually consistent); this commits to
+//! one primitive instead.
 
 // The engine `Mutex` is the sole write-serialization primitive. Deny
 // `await_holding_lock` so any future edit that holds a lock guard across an
