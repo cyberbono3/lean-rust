@@ -30,9 +30,9 @@ fn fresh_service() -> (Service, Arc<MemoryStore>, Engine) {
 }
 
 #[tokio::test]
-async fn produce_block_persists_and_refreshes_snapshot() {
+async fn produce_block_persists_and_moves_head() {
     let (service, store, _engine) = fresh_service();
-    let pre = *service.snapshot().read();
+    let pre = service.snapshot();
 
     // Slot 1 round-robin proposer is validator 1 (slot % ENGINE_VALIDATORS).
     let signed = service
@@ -51,8 +51,8 @@ async fn produce_block_persists_and_refreshes_snapshot() {
     assert!(store.load_state(&root).unwrap().is_some());
     assert!(store.load_head().unwrap().is_some());
 
-    // Snapshot was re-captured; reachable through the lock.
-    let post = *service.snapshot().read();
+    // Read on demand: the produced block moved the head.
+    let post = service.snapshot();
     assert_eq!(post.head_root, root);
 }
 
@@ -77,9 +77,9 @@ async fn produce_block_rejects_unauthorized_proposer() {
 }
 
 #[tokio::test]
-async fn produce_attestation_carries_validator_id_and_refreshes_snapshot() {
+async fn produce_attestation_carries_validator_id_and_holds_head() {
     let (service, _store, _engine) = fresh_service();
-    let pre = *service.snapshot().read();
+    let pre = service.snapshot();
 
     let signed = service
         .produce_attestation(Slot::ONE, ValidatorIndex::new(0))
@@ -88,8 +88,8 @@ async fn produce_attestation_carries_validator_id_and_refreshes_snapshot() {
     assert_eq!(signed.validator_id, ValidatorIndex::new(0));
     assert_eq!(signed.message.slot, Slot::ONE);
 
-    // Snapshot was re-captured after the own vote was imported.
-    let post = *service.snapshot().read();
+    // Read on demand after the own vote was imported.
+    let post = service.snapshot();
     assert_eq!(post.head_root, pre.head_root);
 }
 

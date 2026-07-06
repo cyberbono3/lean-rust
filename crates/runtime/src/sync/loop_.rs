@@ -574,11 +574,13 @@ fn validate_single_root_response(
     }
 }
 
-/// Reads the local status and `peer`'s last handshaked status from the
-/// p2p cache (populated on the `ConnectionEstablished` handshake),
-/// returning `(local, peer)`. `None` when the peer's status has not been
-/// cached yet — the caller skips this peer and retries on the next
-/// connect event. No RPC: a cheap cache readback, not a round-trip.
+/// Reads the local status via `chain.local_status()` and `peer`'s last
+/// handshaked status from the p2p cache (populated on the
+/// `ConnectionEstablished` handshake), returning `(local, peer)`. `None`
+/// when the peer's status has not been cached yet — the caller skips this
+/// peer and retries on the next connect event. No RPC round-trip: the peer
+/// status is a cache readback, and `local_status` acquires the engine lock
+/// synchronously to capture live chain state under the single-Mutex model.
 fn status_exchange(
     chain: &ChainService,
     p2p: &P2pService,

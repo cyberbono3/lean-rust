@@ -154,12 +154,15 @@ Six metrics surfaced by ream (HELP lines):
 | `prometheus_exporter_request_duration_seconds` | HTTP request latencies in seconds (histogram) |
 | `prometheus_exporter_requests_total` | Number of HTTP requests received (counter) |
 
-The first four are the chain-state metrics lean-rust does NOT yet
-expose. If you want comparable chain-state metrics on the lean-rust
-side, the wiring point is `crates/node/src/devnet.rs` when
-`MetricsService::new(metrics_addr, Recorder::new())` is constructed —
-add `recorder.gauge("lean_head_slot", ..., || chain.snapshot().read().head_slot.get())`
-and friends there. (See design-doc #6 + Pass-D PR-B `FrozenRecorder`
+The first four are ream's chain-state metrics. lean-rust exposes
+comparable ones under different names — `lean_chain_slot`,
+`lean_chain_justified_slot`, and `lean_chain_finalized_slot` — wired in
+`crates/node/src/devnet.rs::register_chain_gauges`. Each gauge captures a
+cloned `Arc<ChainService>` and reads the by-value snapshot per scrape, e.g.
+`recorder.gauge("lean_chain_slot", ..., move || chain.snapshot().current_slot)`
+(`current_slot` is the forkchoice clock, not the head block's slot). A
+`lean_propose_block_time` summary and a name-for-name head-slot gauge are
+not yet exposed. (See design-doc #6 + Pass-D PR-B `FrozenRecorder`
 proposal.)
 
 ---

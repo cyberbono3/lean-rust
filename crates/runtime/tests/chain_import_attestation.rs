@@ -36,10 +36,9 @@ fn vote(head: Checkpoint, target: Checkpoint, source: Checkpoint) -> SignedVote 
 }
 
 #[tokio::test]
-async fn accepted_vote_refreshes_snapshot() {
+async fn accepted_vote_leaves_head_at_anchor() {
     let service = fresh_service();
-    let snapshot = service.snapshot();
-    let anchor = snapshot.read().head_root;
+    let anchor = service.snapshot().head_root;
 
     // A vote whose head/target/source all reference the genesis anchor
     // (the only block tracked by a fresh engine) is structurally valid
@@ -53,18 +52,15 @@ async fn accepted_vote_refreshes_snapshot() {
         matches!(outcome, AttestationImportResult::Accepted { .. }),
         "expected Accepted, got {outcome:?}",
     );
-    // Snapshot was refreshed; head_root either still matches anchor (no
-    // forkchoice movement on a single vote at slot 1) or has moved — the
-    // refresh itself is what we assert. Read it once to prove the lock
-    // is reachable and contains a coherent value.
-    let after = snapshot.read();
-    assert_eq!(after.head_root, anchor);
+    // Read on demand: head_root still matches anchor (no forkchoice movement
+    // on a single vote at slot 1).
+    assert_eq!(service.snapshot().head_root, anchor);
 }
 
 #[tokio::test]
-async fn rejected_vote_leaves_snapshot_unchanged() {
+async fn rejected_vote_leaves_state_unchanged() {
     let service = fresh_service();
-    let pre = *service.snapshot().read();
+    let pre = service.snapshot();
 
     let anchor_ckpt = Checkpoint::new(pre.head_root, Slot::ZERO);
     let bogus = Bytes32::new([0xbb; 32]);
@@ -78,6 +74,6 @@ async fn rejected_vote_leaves_snapshot_unchanged() {
         "expected Rejected, got {outcome:?}",
     );
 
-    let post = *service.snapshot().read();
+    let post = service.snapshot();
     assert_eq!(pre, post);
 }

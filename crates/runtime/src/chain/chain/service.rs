@@ -8,10 +8,56 @@
 //!
 //! See [`Service::import_block`] for the storage / engine divergence
 //! contract on persistence failure.
+//!
+//! # Concurrency model
+//!
+//! The engine `Mutex` is the sole write-serialization primitive: no derived
+//! `RwLock` cache, no command channel. Every mutation and every read funnels
+//! through it. Writers pay no post-write refresh; readers pay a microsecond
+//! `Copy` under the same lock (and wait out any writer holding it).
+//!
+//! ```text
+//!   WRITERS (latency-critical)              READERS (no deadline)
+//!   ─────────────────────────               ─────────────────────
+//!   ConsensusLoop (node task)               p2p swarm task
+//!     ├ tick_interval                         └ local_status() ─ RPC handshake
+//!     ├ produce_block / produce_attestation  /metrics scrape
+//!     └ import_block / import_attestation      ├ lean_chain_slot
+//!   sync Loop                                  ├ lean_chain_justified_slot
+//!     └ import_block / import_attestation      └ lean_chain_finalized_slot
+//!   gossip drain                            (each gauge samples its own
+//!     └ import_*                             snapshot() — see below)
+//!         │  &self, sync lock,                    │  snapshot() =
+//!         │  guard never crosses .await           │  ChainSnapshot::from_engine
+//!         ▼                                       ▼
+//!   ┌──────────────────────────────────────────────────────────┐
+//!   │                       ChainService                        │
+//!   │   write ─►  engine : Mutex< forkchoice store >  ◄─ read   │
+//!   │              lock() ─ STF + SSZ-HTR (hot path) ─ unlock    │
+//!   │            store : Arc<dyn Store>   (persist plan)         │
+//!   └──────────────────────────────────────────────────────────┘
+//!        one lock · one funnel · writers serialize each other
+//! ```
+//!
+//! Trade-off (accepted): a read takes the *same* lock, so it serializes
+//! behind an in-progress writer for that writer's lock hold — a read is **not**
+//! decoupled from writes. A read on a latency-sensitive task (the swarm loop's
+//! [`Service::local_status`]) inherits the STF+HTR hold as tail latency, which
+//! scales with future state / PQ cost. The three `/metrics` gauges each sample
+//! their own [`Service::snapshot`], so one scrape spans three independent lock
+//! acquisitions; a torn read is possible but the ordering invariant
+//! `finalized <= justified <= current` holds under any interleaving.
+//!
+//! The deleted design decoupled reads through an `Arc<RwLock<ChainSnapshot>>`
+//! cache refreshed after every write (eventually consistent); this commits to
+//! one primitive instead.
 
-// `refresh_snapshot` parks the snapshot `RwLock` write guard. Deny
+// The engine `Mutex` is the sole write-serialization primitive. Deny
 // `await_holding_lock` so any future edit that holds a lock guard across an
-// `.await` (which would stall the tokio worker thread) fails the build.
+// `.await` (which would stall the tokio worker thread) fails the build. Note
+// this lint only catches a guard held across `.await`; it does not catch a
+// synchronous lock acquisition blocking an async worker — reads on the p2p
+// swarm task serialize behind writers by design (see `Service::snapshot`).
 #![deny(clippy::await_holding_lock)]
 
 use std::sync::Arc;
@@ -19,7 +65,6 @@ use std::sync::Arc;
 use crate::chain::engine::{AttestationImportResult, BlockImportResult, Engine, PersistPlan};
 use async_trait::async_trait;
 use lean_wire::Status;
-use parking_lot::RwLock;
 use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
 use ssz::HashTreeRoot;
 use storage::HeadInfo;
@@ -34,42 +79,52 @@ use super::error::ChainError;
 ///
 /// # Concurrency
 ///
-/// `import_block` and `import_attestation` serialize through the engine
-/// mutex internally. Multiple callers may invoke them concurrently; the
-/// engine is the funnel.
+/// The engine `Mutex` is the **sole** write-serialization primitive. There
+/// is no derived `RwLock` cache and no command channel. `import_block`,
+/// `import_attestation`, `produce_block`, `produce_attestation`, and
+/// `tick_interval` all serialize on that one lock; sync import and gossip
+/// drain call the same methods and serialize on it too. Multiple callers
+/// may invoke them concurrently — the engine is the funnel. Non-writer
+/// readers capture a consistent [`ChainSnapshot`] on demand via
+/// [`Self::snapshot`], which locks the engine, copies, and unlocks. Readers
+/// therefore serialize behind an in-progress writer's lock hold; this is the
+/// accepted trade-off (reads have no deadline) of committing to one primitive
+/// instead of a derived cache.
 pub struct Service {
     engine: Engine,
     store: Arc<dyn storage::Store>,
-    snapshot: Arc<RwLock<ChainSnapshot>>,
 }
 
 impl Service {
-    /// Builds a service around `engine` and `store`. The initial snapshot
-    /// is seeded from a single engine-lock acquisition so callers that
-    /// clone the snapshot before `start` observe consistent state.
+    /// Builds a service around `engine` and `store`.
     #[must_use]
     pub fn new(engine: Engine, store: Arc<dyn storage::Store>) -> Self {
-        let snapshot = Arc::new(RwLock::new(ChainSnapshot::from_engine(&engine)));
-        Self {
-            engine,
-            store,
-            snapshot,
-        }
+        Self { engine, store }
     }
 
-    /// Returns a shared handle to the hot-read snapshot.
+    /// Captures a consistent [`ChainSnapshot`] under one engine-lock
+    /// acquisition and returns it by value.
     ///
-    /// Non-writer services (`lean-api`, `lean-p2p-host`) clone this
-    /// handle and read through it instead of contending on the engine
-    /// mutex.
+    /// Non-writer callers (`register_chain_gauges`, [`Self::local_status`])
+    /// read through this instead of a derived cache. A read acquires the
+    /// engine lock, copies the small `Copy` snapshot, and releases it, so it
+    /// serializes behind any in-progress writer for that writer's lock hold
+    /// (a state-transition on the write path). This is the accepted trade-off
+    /// of the single-`Mutex` model: reads have no deadline, and dropping the
+    /// cache removes the post-write refresh from every writer. Callers that
+    /// run a read on a latency-sensitive task (e.g. the p2p swarm loop calling
+    /// [`Self::local_status`]) inherit that write-hold as tail latency.
+    ///
+    /// Acquires the non-reentrant engine `parking_lot::Mutex`: never call this
+    /// while already holding the engine lock, or the thread self-deadlocks. No
+    /// current caller does.
     #[must_use]
-    pub fn snapshot(&self) -> Arc<RwLock<ChainSnapshot>> {
-        Arc::clone(&self.snapshot)
+    pub fn snapshot(&self) -> ChainSnapshot {
+        ChainSnapshot::from_engine(&self.engine)
     }
 
     /// Imports `signed` through the engine. On [`BlockImportResult::Accepted`],
-    /// persists the block, post-state, and head to storage and refreshes
-    /// the snapshot.
+    /// persists the block, post-state, and head to storage.
     ///
     /// # Storage / engine divergence
     ///
@@ -103,7 +158,6 @@ impl Service {
                 block_root: *block_root,
             })?;
             self.persist_plan(plan)?;
-            self.refresh_snapshot();
             debug!(
                 slot = slot.get(),
                 block_root = %block_root.to_hex(),
@@ -114,8 +168,7 @@ impl Service {
         Ok(outcome)
     }
 
-    /// Imports `signed` through the engine. On
-    /// [`AttestationImportResult::Accepted`], refreshes the snapshot.
+    /// Imports `signed` through the engine.
     ///
     /// # Errors
     /// This method is currently infallible at the infrastructure layer —
@@ -130,7 +183,6 @@ impl Service {
         let validator = signed.validator_id;
         let outcome = self.engine.import_attestation(signed);
         if let AttestationImportResult::Accepted { head_root, .. } = &outcome {
-            self.refresh_snapshot();
             debug!(
                 slot = slot.get(),
                 validator = validator.get(),
@@ -141,10 +193,10 @@ impl Service {
         Ok(outcome)
     }
 
-    /// Advances the forkchoice clock by one interval and refreshes the hot
-    /// [`ChainSnapshot`]. `has_proposal` reflects whether this node produced
-    /// a block in the current slot's proposal interval; the engine uses it
-    /// to decide whether post-proposal votes are accepted this tick.
+    /// Advances the forkchoice clock by one interval. `has_proposal` reflects
+    /// whether this node produced a block in the current slot's proposal
+    /// interval; the engine uses it to decide whether post-proposal votes are
+    /// accepted this tick.
     ///
     /// Replaces the deleted background tick loop: the self-driving consensus
     /// loop (`node` crate) now calls this once per interval with a truthful
@@ -154,10 +206,9 @@ impl Service {
     /// [`ChainError::Engine`] if the engine rejects the tick.
     #[instrument(level = "debug", skip_all, fields(has_proposal), err)]
     pub async fn tick_interval(&self, has_proposal: bool) -> Result<(), ChainError> {
-        // `tick_interval` locks the engine synchronously and returns before
-        // the snapshot refresh; no lock guard crosses the `.await` boundary.
+        // `tick_interval` locks the engine synchronously and returns before the
+        // `.await` boundary; no lock guard crosses it.
         self.engine.tick_interval(has_proposal)?;
-        self.refresh_snapshot();
         Ok(())
     }
 
@@ -190,7 +241,6 @@ impl Service {
         let block_root: Bytes32 = signed.message.hash_tree_root().into();
         let plan = plan.ok_or(ChainError::PostStateMissing { block_root })?;
         self.persist_plan(plan)?;
-        self.refresh_snapshot();
         debug!(
             slot = slot.get(),
             validator = validator.get(),
@@ -257,19 +307,17 @@ impl Service {
                 );
             }
         }
-        self.refresh_snapshot();
         Ok(signed)
     }
 
     /// Returns the local node's current [`Status`] for the peer-handshake.
     ///
-    /// Backed by the cached [`ChainSnapshot`]: the value is eventually
-    /// consistent with engine state (refreshed after each `Accepted`
-    /// import and each tick). Acceptable for sync — the protocol
-    /// tolerates a one-tick handshake lag.
+    /// Captured on demand under the engine lock via [`Self::snapshot`]. The
+    /// value is a consistent single-lock read; the sync protocol tolerates a
+    /// one-tick handshake lag.
     #[must_use]
     pub fn local_status(&self) -> Status {
-        let snap = *self.snapshot.read();
+        let snap = self.snapshot();
         let head = Checkpoint::new(snap.head_root, Slot::new(snap.current_slot));
         Status {
             finalized: snap.latest_finalized,
@@ -283,13 +331,6 @@ impl Service {
     /// [`ChainError::Storage`] when the backing store call fails.
     pub fn has_block(&self, root: &Bytes32) -> Result<bool, ChainError> {
         Ok(self.store.has_block(root)?)
-    }
-
-    /// Replaces the cached snapshot with a fresh capture of engine state.
-    /// One central edit point if the refresh policy ever becomes
-    /// conditional (e.g. "only refresh when head moved").
-    fn refresh_snapshot(&self) {
-        *self.snapshot.write() = ChainSnapshot::from_engine(&self.engine);
     }
 
     /// Commits an engine-captured [`PersistPlan`] to storage.

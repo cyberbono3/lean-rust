@@ -2,8 +2,8 @@
 //!
 //! - [`Service`] — the single engine writer; implements
 //!   [`crate::core::Service`].
-//! - [`ChainSnapshot`] — hot-read snapshot consumed by non-writer
-//!   services through a shared `Arc<RwLock<_>>`.
+//! - [`ChainSnapshot`] — by-value projection of engine state captured on
+//!   demand via [`Service::snapshot`].
 //! - [`ChainError`] — infrastructure-level failures from the chain
 //!   service (storage, engine invariant violations, tick).
 
