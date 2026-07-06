@@ -1,46 +1,34 @@
 //! Chain [`Service`] — the single engine writer.
 //!
 //! Wraps [`crate::chain::engine::Engine`] + [`storage::Store`] and exposes async
-//! `import_block` / `import_attestation`. Spawns a background tick loop
-//! on `start` that advances the forkchoice clock every
-//! `config::SECONDS_PER_INTERVAL`.
+//! `import_block` / `import_attestation` / `produce_block` /
+//! `produce_attestation` / `tick_interval`, each funnelling through the
+//! engine mutex. The self-driving consensus loop (`node` crate) drives the
+//! forkchoice clock via [`Service::tick_interval`].
 //!
 //! See [`Service::import_block`] for the storage / engine divergence
 //! contract on persistence failure.
 
-// The tick slot is a `parking_lot::Mutex`; `start`/`stop` are serialized by
-// the `crate::core::Node` lifecycle so the guard never crosses an await today.
-// Deny `await_holding_lock` so any future edit that parks the guard across an
+// `refresh_snapshot` parks the snapshot `RwLock` write guard. Deny
+// `await_holding_lock` so any future edit that holds a lock guard across an
 // `.await` (which would stall the tokio worker thread) fails the build.
 #![deny(clippy::await_holding_lock)]
 
 use std::sync::Arc;
 
 use crate::chain::engine::{AttestationImportResult, BlockImportResult, Engine, PersistPlan};
-use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use lean_wire::Status;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
 use ssz::HashTreeRoot;
 use storage::HeadInfo;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
 use types::{Bytes32, Bytes4000};
 
 use super::cache::ChainSnapshot;
 use super::error::ChainError;
-use super::tick;
-
-/// Handle to the running tick task: the spawned `JoinHandle` and the
-/// `CancellationToken` that triggers its loop exit. Held as
-/// `Mutex<Option<TickHandle>>` so the two fields are always in lockstep
-/// (both present while running, both gone after `stop`).
-struct TickHandle {
-    task: JoinHandle<()>,
-    cancel: CancellationToken,
-}
 
 /// Single-writer wrapper around [`Engine`] + [`storage::Store`].
 ///
@@ -53,7 +41,6 @@ pub struct Service {
     engine: Engine,
     store: Arc<dyn storage::Store>,
     snapshot: Arc<RwLock<ChainSnapshot>>,
-    tick: Mutex<Option<TickHandle>>,
 }
 
 impl Service {
@@ -67,7 +54,6 @@ impl Service {
             engine,
             store,
             snapshot,
-            tick: Mutex::new(None),
         }
     }
 
@@ -153,6 +139,26 @@ impl Service {
             );
         }
         Ok(outcome)
+    }
+
+    /// Advances the forkchoice clock by one interval and refreshes the hot
+    /// [`ChainSnapshot`]. `has_proposal` reflects whether this node produced
+    /// a block in the current slot's proposal interval; the engine uses it
+    /// to decide whether post-proposal votes are accepted this tick.
+    ///
+    /// Replaces the deleted background tick loop: the self-driving consensus
+    /// loop (`node` crate) now calls this once per interval with a truthful
+    /// `has_proposal`.
+    ///
+    /// # Errors
+    /// [`ChainError::Engine`] if the engine rejects the tick.
+    #[instrument(level = "debug", skip_all, fields(has_proposal), err)]
+    pub async fn tick_interval(&self, has_proposal: bool) -> Result<(), ChainError> {
+        // `tick_interval` locks the engine synchronously and returns before
+        // the snapshot refresh; no lock guard crosses the `.await` boundary.
+        self.engine.tick_interval(has_proposal)?;
+        self.refresh_snapshot();
+        Ok(())
     }
 
     /// Builds one locally authored block via [`Engine::produce_block`],
@@ -309,91 +315,33 @@ impl Service {
     }
 }
 
-impl Drop for Service {
-    /// Best-effort cleanup if a caller drops the service without going
-    /// through [`crate::core::Service::stop`]. We cannot await the join here,
-    /// so the task detaches; aborting it deterministically terminates the
-    /// loop at its next poll, releasing the `Arc` clones of the snapshot and
-    /// engine immediately rather than after up to one more tick period.
-    fn drop(&mut self) {
-        // `get_mut` skips locking: `&mut self` proves no aliasing.
-        if let Some(handle) = self.tick.get_mut().take() {
-            // Cancel the token (graceful signal) and abort the join handle so
-            // termination does not wait on the in-flight tick interval.
-            handle.cancel.cancel();
-            handle.task.abort();
-        }
-    }
-}
-
 #[async_trait]
 impl crate::core::Service for Service {
     fn name(&self) -> &'static str {
         "chain"
     }
 
-    #[instrument(level = "info", name = "chain.start", skip_all, err)]
+    /// No-op: the chain service no longer owns a driving loop. The
+    /// self-driving consensus loop (`node` crate) advances the engine via
+    /// [`Service::tick_interval`]; the chain service only funnels engine
+    /// mutations under the single writer lock.
     async fn start(&self) -> anyhow::Result<()> {
-        let mut slot = self.tick.lock();
-        if slot.is_some() {
-            return Err(anyhow!("chain service is already running"));
-        }
-        let cancel = CancellationToken::new();
-        let task = tokio::spawn(tick::run_tick_loop(
-            self.engine.clone(),
-            Arc::clone(&self.snapshot),
-            cancel.clone(),
-        ));
-        *slot = Some(TickHandle { task, cancel });
         Ok(())
     }
 
-    #[instrument(level = "info", name = "chain.stop", skip_all, err)]
-    async fn stop(&self, cancel: CancellationToken) -> anyhow::Result<()> {
-        let Some(TickHandle {
-            mut task,
-            cancel: tick_cancel,
-        }) = self.tick.lock().take()
-        else {
-            return Ok(());
-        };
-        tick_cancel.cancel();
-
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => {
-                task.abort();
-                // Drain so the task fully transitions, then distinguish the
-                // outcome instead of reporting one generic error: a panic and a
-                // budget-exceeded abort are different failures to an operator.
-                match task.await {
-                    Ok(()) => Ok(()),
-                    Err(e) if e.is_panic() => {
-                        Err(anyhow!("chain tick task panicked during shutdown"))
-                    }
-                    Err(_) => {
-                        Err(anyhow!("chain tick task did not stop within shutdown budget"))
-                    }
-                }
-            }
-            join = &mut task => {
-                join.context("chain tick task panicked")?;
-                Ok(())
-            }
-        }
+    /// No-op: nothing to tear down (no owned task).
+    async fn stop(&self, _cancel: CancellationToken) -> anyhow::Result<()> {
+        Ok(())
     }
 
+    /// Always healthy: the chain service is a passive engine funnel with no
+    /// background task to observe.
     async fn status(&self) -> anyhow::Result<()> {
-        match self.tick.lock().as_ref() {
-            None => Err(anyhow!("chain service is not running")),
-            Some(h) if h.task.is_finished() => Err(anyhow!("chain tick task exited prematurely")),
-            Some(_) => Ok(()),
-        }
+        Ok(())
     }
 }
 
-// Adapter `impl` blocks for the Tier-6 services that drive this
-// chain Service live in the consuming crates (orphan rule: each
-// trait is defined in the same crate as its adapter):
-//   - `lean-sync::chain_adapter`    impl sync::Chain for Service
-//   - `lean-duties::chain_adapter`  impl duties::Chain for Service
+// The former `sync::Chain` / `duties::Chain` port traits collapsed to this
+// concrete type: `sync::Loop` and `node::ConsensusLoop` drive the service
+// directly through its concrete async API (`import_*`, `produce_*`,
+// `tick_interval`) rather than through a trait adapter.

@@ -10,7 +10,6 @@
 mod cache;
 mod error;
 mod service;
-mod tick;
 
 pub use cache::ChainSnapshot;
 pub use error::ChainError;

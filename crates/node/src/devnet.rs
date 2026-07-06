@@ -9,10 +9,11 @@ use runtime::api::{HttpService, MetricsService, Recorder};
 use runtime::chain::Service as ChainService;
 use runtime::core::{Node, NodeConfig};
 use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
+use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
 use storage::{HeadInfo, MemoryStore, Store};
 use types::{Bytes32, Bytes4000};
 
-use crate::gossip_ingest::GossipIngestService;
+use crate::consensus_loop::ConsensusLoop;
 
 /// Result type returned by node composition.
 pub type Result<T> = anyhow::Result<T>;
@@ -43,16 +44,17 @@ pub struct Config {
 
 /// Builds a devnet [`Node`] with concrete runtime services.
 ///
-/// The current p2p surface does not yet expose the clean peer-event and
-/// status-request hooks required by `lean-sync`, so peer backfill sync
-/// is left unwired here. Gossip ingestion still runs in the sync lifecycle
-/// slot so p2p-delivered blocks and votes reach the chain before duties
-/// begin producing local messages.
+/// The composition is a flat wiring list: chain (a passive engine funnel),
+/// p2p, the sync [`Loop`](runtime::sync::Loop) over the concrete p2p handle,
+/// and the self-driving [`ConsensusLoop`] (in the duties slot) that owns the
+/// interval loop — engine advance, propose, attest, gossip drain, and
+/// publish. No workaround services (no separate tick loop, duty scheduler,
+/// or gossip-ingest task).
 ///
 /// # Errors
 ///
-/// Returns an error if the engine rejects the genesis anchor or p2p host
-/// construction fails.
+/// Returns an error if the engine rejects the genesis anchor, p2p host
+/// construction fails, or the consensus loop cannot load its validators.
 pub fn new_devnet(config: Config) -> Result<Node> {
     let Config {
         node,
@@ -86,16 +88,25 @@ pub fn new_devnet(config: Config) -> Result<Node> {
 
     let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
     let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider)?);
-    let gossip_ingest = Arc::new(GossipIngestService::new(
-        Arc::clone(&p2p),
+
+    // Sync `Loop` over the concrete p2p handle (former Network /
+    // PeerEventProvider ports collapsed). Runs as its own lifecycle service
+    // (event-driven `watch_loop`); the driver additionally calls its
+    // `initial_sync` once at startup — both are idempotent.
+    let sync = Arc::new(SyncLoop::new(
+        SyncConfig::default(),
         Arc::clone(&chain),
+        Arc::clone(&p2p),
     ));
 
-    let duties = Arc::new(runtime::duties::Service::new(
-        duties,
-        chain.clone(),
-        Arc::new(runtime::duties::Publisher::new(Arc::clone(&p2p))),
-    ));
+    // Self-driving consensus loop in the duties slot: it owns engine advance,
+    // propose, attest, gossip drain, and publish.
+    let driver = Arc::new(ConsensusLoop::new(
+        Arc::clone(&chain),
+        Arc::clone(&p2p),
+        Arc::clone(&sync),
+        &duties,
+    )?);
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));
     let mut recorder = Recorder::new();
@@ -105,8 +116,8 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     Ok(Node::new(node)
         .with_chain(chain)
         .with_p2p(p2p)
-        .with_sync(gossip_ingest)
-        .with_duties(duties)
+        .with_sync(sync)
+        .with_duties(driver)
         .with_http(http)
         .with_metrics(metrics))
 }
@@ -217,6 +228,128 @@ mod tests {
             genesis_state,
             genesis_block,
         }
+    }
+
+    const SINGLE_NODE_VALIDATORS: &str = "tests/fixtures/single_node_validators.yaml";
+
+    fn single_node_validators_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(SINGLE_NODE_VALIDATORS)
+    }
+
+    fn past_genesis() -> GenesisTimeUnix {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+        // Non-zero (passes `ensure_runnable`) but in the past, so the driver
+        // anchors at `Instant::now()` and slot 0 starts immediately.
+        GenesisTimeUnix::new(now.saturating_sub(5))
+    }
+
+    /// Single-process end-to-end: one node owning all four engine validators
+    /// self-drives — proposes at each slot boundary, attests at vote-due, and
+    /// advances the forkchoice clock — with no second node/process. Uses
+    /// `start_paused` + `advance` to fire the driver's interval ticker
+    /// deterministically.
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn self_driving_node_proposes_attests_and_advances() {
+        use crate::consensus_loop::ConsensusLoop;
+        use runtime::core::Service as _;
+        use tokio_util::sync::CancellationToken;
+
+        let identity_dir = tempfile::tempdir().unwrap();
+        let duties = runtime::duties::Config::default()
+            .with_validators_path(single_node_validators_path())
+            .unwrap()
+            .with_validator_group("solo")
+            .unwrap()
+            .with_genesis_time_unix(past_genesis());
+        let p2p_options = HostOptions::try_new(
+            "/ip4/127.0.0.1/udp/0/quic-v1",
+            "test/0.1.0",
+            &identity_dir.path().join("id"),
+            None,
+        )
+        .unwrap();
+
+        // Wire the same graph as `new_devnet`, keeping the chain handle so the
+        // test can observe head / clock / finalization.
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
+        let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
+        let anchor_slot = genesis_block.slot;
+        let signed_anchor = SignedBlock {
+            message: genesis_block.clone(),
+            signature: Bytes4000::default(),
+        };
+        let engine =
+            runtime::chain::engine::Engine::from_anchor(genesis_state.clone(), genesis_block)
+                .unwrap();
+        let anchor_root = engine.head();
+        let finalized = engine.latest_finalized();
+        persist_anchor(
+            store.as_ref(),
+            anchor_root,
+            anchor_slot,
+            finalized,
+            signed_anchor,
+            genesis_state,
+        )
+        .unwrap();
+        let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
+        let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
+        let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider).unwrap());
+        let sync = Arc::new(SyncLoop::new(
+            SyncConfig::default(),
+            Arc::clone(&chain),
+            Arc::clone(&p2p),
+        ));
+        let driver = ConsensusLoop::new(
+            Arc::clone(&chain),
+            Arc::clone(&p2p),
+            Arc::clone(&sync),
+            &duties,
+        )
+        .unwrap();
+
+        p2p.start().await.unwrap();
+        driver.start().await.unwrap();
+
+        let snapshot = chain.snapshot();
+        // Advance enough intervals to cross several slot boundaries and a
+        // finalization window. Each `advance` fires exactly one ticker tick;
+        // the driver processes that tick's drain/propose/attest/advance
+        // sequentially within one handler, so a single `yield_now` (one
+        // cooperative hand-off on this current-thread runtime) is sufficient
+        // for the task to fully process the tick before the next `advance`.
+        // The assertions are threshold-based, leaving slack if that changes.
+        for _ in 0..(6 * config::INTERVALS_PER_SLOT + 2) {
+            tokio::time::advance(Duration::from_secs(config::SECONDS_PER_INTERVAL)).await;
+            tokio::task::yield_now().await;
+        }
+
+        let snap = *snapshot.read();
+        assert!(
+            snap.current_slot >= 3,
+            "forkchoice clock must advance >= 3 slots, got {}",
+            snap.current_slot,
+        );
+        assert_ne!(
+            snap.head_root, anchor_root,
+            "head must move off the genesis anchor (blocks proposed and imported)",
+        );
+        assert!(
+            snap.latest_justified.slot.get() > 0,
+            "a checkpoint must justify (votes counted), got justified slot {}",
+            snap.latest_justified.slot.get(),
+        );
+        assert!(
+            snap.latest_finalized.slot.get() > 0,
+            "a checkpoint must finalize, got finalized slot {}",
+            snap.latest_finalized.slot.get(),
+        );
+
+        driver.stop(CancellationToken::new()).await.unwrap();
+        p2p.stop(CancellationToken::new()).await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -12,12 +12,14 @@ workspace = true
 
 [dependencies]
 runtime = { path = "../runtime" }
+config      = { path = "../config" }
 lean-wire   = { path = "../networking" }
 protocol    = { path = "../protocol" }
 storage     = { path = "../storage" }
 types       = { path = "../types" }
 anyhow      = { workspace = true }
 async-trait = { workspace = true }
+futures     = { workspace = true }
 parking_lot = { workspace = true }
 tokio       = { workspace = true }
 tokio-util  = { workspace = true }
@@ -25,4 +27,6 @@ tracing     = { workspace = true }
 
 [dev-dependencies]
 runtime = { path = "../runtime", features = ["test-fixtures"] }
+config     = { path = "../config" }
+tokio      = { workspace = true, features = ["test-util"] }
 tempfile   = { workspace = true }

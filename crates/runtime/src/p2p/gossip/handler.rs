@@ -54,6 +54,20 @@ impl<T> GossipReceiver<T> {
     pub async fn recv(&mut self) -> Option<T> {
         self.0.recv().await
     }
+
+    /// Non-blocking poll for a decoded payload. Used by the consensus
+    /// loop's per-tick gossip drain, which must never block the interval
+    /// ticker on `recv().await`.
+    ///
+    /// # Errors
+    /// - [`TryRecvError::Empty`] when no payload is currently queued.
+    /// - [`TryRecvError::Disconnected`] when the swarm-poll task has exited.
+    ///
+    /// [`TryRecvError::Empty`]: tokio::sync::mpsc::error::TryRecvError::Empty
+    /// [`TryRecvError::Disconnected`]: tokio::sync::mpsc::error::TryRecvError::Disconnected
+    pub fn try_recv(&mut self) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+        self.0.try_recv()
+    }
 }
 
 /// Inbound channel for [`SignedBlock`] payloads received on

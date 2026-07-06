@@ -28,6 +28,7 @@ mod error;
 pub mod gossip;
 mod host;
 mod options;
+mod peers;
 pub mod rpc;
 mod service;
 mod wiring;

@@ -3,6 +3,7 @@
 use thiserror::Error;
 
 use crate::chain::ChainError;
+use crate::p2p::RpcError;
 
 /// Failures raised by the sync module.
 ///
@@ -47,4 +48,13 @@ pub enum SyncError {
     /// indicates a panic or an unhandled internal error.
     #[error("sync watch task exited prematurely")]
     WatchExited,
+}
+
+/// Maps the concrete p2p outbound [`RpcError`] onto the transport-opaque
+/// [`SyncError::Network`]. Lives on the sync side so `p2p` never imports
+/// `crate::sync` and the module graph stays acyclic.
+impl From<RpcError> for SyncError {
+    fn from(err: RpcError) -> Self {
+        SyncError::Network(err.to_string())
+    }
 }

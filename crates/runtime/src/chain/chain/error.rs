@@ -12,10 +12,9 @@ use types::Bytes32;
 /// invariant violations, and production-path failures (where the engine
 /// surfaces `Result<_, EngineError>` directly).
 ///
-/// Forkchoice tick failures are deliberately *not* part of this enum: the
-/// tick loop logs and continues (see [`super::tick::run_tick_loop`]). If
-/// a future revision needs to escalate consecutive tick failures, add the
-/// variant in the same PR that introduces the escalation policy.
+/// Forkchoice tick failures surface as [`ChainError::Engine`] from
+/// [`super::Service::tick_interval`]; the self-driving consensus loop
+/// warn-logs and continues rather than escalating a single tick failure.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ChainError {
