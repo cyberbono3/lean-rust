@@ -12,6 +12,7 @@
 //! shadows the extern `redb` crate the adapter imports.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use protocol::{Checkpoint, SignedBlock, State};
 use redb::{Database, TableDefinition};
@@ -39,13 +40,21 @@ pub struct RedbStore {
 impl RedbStore {
     /// Opens (creating if absent) a persistent store at `path`.
     ///
-    /// All three tables are created eagerly so a read that precedes the first
-    /// write returns `Ok(None)` rather than a missing-table error.
+    /// The parent directory is created if missing, so a caller-supplied
+    /// `--storage-path` under a not-yet-existing data dir succeeds instead of
+    /// failing with a bare "no such file or directory" from the backend. All
+    /// three tables are created eagerly so a read that precedes the first write
+    /// returns `Ok(None)` rather than a missing-table error.
     ///
     /// # Errors
-    /// [`StorageError::Backend`] if the database cannot be opened/created or the
-    /// initial table-creation transaction fails.
+    /// [`StorageError::Backend`] if the parent directory cannot be created, the
+    /// database cannot be opened/created, or the initial table-creation
+    /// transaction fails.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(backend)?;
+        }
         let db = Database::create(path).map_err(backend)?;
         let txn = db.begin_write().map_err(backend)?;
         {
@@ -104,6 +113,14 @@ fn backend<E: std::fmt::Display>(err: E) -> StorageError {
     }
 }
 
+/// Fixed SSZ byte length of one [`Checkpoint`], computed once. `Checkpoint` is
+/// a fixed-size SSZ container, so encoding a default value yields the length
+/// every checkpoint encodes to.
+fn checkpoint_len() -> usize {
+    static LEN: OnceLock<usize> = OnceLock::new();
+    *LEN.get_or_init(|| ssz::encode(&Checkpoint::default()).len())
+}
+
 /// Encodes a [`HeadInfo`] as `SSZ(head) ++ SSZ(finalized)` — two fixed-size
 /// checkpoints of equal length.
 fn encode_head(info: HeadInfo) -> Vec<u8> {
@@ -118,8 +135,7 @@ fn encode_head(info: HeadInfo) -> Vec<u8> {
 fn decode_head(bytes: &[u8]) -> Result<HeadInfo, StorageError> {
     // Split at the fixed SSZ length of one Checkpoint rather than len/2, so a
     // future variable-length HeadInfo field cannot silently corrupt the split.
-    // Checkpoint is fixed-size, so encoding a default yields that length.
-    let checkpoint_len = ssz::encode(&Checkpoint::default()).len();
+    let checkpoint_len = checkpoint_len();
     if bytes.len() != checkpoint_len * 2 {
         return Err(StorageError::Backend {
             message: format!(

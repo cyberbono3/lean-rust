@@ -80,6 +80,51 @@ impl Engine {
         }
     }
 
+    /// Builds an engine that resumes from a trusted persisted head.
+    ///
+    /// Forwards to [`Store::from_trusted_head`], which seeds justified/finalized
+    /// at the anchor so a restarted single node's fork-choice head walk starts
+    /// from a tracked root. See that method for the restart rationale and the
+    /// monotonic-finalized semantics.
+    ///
+    /// # Errors
+    /// Forwards every variant raised by [`Store::from_trusted_head`].
+    pub fn from_trusted_head(state: State, anchor_block: Block) -> Result<Self, ForkchoiceError> {
+        let slot = anchor_block.slot;
+        let validators = state.config.num_validators;
+        let genesis_time = state.config.genesis_time;
+        let anchor_root: Bytes32 = anchor_block.hash_tree_root().into();
+        let state_root: Bytes32 = state.hash_tree_root().into();
+
+        match Store::from_trusted_head(state, anchor_block) {
+            Ok(store) => {
+                info!(
+                    slot = slot.get(),
+                    validators,
+                    genesis_time,
+                    anchor_root = %anchor_root.to_hex(),
+                    state_root = %state_root.to_hex(),
+                    head_root = %store.head().to_hex(),
+                    safe_target_root = %store.safe_target().to_hex(),
+                    "engine resumed from trusted head",
+                );
+                Ok(Self::wrap_store(store))
+            }
+            Err(err) => {
+                warn!(
+                    slot = slot.get(),
+                    validators,
+                    genesis_time,
+                    anchor_root = %anchor_root.to_hex(),
+                    state_root = %state_root.to_hex(),
+                    %err,
+                    "engine trusted-head resume rejected",
+                );
+                Err(err)
+            }
+        }
+    }
+
     /// Builds an engine around an already-constructed [`Store`].
     #[must_use]
     pub fn from_store(store: Store) -> Self {

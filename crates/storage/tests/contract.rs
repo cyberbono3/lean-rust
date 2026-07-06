@@ -282,3 +282,30 @@ fn arc_memory_store_concurrent_save_and_load() {
         assert!(store.has_block(&sample_root(i)).unwrap());
     }
 }
+
+#[test]
+fn arc_redb_store_concurrent_save_and_load() {
+    // Documents that a single `Arc<dyn Store>` RedbStore is safe to hammer from
+    // several threads: redb serializes write transactions internally, so each
+    // thread's save/load of its own seeded root observes a consistent value.
+    let dir = tempfile::TempDir::new().unwrap();
+    let store: Arc<dyn Store> =
+        Arc::new(RedbStore::new(dir.path().join("concurrent.redb")).unwrap());
+    std::thread::scope(|scope| {
+        for i in 0..8_u8 {
+            let store = Arc::clone(&store);
+            scope.spawn(move || {
+                let root = sample_root(i);
+                store.save_block(root, sample_signed_block(i)).unwrap();
+                assert_eq!(
+                    store.load_block(&root).unwrap(),
+                    Some(sample_signed_block(i))
+                );
+            });
+        }
+    });
+
+    for i in 0..8_u8 {
+        assert!(store.has_block(&sample_root(i)).unwrap());
+    }
+}
