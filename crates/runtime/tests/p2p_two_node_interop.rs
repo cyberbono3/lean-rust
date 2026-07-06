@@ -50,7 +50,7 @@ const GOSSIP_DELIVERY_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Builds a [`SignedBlock`] with a non-default `slot`/`proposer_index`
 /// pair so two seeds produce distinct tree roots. Returns the block and
-/// its hash-tree-root keyed by the [`StoreProvider`].
+/// its hash-tree-root keyed by the [`RpcProvider`].
 fn block_with_seed(slot: u64, proposer: u64) -> (SignedBlock, Bytes32) {
     let message = Block {
         slot: Slot::new(slot),
@@ -92,7 +92,7 @@ fn write_bootnodes(dir: &Path, peer_id: PeerId, addr: &Multiaddr) -> PathBuf {
 }
 
 /// Convenience: hash-tree-root of a [`SignedBlock`] as the [`Bytes32`]
-/// the [`StoreProvider`] keys by. Replaces several inline
+/// the [`RpcProvider`] keys by. Replaces several inline
 /// `Bytes32::new(block.hash_tree_root())` calls.
 fn root_of(block: &SignedBlock) -> Bytes32 {
     Bytes32::new(block.hash_tree_root())
@@ -210,24 +210,30 @@ async fn outbound_api_surfaces_peer_view_and_blocks_by_root() {
         let b_id = b.peer_id.to_base58();
         let a_id = a.peer_id.to_base58();
 
-        // subscribe_connected_peers: A receives a connect event for B.
+        // subscribe_connected_peers: A receives a peer-ready event for B.
         let event = timeout(RPC_DEADLINE, a_events.recv())
             .await
-            .expect("connect event within deadline")
+            .expect("peer-ready event within deadline")
             .expect("event channel open");
-        assert_eq!(event, b_id, "connect event must carry B's base-58 peer id");
+        assert_eq!(
+            event, b_id,
+            "peer-ready event must carry B's base-58 peer id"
+        );
+
+        // Ordering guard (regression): the peer-ready event fires from
+        // `set_status`, so by the time it is received the Status cache is
+        // ALREADY populated — no polling needed. If the event fired on bare
+        // `ConnectionEstablished` instead, this would be `None` and the sync
+        // walk would no-op with no retry.
+        assert!(
+            a.service.peer_status(&b_id).is_some(),
+            "peer_status(B) must be populated the moment the peer-ready event arrives",
+        );
 
         // connected_peers snapshot: A lists B.
         assert!(
             poll_until(RPC_DEADLINE, || a.service.connected_peers().contains(&b_id)).await,
             "A.connected_peers() must include B",
-        );
-
-        // peer_status cache: A caches B's handshaked Status (populated on the
-        // ConnectionEstablished handshake).
-        assert!(
-            poll_until(RPC_DEADLINE, || a.service.peer_status(&b_id).is_some()).await,
-            "A.peer_status(B) must be populated after the handshake",
         );
 
         // request_blocks_by_root: B recovers b0 from A over the concrete

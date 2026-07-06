@@ -341,8 +341,7 @@ impl crate::core::Service for Service {
     }
 }
 
-// Adapter `impl` blocks for the Tier-6 services that drive this
-// chain Service live in the consuming crates (orphan rule: each
-// trait is defined in the same crate as its adapter):
-//   - `lean-sync::chain_adapter`    impl sync::Chain for Service
-//   - `lean-duties::chain_adapter`  impl duties::Chain for Service
+// The former `sync::Chain` / `duties::Chain` port traits collapsed to this
+// concrete type: `sync::Loop` and `node::ConsensusLoop` drive the service
+// directly through its concrete async API (`import_*`, `produce_*`,
+// `tick_interval`) rather than through a trait adapter.

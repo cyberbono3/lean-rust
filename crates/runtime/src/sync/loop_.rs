@@ -1,10 +1,11 @@
 //! Sync [`Loop`] — the devnet sync orchestrator.
 //!
-//! On each outbound peer-connect event the loop sends a `Status` RPC,
-//! compares heads, and—if the peer is ahead—walks backwards from the
-//! peer's head one root at a time via `BlocksByRoot` up to
-//! [`Config::max_sync_depth`], then imports the recovered chain in
-//! forward order through the concrete [`crate::chain::Service`].
+//! On each peer-ready event (a peer whose connect-handshake `Status` the
+//! p2p side has cached) the loop reads that `Status`, compares heads, and—if
+//! the peer is ahead—walks backwards from the peer's head one root at a time
+//! via `BlocksByRoot` up to [`Config::max_sync_depth`], then imports the
+//! recovered chain in forward order through the concrete
+//! [`crate::chain::Service`].
 //!
 //! Per-block import errors are warn-logged and dropped: an unknown
 //! parent at the deepest layer (when the cap is hit before the walk
@@ -147,9 +148,10 @@ impl crate::core::Service for Loop {
         if slot.is_some() {
             return Err(SyncError::AlreadyStarted.into());
         }
-        // Subscribe to connect events over a bounded channel (sync +
-        // infallible): the swarm task pushes each `ConnectionEstablished`
-        // peer id; a full channel drops the event (bounded, lossy).
+        // Subscribe to peer-ready events over a bounded channel (sync +
+        // infallible): the swarm task pushes a peer id once its handshake
+        // `Status` is cached, so `status_exchange` finds it populated. A
+        // full channel drops the event (bounded, lossy).
         let events = self
             .p2p
             .subscribe_connected_peers(self.config.max_concurrent_peer_syncs.get());

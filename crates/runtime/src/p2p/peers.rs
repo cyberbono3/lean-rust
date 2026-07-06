@@ -33,20 +33,13 @@ struct Inner {
 }
 
 impl PeerRegistry {
-    /// Records a newly-connected peer and notifies every subscriber over
-    /// its bounded channel. A full channel drops the event (lossy but
-    /// bounded — the sync loop dedups and retries); a closed channel evicts
-    /// the dead subscriber.
+    /// Records a newly-connected peer. Does **not** notify sync subscribers —
+    /// that happens in [`Self::set_status`] once the connect handshake has
+    /// populated the peer's `Status`. Notifying on bare connect would wake
+    /// the sync walk before the handshake reply lands, so it would read an
+    /// empty status cache and no-op with no retry.
     pub(crate) fn on_connect(&self, peer: PeerId) {
-        let id = peer.to_base58();
-        let mut inner = self.inner.write();
-        inner.connected.insert(peer);
-        inner
-            .subscribers
-            .retain(|tx| match tx.try_send(id.clone()) {
-                Ok(()) | Err(TrySendError::Full(_)) => true,
-                Err(TrySendError::Closed(_)) => false,
-            });
+        self.inner.write().connected.insert(peer);
     }
 
     /// Drops a disconnected peer from the connected set and status cache.
@@ -56,9 +49,23 @@ impl PeerRegistry {
         inner.statuses.remove(peer);
     }
 
-    /// Caches `peer`'s handshaked [`Status`] for later readback.
+    /// Caches `peer`'s handshaked [`Status`] and notifies sync subscribers
+    /// that the peer is ready to sync — its head is now known. Firing the
+    /// connect event here (not in [`Self::on_connect`]) is load-bearing: the
+    /// sync walk reads `peer_status` immediately on this event, so it must
+    /// see a populated cache. A full channel drops the event (bounded,
+    /// lossy — the watch loop dedups and re-syncs on the next status); a
+    /// closed channel evicts the dead subscriber.
     pub(crate) fn set_status(&self, peer: PeerId, status: Status) {
-        self.inner.write().statuses.insert(peer, status);
+        let id = peer.to_base58();
+        let mut inner = self.inner.write();
+        inner.statuses.insert(peer, status);
+        inner
+            .subscribers
+            .retain(|tx| match tx.try_send(id.clone()) {
+                Ok(()) | Err(TrySendError::Full(_)) => true,
+                Err(TrySendError::Closed(_)) => false,
+            });
     }
 
     /// Returns `peer`'s last handshaked [`Status`], if cached.
@@ -80,7 +87,12 @@ impl PeerRegistry {
     /// floored at 1 (an `mpsc` channel cannot have capacity 0).
     pub(crate) fn subscribe(&self, bound: usize) -> mpsc::Receiver<String> {
         let (tx, rx) = mpsc::channel(bound.max(1));
-        self.inner.write().subscribers.push(tx);
+        let mut inner = self.inner.write();
+        // Drop senders whose receiver is gone (e.g. a stopped sync service)
+        // so repeated subscribes without an intervening connect cannot grow
+        // the vec unboundedly.
+        inner.subscribers.retain(|s| !s.is_closed());
+        inner.subscribers.push(tx);
         debug!(bound, "registered connected-peer subscriber");
         rx
     }

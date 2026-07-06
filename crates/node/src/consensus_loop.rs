@@ -69,9 +69,15 @@ impl Health {
     }
 
     /// Records a failed proposer slot (production errored, or a produced
-    /// block failed to publish), extending the failure streak.
+    /// block failed to publish), extending the failure streak. Saturates at
+    /// `u32::MAX` — once degraded the exact count is irrelevant, and an
+    /// unbounded `fetch_add` could theoretically wrap back to 0.
     fn record_failure(&self) {
-        self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        let _ = self
+            .consecutive_failures
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_add(1))
+            });
     }
 
     /// Whether the failure streak has reached the escalation threshold.
@@ -251,8 +257,13 @@ impl Runner {
     /// Runs initial sync once, then the genesis-anchored interval loop:
     /// drain gossip, dispatch by interval index, advance the engine.
     async fn run(mut self, cancel: CancellationToken) {
-        // One-shot backfill before the interval loop (no-op single-process).
-        self.sync.initial_sync().await;
+        // One-shot backfill before the interval loop (no-op single-process),
+        // raced against shutdown so a stop during initial sync is prompt.
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            () = self.sync.initial_sync() => {}
+        }
 
         let mut ticker = interval_at(self.genesis_anchor + TICK_PERIOD, TICK_PERIOD);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);

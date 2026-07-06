@@ -174,10 +174,12 @@ impl P2pService {
         self.registry.connected()
     }
 
-    /// Subscribes to connect events over a **bounded** channel of base-58
-    /// peer strings. Each `ConnectionEstablished` pushes the peer id;
-    /// a full channel drops the event (bounded, lossy — the sync loop
-    /// dedups and retries).
+    /// Subscribes to peer-ready events over a **bounded** channel of base-58
+    /// peer strings. A peer id is pushed once its connect-handshake `Status`
+    /// is known (so a consumer can immediately read [`Self::peer_status`]),
+    /// not on bare `ConnectionEstablished`. A full channel drops the event
+    /// (bounded, lossy — the sync loop dedups and re-syncs on the next
+    /// status).
     #[must_use]
     pub fn subscribe_connected_peers(&self, bound: usize) -> mpsc::Receiver<String> {
         self.registry.subscribe(bound)
