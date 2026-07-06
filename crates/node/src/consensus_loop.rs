@@ -68,6 +68,13 @@ impl Health {
         self.consecutive_failures.store(0, Ordering::Relaxed);
     }
 
+    /// Clears the failure streak on `start`, so health is per-run: a prior
+    /// degraded run that was stopped does not carry into a fresh one (the
+    /// deleted duties service reset its health the same way).
+    fn reset(&self) {
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+    }
+
     /// Records a failed proposer slot (production errored, or a produced
     /// block failed to publish), extending the failure streak. Saturates at
     /// `u32::MAX` — once degraded the exact count is irrelevant, and an
@@ -175,6 +182,8 @@ impl Service for ConsensusLoop {
         if run.is_some() {
             anyhow::bail!("consensus loop already started");
         }
+        // Health is per-run: clear any streak left by a prior stopped run.
+        self.health.reset();
         // Take the gossip receivers from p2p here (not at construction):
         // they are populated by `P2pService::start`, which runs earlier in
         // the node's fixed start order.
@@ -505,6 +514,22 @@ mod tests {
         assert!(
             !health.is_degraded(),
             "a single success resets the consecutive-failure count",
+        );
+    }
+
+    #[test]
+    fn health_reset_clears_a_degraded_streak() {
+        // `start` calls `reset` so health is per-run: a degraded prior run
+        // must not carry into a fresh start.
+        let health = Health::new();
+        for _ in 0..HEALTH_FAILURE_THRESHOLD {
+            health.record_failure();
+        }
+        assert!(health.is_degraded());
+        health.reset();
+        assert!(
+            !health.is_degraded(),
+            "reset must clear the degraded streak"
         );
     }
 

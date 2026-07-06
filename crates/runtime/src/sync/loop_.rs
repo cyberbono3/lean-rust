@@ -37,6 +37,16 @@ use crate::sync::config::Config;
 use crate::sync::error::SyncError;
 use crate::sync::peer_id::PeerId;
 
+/// Buffer for the peer-ready event channel, decoupled from
+/// `max_concurrent_peer_syncs` (the concurrent-walk cap). A connect burst can
+/// enqueue many peer-ready events while the watch loop is still draining or
+/// waiting on walk permits; the channel is lossy on overflow, and a dropped
+/// event means that peer is not synced until it re-handshakes. Sizing it
+/// generously (not to the small walk-permit cap) avoids permanently missing
+/// peers under load while keeping the channel bounded — dedup + the walk
+/// permit cap still bound downstream work.
+const PEER_EVENT_CHANNEL_BOUND: usize = 256;
+
 /// Handle to the running watch task: the spawned `JoinHandle`, the
 /// `TaskTracker` that owns each per-peer `on_connect` task, and the
 /// `CancellationToken` that triggers loop exit.
@@ -152,9 +162,7 @@ impl crate::core::Service for Loop {
         // infallible): the swarm task pushes a peer id once its handshake
         // `Status` is cached, so `status_exchange` finds it populated. A
         // full channel drops the event (bounded, lossy).
-        let events = self
-            .p2p
-            .subscribe_connected_peers(self.config.max_concurrent_peer_syncs.get());
+        let events = self.p2p.subscribe_connected_peers(PEER_EVENT_CHANNEL_BOUND);
         let cancel = CancellationToken::new();
         let tracker = TaskTracker::new();
         let worker = PeerWorker {
