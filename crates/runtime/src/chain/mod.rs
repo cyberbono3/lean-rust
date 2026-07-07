@@ -26,5 +26,7 @@
 #[allow(clippy::module_inception)]
 pub mod chain;
 pub mod engine;
+pub mod metrics;
 
 pub use chain::{ChainError, ChainSnapshot, Service};
+pub use metrics::ChainMetrics;

@@ -15,6 +15,7 @@ pub(crate) mod service;
 
 pub use error::MetricsError;
 pub use recorder::{
-    FrozenRecorder, GaugeProvider, LabeledGaugeProvider, LabeledGaugeSamples, Recorder,
+    FrozenRecorder, GaugeProvider, LabeledGaugeProvider, LabeledGaugeSamples, ObservedHistogram,
+    Recorder,
 };
 pub use service::MetricsService;

@@ -34,5 +34,5 @@ pub use http::{HttpError, HttpService};
 pub use httpsvc::{HttpsvcError, Server};
 pub use metrics::{
     FrozenRecorder, GaugeProvider, LabeledGaugeProvider, LabeledGaugeSamples, MetricsError,
-    MetricsService, Recorder,
+    MetricsService, ObservedHistogram, Recorder,
 };

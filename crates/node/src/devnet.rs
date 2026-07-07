@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use protocol::{Block, Checkpoint, SignedBlock, Slot, State};
 use runtime::api::{HttpService, MetricsService, Recorder};
-use runtime::chain::Service as ChainService;
+use runtime::chain::{ChainMetrics, Service as ChainService};
 use runtime::core::{Node, NodeConfig};
 use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
@@ -87,6 +87,12 @@ pub fn new_devnet(config: Config) -> Result<Node> {
 
     let store = build_store(&storage)?;
 
+    // Build the metrics recorder and register the chain-tick trigger histograms
+    // before the engine so their handles can be injected into it. Chain-state
+    // gauges are registered later (they need the built `ChainService`).
+    let mut recorder = Recorder::new();
+    let chain_metrics = register_chain_histograms(&mut recorder)?;
+
     // Restart-continue: if the store already holds a head (persistent backend,
     // prior run), re-anchor the engine there and skip re-persisting the anchor.
     // Otherwise anchor at genesis and seed the store as before.
@@ -125,7 +131,10 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         )?;
         engine
     };
-    let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
+    let chain = Arc::new(ChainService::new(
+        engine.with_metrics(chain_metrics),
+        Arc::clone(&store),
+    ));
 
     let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
     let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider)?);
@@ -150,7 +159,6 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     )?);
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));
-    let mut recorder = Recorder::new();
     register_chain_gauges(&mut recorder, &chain);
     let metrics = Arc::new(MetricsService::new(metrics_addr, recorder.freeze()?));
 
@@ -202,6 +210,46 @@ fn register_chain_gauges(recorder: &mut Recorder, chain: &Arc<ChainService>) {
         "Slot of the latest finalized checkpoint.",
         move || finalized_src.snapshot().latest_finalized.slot.get(),
     );
+}
+
+/// Latency buckets (seconds), coarse to 4 s. The per-block `State`-clone trigger
+/// buckets to 4 s; the fork-choice histogram shares the scale.
+const LATENCY_BUCKETS_SECONDS: &[f64] = &[
+    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0,
+];
+
+/// Registers the deferred-performance trigger histograms and returns the live
+/// handle set to inject into the engine. Mirror of [`register_chain_gauges`]:
+/// the metric names and buckets are owned here at the composition root, not in
+/// the runtime chain layer, so the runtime metrics registry stays decoupled
+/// from `runtime::chain`.
+///
+/// Returns [`Result`] (like [`new_devnet`]) so the metrics error from
+/// `recorder.histogram(...)?` converts at the `?` boundary — the node crate
+/// names no `prometheus` item and stays free of that dependency.
+///
+/// # Errors
+///
+/// Returns an error if Prometheus rejects a histogram descriptor.
+fn register_chain_histograms(recorder: &mut Recorder) -> Result<ChainMetrics> {
+    let buckets = LATENCY_BUCKETS_SECONDS.to_vec();
+    let fork_choice_block_processing = recorder.histogram(
+        "lean_fork_choice_block_processing_time_seconds",
+        "Wall time of the fork-choice head recompute (accept_new_votes) on the \
+         block-import path. Trigger for the incremental fork-choice and \
+         prune-below-finalized levers.",
+        buckets.clone(),
+    )?;
+    let state_transition = recorder.histogram(
+        "lean_state_transition_time_seconds",
+        "Wall time of a full state transition per imported block, measured at the \
+         runtime boundary. Trigger for the per-block state-clone lever.",
+        buckets,
+    )?;
+    Ok(ChainMetrics::new(
+        fork_choice_block_processing,
+        state_transition,
+    ))
 }
 
 /// Builds the selected `Store` backend as an `Arc<dyn Store>`.
@@ -462,6 +510,19 @@ mod tests {
         let mut recorder = Recorder::new();
         register_chain_gauges(&mut recorder, &chain);
         assert!(recorder.freeze().is_ok());
+    }
+
+    #[test]
+    fn register_chain_histograms_wires_two_triggers_only() {
+        // The composition-root registration wires exactly the two boundary-
+        // observable trigger histograms and omits the deferred process-slots one.
+        let mut recorder = Recorder::new();
+        let _metrics = register_chain_histograms(&mut recorder).unwrap();
+
+        let body = recorder.freeze().unwrap().encode().unwrap();
+        assert!(body.contains("lean_fork_choice_block_processing_time_seconds"));
+        assert!(body.contains("lean_state_transition_time_seconds"));
+        assert!(!body.contains("lean_state_transition_slots_processing_time_seconds"));
     }
 
     #[test]

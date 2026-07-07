@@ -7,7 +7,7 @@ use axum::{
     extract::State, http::header::CONTENT_TYPE, response::IntoResponse, routing::get, Router,
 };
 use parking_lot::Mutex;
-use prometheus::{Registry, TextEncoder, TEXT_FORMAT};
+use prometheus::TEXT_FORMAT;
 
 use super::{error::MetricsError, recorder::FrozenRecorder};
 
@@ -72,11 +72,9 @@ fn render_cached(
 }
 
 fn render(recorder: &FrozenRecorder) -> Result<String, MetricsError> {
-    let registry = Registry::new();
-    recorder.register_collectors(&registry)?;
-
-    let body = TextEncoder::new().encode_to_string(&registry.gather())?;
-    Ok(body)
+    // Delegates to the crate-visible `FrozenRecorder::encode` so the same
+    // render path is reachable from tests across the runtime and node crates.
+    recorder.encode()
 }
 
 #[cfg(test)]

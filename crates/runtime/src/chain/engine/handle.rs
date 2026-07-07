@@ -29,6 +29,7 @@ use tracing::{debug, info, warn};
 use types::{Bytes32, Bytes4000};
 
 use super::error::EngineError;
+use crate::chain::metrics::ChainMetrics;
 
 /// Consensus execution boundary around a shared [`forkchoice::Store`].
 ///
@@ -37,6 +38,9 @@ use super::error::EngineError;
 #[derive(Clone)]
 pub struct Engine {
     store: Arc<Mutex<Store>>,
+    /// Chain-tick trigger metrics. Default is a no-op; the composition root
+    /// injects live handles via [`Engine::with_metrics`].
+    metrics: ChainMetrics,
 }
 
 impl Engine {
@@ -139,7 +143,22 @@ impl Engine {
     fn wrap_store(store: Store) -> Self {
         Self {
             store: Arc::new(Mutex::new(store)),
+            metrics: ChainMetrics::default(),
         }
+    }
+
+    /// Injects live chain-tick trigger-metric handles. Composition-root only;
+    /// tests and the `engine_import` bench keep the default no-op
+    /// [`ChainMetrics`].
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: ChainMetrics) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// Read-only borrow of the trigger metrics for the importer module.
+    pub(crate) fn metrics(&self) -> &ChainMetrics {
+        &self.metrics
     }
 
     /// Snapshots the canonical head root.
@@ -280,6 +299,15 @@ impl Engine {
     /// Forwards every variant raised by [`Store::tick_interval`] via
     /// [`EngineError::Forkchoice`].
     pub fn tick_interval(&self, has_proposal: bool) -> Result<(), EngineError> {
+        // NOTE: the fork-choice trigger histogram is intentionally NOT observed
+        // here. `store.tick_interval` bundles clock advance with any interval-
+        // boundary work, and fires multiple times per slot (including near-no-op
+        // intervals), so timing the whole call would mismeasure and dilute the
+        // `lean_fork_choice_block_processing_time_seconds` distribution. Isolating
+        // the recompute inside `tick_interval` would require timing within
+        // `forkchoice`, which the cross-cutting rule forbids. The histogram is
+        // therefore observed only around the clean `accept_new_votes` recompute
+        // on the import path (see `importer::transition_and_track`).
         let mut store = self.lock();
         match store.tick_interval(has_proposal) {
             Ok(()) => {
