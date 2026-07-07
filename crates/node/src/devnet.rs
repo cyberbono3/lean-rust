@@ -235,9 +235,9 @@ fn register_chain_histograms(recorder: &mut Recorder) -> Result<ChainMetrics> {
     let buckets = LATENCY_BUCKETS_SECONDS.to_vec();
     let fork_choice_block_processing = recorder.histogram(
         "lean_fork_choice_block_processing_time_seconds",
-        "Wall time of a fork-choice head recompute at the chain-tick boundary \
-         (accept_new_votes on import + tick_interval per slot). Trigger for the \
-         incremental fork-choice and prune-below-finalized levers.",
+        "Wall time of the fork-choice head recompute (accept_new_votes) on the \
+         block-import path. Trigger for the incremental fork-choice and \
+         prune-below-finalized levers.",
         buckets.clone(),
     )?;
     let state_transition = recorder.histogram(

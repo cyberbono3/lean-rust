@@ -7,11 +7,29 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use prometheus::{Histogram, HistogramOpts, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder};
 
 use super::error::MetricsError;
+
+/// Opaque handle to a registered push-observation histogram.
+///
+/// Wraps the backing `prometheus` collector so that implementation type does not
+/// leak through this crate's public API. Cheap to clone (`Arc`-backed); a clone
+/// injected into a producer records observations that the sibling clone held by
+/// the recorder exports on scrape.
+#[derive(Clone)]
+pub struct ObservedHistogram {
+    inner: Histogram,
+}
+
+impl ObservedHistogram {
+    /// Records one observation, in seconds.
+    pub fn observe(&self, elapsed: Duration) {
+        self.inner.observe(elapsed.as_secs_f64());
+    }
+}
 
 /// Provider for a single unsigned integer gauge.
 pub type GaugeProvider = dyn Fn() -> u64 + Send + Sync + 'static;
@@ -120,25 +138,26 @@ impl Recorder {
         ));
     }
 
-    /// Registers a push-observation histogram and returns its shared handle.
+    /// Registers a push-observation histogram and returns its opaque handle.
     ///
     /// Unlike the gauge variants (sampled per scrape via a provider closure), a
-    /// histogram is cumulative. The returned [`Histogram`] is `Arc`-backed and
-    /// cheap to clone: the composition root injects a clone into the runtime
-    /// chain layer, which calls `observe()` at the chain-tick boundary, while
-    /// the sibling clone stored here is re-registered into the ephemeral
-    /// per-scrape registry so a `/metrics` scrape exports the accumulated
-    /// observations.
+    /// histogram is cumulative. The returned [`ObservedHistogram`] is `Arc`-backed
+    /// and cheap to clone: the composition root injects a clone into the runtime
+    /// chain layer, which calls `observe()` at the chain-tick boundary, while the
+    /// sibling clone stored here is re-registered into the ephemeral per-scrape
+    /// registry so a `/metrics` scrape exports the accumulated observations. The
+    /// handle wraps the backing `prometheus` collector so that implementation type
+    /// does not leak through this crate's public API.
     ///
     /// # Errors
-    /// [`MetricsError::Prometheus`] if Prometheus rejects the descriptor (e.g.
-    /// an invalid metric name or an empty bucket set).
+    /// [`MetricsError::Prometheus`] if Prometheus rejects the descriptor (e.g. an
+    /// invalid metric name).
     pub fn histogram(
         &mut self,
         name: impl Into<String>,
         help: impl Into<String>,
         buckets: Vec<f64>,
-    ) -> Result<Histogram, MetricsError> {
+    ) -> Result<ObservedHistogram, MetricsError> {
         let name = name.into();
         let opts = HistogramOpts::new(name.clone(), help.into()).buckets(buckets);
         let hist = Histogram::with_opts(opts)?;
@@ -146,7 +165,7 @@ impl Recorder {
             name,
             hist: hist.clone(),
         });
-        Ok(hist)
+        Ok(ObservedHistogram { inner: hist })
     }
 
     /// Consumes the builder and returns an immutable [`FrozenRecorder`],
@@ -190,12 +209,14 @@ impl FrozenRecorder {
     /// bytes the `/metrics` endpoint serves. Builds a fresh registry, registers
     /// the providers, gathers, and encodes.
     ///
-    /// `pub` so tests across the runtime crate AND the node crate (devnet
-    /// composition tests) can assert on exposition output without reaching into
-    /// the private HTTP render path.
+    /// `pub` (but `#[doc(hidden)]`) so tests across the runtime crate AND the
+    /// node crate (devnet composition tests) can assert on exposition output
+    /// without reaching into the private HTTP render path. Not part of the
+    /// documented public API — the `/metrics` endpoint is the supported surface.
     ///
     /// # Errors
     /// [`MetricsError`] on descriptor rejection or encode failure.
+    #[doc(hidden)]
     pub fn encode(&self) -> Result<String, MetricsError> {
         let registry = Registry::new();
         self.register_collectors(&registry)?;
@@ -396,7 +417,7 @@ mod tests {
         let h = recorder
             .histogram("lean_test_latency_seconds", "Test latency.", vec![0.1, 1.0])
             .unwrap();
-        h.observe(0.05);
+        h.observe(Duration::from_millis(50));
 
         let body = recorder.freeze().unwrap().encode().unwrap();
         assert!(body.contains("# TYPE lean_test_latency_seconds histogram"));
@@ -434,12 +455,12 @@ mod tests {
             .unwrap();
         let frozen = recorder.freeze().unwrap();
 
-        h.observe(0.2);
+        h.observe(Duration::from_millis(200));
         assert!(frozen
             .encode()
             .unwrap()
             .contains("lean_acc_seconds_count 1"));
-        h.observe(0.3);
+        h.observe(Duration::from_millis(300));
         assert!(frozen
             .encode()
             .unwrap()

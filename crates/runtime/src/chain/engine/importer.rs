@@ -169,10 +169,12 @@ fn transition_and_track(
     store.accept_new_votes()?;
     let fc_elapsed = fc_start.elapsed();
 
-    // Observe both trigger histograms only once the block is fully accepted.
-    // The `?` on state_transition / track_block / accept_new_votes returns early
-    // on any failure, so a block that reaches Rejected records no sample and the
-    // distributions reflect committed blocks only.
+    // Observe both trigger histograms only once the import reaches success. The
+    // `?` on state_transition / track_block / accept_new_votes returns early on
+    // any failure, so a block that reaches Rejected records no sample. (One edge:
+    // if accept_new_votes fails after track_block has already committed the block,
+    // the sample is skipped — a slight undercount tracked with the store-
+    // consistency follow-up, not a spurious count.)
     metrics.observe_state_transition(stf_elapsed);
     metrics.observe_fork_choice_block_processing(fc_elapsed);
 

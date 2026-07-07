@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use prometheus::Histogram;
+use crate::api::metrics::ObservedHistogram;
 
 /// Trigger histograms for the deferred-performance levers.
 ///
@@ -28,8 +28,8 @@ use prometheus::Histogram;
 /// whole-transition wall time is the coarse trigger.
 #[derive(Clone, Default)]
 pub struct ChainMetrics {
-    fork_choice_block_processing: Option<Histogram>,
-    state_transition: Option<Histogram>,
+    fork_choice_block_processing: Option<ObservedHistogram>,
+    state_transition: Option<ObservedHistogram>,
 }
 
 impl ChainMetrics {
@@ -37,7 +37,10 @@ impl ChainMetrics {
     /// composition root (`register_chain_histograms`); tests and benches use
     /// [`ChainMetrics::default`] (all-`None`, no-op).
     #[must_use]
-    pub fn new(fork_choice_block_processing: Histogram, state_transition: Histogram) -> Self {
+    pub fn new(
+        fork_choice_block_processing: ObservedHistogram,
+        state_transition: ObservedHistogram,
+    ) -> Self {
         Self {
             fork_choice_block_processing: Some(fork_choice_block_processing),
             state_transition: Some(state_transition),
@@ -47,14 +50,14 @@ impl ChainMetrics {
     /// Records one fork-choice recompute duration. No-op on the default handle.
     pub(crate) fn observe_fork_choice_block_processing(&self, elapsed: Duration) {
         if let Some(h) = &self.fork_choice_block_processing {
-            h.observe(elapsed.as_secs_f64());
+            h.observe(elapsed);
         }
     }
 
     /// Records one full state-transition duration. No-op on the default handle.
     pub(crate) fn observe_state_transition(&self, elapsed: Duration) {
         if let Some(h) = &self.state_transition {
-            h.observe(elapsed.as_secs_f64());
+            h.observe(elapsed);
         }
     }
 }

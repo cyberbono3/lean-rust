@@ -18,7 +18,6 @@
 //! the engine and use the read-through accessors.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
 // `State` is re-exported below via `protocol`; `Arc<State>` flows from the
@@ -300,15 +299,18 @@ impl Engine {
     /// Forwards every variant raised by [`Store::tick_interval`] via
     /// [`EngineError::Forkchoice`].
     pub fn tick_interval(&self, has_proposal: bool) -> Result<(), EngineError> {
+        // NOTE: the fork-choice trigger histogram is intentionally NOT observed
+        // here. `store.tick_interval` bundles clock advance with any interval-
+        // boundary work, and fires multiple times per slot (including near-no-op
+        // intervals), so timing the whole call would mismeasure and dilute the
+        // `lean_fork_choice_block_processing_time_seconds` distribution. Isolating
+        // the recompute inside `tick_interval` would require timing within
+        // `forkchoice`, which the cross-cutting rule forbids. The histogram is
+        // therefore observed only around the clean `accept_new_votes` recompute
+        // on the import path (see `importer::transition_and_track`).
         let mut store = self.lock();
-        let fc_start = Instant::now();
         match store.tick_interval(has_proposal) {
             Ok(()) => {
-                // Observe the fork-choice recompute this tick triggered, on
-                // success only — an errored tick did partial work and would
-                // pollute the latency distribution.
-                self.metrics
-                    .observe_fork_choice_block_processing(fc_start.elapsed());
                 debug!(
                     has_proposal,
                     head_root = %store.head().to_hex(),
