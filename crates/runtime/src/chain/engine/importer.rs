@@ -149,9 +149,9 @@ impl Engine {
 /// success. Returns the post-state root for the `Accepted` arm.
 ///
 /// Timing is observation-only: the two `Instant` reads never influence control
-/// flow, the returned root, or store state — the store byte-equality invariants
-/// on the non-accept branches are unaffected. This is the runtime chain-tick
-/// boundary; `protocol`/`forkchoice` code stays time-free.
+/// flow or the returned root. This function does not change the existing store
+/// mutation behavior on error paths (e.g. an `accept_new_votes` error can occur
+/// after `track_block` has already mutated the store).
 fn transition_and_track(
     store: &mut Store,
     signed_block: SignedBlock,
