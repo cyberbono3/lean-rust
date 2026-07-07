@@ -18,6 +18,7 @@
 //! the engine and use the read-through accessors.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
 // `State` is re-exported below via `protocol`; `Arc<State>` flows from the
@@ -29,6 +30,7 @@ use tracing::{debug, info, warn};
 use types::{Bytes32, Bytes4000};
 
 use super::error::EngineError;
+use crate::chain::metrics::ChainMetrics;
 
 /// Consensus execution boundary around a shared [`forkchoice::Store`].
 ///
@@ -37,6 +39,9 @@ use super::error::EngineError;
 #[derive(Clone)]
 pub struct Engine {
     store: Arc<Mutex<Store>>,
+    /// Chain-tick trigger metrics. Default is a no-op; the composition root
+    /// injects live handles via [`Engine::with_metrics`].
+    metrics: ChainMetrics,
 }
 
 impl Engine {
@@ -139,7 +144,22 @@ impl Engine {
     fn wrap_store(store: Store) -> Self {
         Self {
             store: Arc::new(Mutex::new(store)),
+            metrics: ChainMetrics::default(),
         }
+    }
+
+    /// Injects live chain-tick trigger-metric handles. Composition-root only;
+    /// tests and the `engine_import` bench keep the default no-op
+    /// [`ChainMetrics`].
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: ChainMetrics) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// Read-only borrow of the trigger metrics for the importer module.
+    pub(crate) fn metrics(&self) -> &ChainMetrics {
+        &self.metrics
     }
 
     /// Snapshots the canonical head root.
@@ -281,8 +301,14 @@ impl Engine {
     /// [`EngineError::Forkchoice`].
     pub fn tick_interval(&self, has_proposal: bool) -> Result<(), EngineError> {
         let mut store = self.lock();
+        let fc_start = Instant::now();
         match store.tick_interval(has_proposal) {
             Ok(()) => {
+                // Observe the fork-choice recompute this tick triggered, on
+                // success only — an errored tick did partial work and would
+                // pollute the latency distribution.
+                self.metrics
+                    .observe_fork_choice_block_processing(fc_start.elapsed());
                 debug!(
                     has_proposal,
                     head_root = %store.head().to_hex(),

@@ -15,6 +15,8 @@
 //!   `crates/protocol/src/state.rs:762`), and `track_block` is the only
 //!   subsequent mutator. So a `Rejected` arm also leaves the store byte-equal.
 
+use std::time::Instant;
+
 use forkchoice::Store;
 use protocol::{SignedBlock, SignedVote, State};
 use ssz::HashTreeRoot;
@@ -23,6 +25,7 @@ use types::Bytes32;
 use super::error::EngineError;
 use super::handle::{capture_persist_plan, Engine, PersistPlan};
 use super::results::{AttestationImportResult, BlockImportResult};
+use crate::chain::metrics::ChainMetrics;
 
 impl Engine {
     /// Validates `signed_block`, runs the full state transition, and tracks
@@ -80,7 +83,7 @@ impl Engine {
         // Clone the block once for the plan before `transition_and_track`
         // consumes it; the clone is dropped on the rejected path.
         let block_for_plan = signed_block.clone();
-        match transition_and_track(&mut store, signed_block, parent_state) {
+        match transition_and_track(&mut store, signed_block, parent_state, self.metrics()) {
             Ok(post_state_root) => {
                 let head_root = store.head();
                 let plan = capture_persist_plan(&store, block_root, head_root, block_for_plan);
@@ -144,15 +147,35 @@ impl Engine {
 /// Runs the state transition, computes the post-state root, and tracks the
 /// `(block, post_state)` pair in `store`. Refreshes the canonical head on
 /// success. Returns the post-state root for the `Accepted` arm.
+///
+/// Timing is observation-only: the two `Instant` reads never influence control
+/// flow, the returned root, or store state — the store byte-equality invariants
+/// on the non-accept branches are unaffected. This is the runtime chain-tick
+/// boundary; `protocol`/`forkchoice` code stays time-free.
 fn transition_and_track(
     store: &mut Store,
     signed_block: SignedBlock,
     mut post_state: State,
+    metrics: &ChainMetrics,
 ) -> Result<Bytes32, EngineError> {
+    let stf_start = Instant::now();
     post_state.state_transition(&signed_block, true)?;
+    let stf_elapsed = stf_start.elapsed();
+
     let post_state_root: Bytes32 = post_state.hash_tree_root().into();
     store.track_block(signed_block.message, post_state)?;
+
+    let fc_start = Instant::now();
     store.accept_new_votes()?;
+    let fc_elapsed = fc_start.elapsed();
+
+    // Observe both trigger histograms only once the block is fully accepted.
+    // The `?` on state_transition / track_block / accept_new_votes returns early
+    // on any failure, so a block that reaches Rejected records no sample and the
+    // distributions reflect committed blocks only.
+    metrics.observe_state_transition(stf_elapsed);
+    metrics.observe_fork_choice_block_processing(fc_elapsed);
+
     Ok(post_state_root)
 }
 
@@ -339,6 +362,67 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // -- trigger metrics: observe-on-success at the chain-tick boundary -----
+
+    /// Builds a recorder with the two trigger histograms registered and a
+    /// matching [`ChainMetrics`] handle set. Assembled inline because
+    /// `register_chain_histograms` lives in the node crate.
+    fn metrics_with_recorder() -> (crate::api::metrics::Recorder, ChainMetrics) {
+        let mut recorder = crate::api::metrics::Recorder::new();
+        let fc = recorder
+            .histogram(
+                "lean_fork_choice_block_processing_time_seconds",
+                "fc",
+                vec![1.0],
+            )
+            .unwrap();
+        let stf = recorder
+            .histogram("lean_state_transition_time_seconds", "stf", vec![1.0])
+            .unwrap();
+        let metrics = ChainMetrics::new(fc, stf);
+        (recorder, metrics)
+    }
+
+    #[test]
+    fn import_with_metrics_records_stf_and_fork_choice() {
+        let (recorder, metrics) = metrics_with_recorder();
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
+        let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        let importer = engine_at_genesis(ENGINE_VALIDATORS).with_metrics(metrics);
+
+        assert!(matches!(
+            importer.import_block(signed),
+            BlockImportResult::Accepted { .. }
+        ));
+
+        let body = recorder.freeze().unwrap().encode().unwrap();
+        assert!(body.contains("lean_state_transition_time_seconds_count 1"));
+        assert!(body.contains("lean_fork_choice_block_processing_time_seconds_count 1"));
+    }
+
+    #[test]
+    fn rejected_import_does_not_observe_state_transition() {
+        let (recorder, metrics) = metrics_with_recorder();
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
+        let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        // Corrupt the committed state root so the transition is rejected.
+        signed.message.state_root = Bytes32::new([0xff; 32]);
+
+        let importer = engine_at_genesis(ENGINE_VALIDATORS).with_metrics(metrics);
+        assert!(matches!(
+            importer.import_block(signed),
+            BlockImportResult::Rejected {
+                error: EngineError::StateTransition(_),
+                ..
+            }
+        ));
+
+        // Observe-on-success: a rejected import bumps neither histogram.
+        let body = recorder.freeze().unwrap().encode().unwrap();
+        assert!(body.contains("lean_state_transition_time_seconds_count 0"));
+        assert!(body.contains("lean_fork_choice_block_processing_time_seconds_count 0"));
     }
 
     // -- AC #3 (produce_block validity) ------------------------------------
