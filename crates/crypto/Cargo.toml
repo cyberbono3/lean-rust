@@ -12,3 +12,4 @@ workspace = true
 
 [dependencies]
 types = { path = "../types" }
+leansig = { workspace = true }

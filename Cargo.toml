@@ -39,10 +39,22 @@ panic       = "deny"
 
 [workspace.dependencies]
 # foundation
-# ruint pinned to ~1.12 (>=1.12.0, <1.13.0): narrow pin for resolution stability.
-# It once held the workspace MSRV down; that reason retired with the floor bump.
-# The pin stays deliberately — widening it is a separate, testable change.
-ruint     = { version = "~1.12", features = ["std"] }
+# ruint widened from ~1.12 to ^1.14: leanSig reaches ruint through
+# `ethereum_ssz 0.10 -> alloy-primitives 1.0 -> ruint ^1.14`. Cargo unifies ruint
+# to a single 1.x version across the graph, and ~1.12 (<1.13.0) has no overlap
+# with ^1.14, so the old pin made `crypto` unable to depend on leanSig at all.
+# The narrow pin's original job — holding the workspace MSRV down — retired with
+# the toolchain floor bump, so widening costs nothing it was still buying.
+#
+# The floor is ^1.14, but the resolved version is held at 1.17.2 in Cargo.lock:
+# ruint 1.18+ declares rust-version above this workspace's 1.87 floor, and
+# `resolver = "2"` is not MSRV-aware, so it would otherwise select 1.19 and fail
+# to build. That cap cannot live here — a manifest cannot state both a ^1.14
+# floor and a <1.18 ceiling without contradicting the floor leanSig requires —
+# so it lives in Cargo.lock, where nothing declares intent.
+# `scripts/check-msrv-pins.sh` is what keeps it from drifting, and carries the
+# full reasoning alongside the same constraint on ethereum_ssz_derive.
+ruint     = { version = "^1.14", features = ["std"] }
 # redb pinned to ~2.1 (>=2.1.0, <2.2.0): the embedded DB owns on-disk state, so
 # the pin is held for format stability. Per the ruint precedent above.
 redb      = "~2.1"
