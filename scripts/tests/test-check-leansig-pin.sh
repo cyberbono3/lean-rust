@@ -20,6 +20,16 @@
 #   TC-10 unreadable source                   -> fail   (must not default to pass)
 #   TC-11 entry spans multiple lines          -> pass   (false-FAIL: line-at-a-time parse)
 #   TC-12 leansig outside [workspace.dependencies] -> fail (false-pass: unscoped grep)
+#   TC-13 rev only in a trailing comment      -> fail   (false-pass: comment read as key)
+#   TC-14 stale branch in a trailing comment  -> pass   (false-FAIL: comment read as key)
+#   TC-15 version + rev but no git            -> fail   (false-pass: git check unasserted)
+#   TC-16 rev in a URL query string only      -> fail   (false-pass: unbounded key match)
+#   TC-17 key names appear inside the git URL -> pass   (false-FAIL: unbounded key match)
+#
+# Every case above is mutation-checked: removing the assertion it names from the
+# guard turns it red. The one exception is deliberate — deleting `has_key rev`
+# leaves the suite green, because the rev extraction below it fails closed on the
+# same input. That check is kept for its error message, not its enforcement.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -94,6 +104,23 @@ run "TC-3  tag instead of rev" fail \
 run "TC-4  bare version, no git" fail \
     "$(cargo_with 'leansig = "0.1"')"
 
+# TC-4 alone does not pin the git-source assertion: it fails on the missing rev,
+# so deleting the git check leaves it green. This one carries a valid rev and so
+# fails only if the git source is actually asserted.
+run "TC-15 version + rev but no git" fail \
+    "$(cargo_with 'leansig = { version = "0.1", rev = "f10dcbefac2502d356d93f686e8b4ecd8dc8840a" }')"
+
+# A rev-looking fragment in the URL is not a pin. Fails only if keys are matched
+# at a value boundary rather than by substring.
+run "TC-16 rev in a URL query string only" fail \
+    "$(cargo_with 'leansig = { git = "https://example.com/leanSig?rev=f10dcbefac2502d356d93f686e8b4ecd8dc8840a" }')"
+
+# The inverse of TC-16, and the case that pins the boundary itself: a correctly
+# pinned entry whose URL merely contains the key names must not be rejected.
+# Substring matching would read the path as a branch key and fail this.
+run "TC-17 key names appear inside the git URL" pass \
+    "$(cargo_with 'leansig = { git = "https://github.com/leanEthereum/leanSig-branch-tag-rev", rev = "f10dcbefac2502d356d93f686e8b4ecd8dc8840a" }')"
+
 run "TC-5  git present but no rev" fail \
     "$(cargo_with 'leansig = { git = "https://github.com/leanEthereum/leanSig" }')"
 
@@ -133,6 +160,18 @@ leansig = { git = "https://github.com/leanEthereum/leanSig", rev = "f10dcbefac25
 run "TC-9  commented-out entry is ignored" pass \
     "$(cargo_with '# leansig = { git = "https://github.com/leanEthereum/leanSig", branch = "main" }
 leansig = { git = "https://github.com/leanEthereum/leanSig", rev = "f10dcbefac2502d356d93f686e8b4ecd8dc8840a" }')"
+
+# The likeliest way this pin ever floats: unpin to test against upstream, leave
+# the old rev in a trailing comment. There is no rev key here at all — cargo would
+# track the default branch — so a guard that reads the comment calls a floating
+# pin exact. This is the case that must not regress.
+run "TC-13 rev only in a trailing comment" fail \
+    "$(cargo_with 'leansig = { git = "https://github.com/leanEthereum/leanSig" } # rev = "f10dcbefac2502d356d93f686e8b4ecd8dc8840a"')"
+
+# The inverse: the entry is correctly pinned and the comment is just history.
+# Rejecting it would train people to delete the guard.
+run "TC-14 stale branch in a trailing comment" pass \
+    "$(cargo_with 'leansig = { git = "https://github.com/leanEthereum/leanSig", rev = "f10dcbefac2502d356d93f686e8b4ecd8dc8840a" } # was branch = "main"')"
 
 # The repo already formats libp2p across several lines; a future reformat of this
 # entry must not turn the guard red.

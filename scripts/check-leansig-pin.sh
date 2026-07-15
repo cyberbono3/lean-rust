@@ -41,17 +41,36 @@ REV_MIN_HEX=7
 
 fail() { printf 'check-leansig-pin: %s\n' "$1" >&2; exit 1; }
 
-# Drop whole-line comments so a commented-out entry is never mistaken for a live one.
-uncommented() { grep -v '^[[:space:]]*#' "$1" || true; }
-
 [ -r "$CARGO_TOML" ] || fail "missing or unreadable required file: $CARGO_TOML"
 
 # Scoped to [workspace.dependencies] so a leansig key in any other table (a
 # member's [dependencies], a [patch] section) cannot be read as the workspace
 # pin. Brace-balanced so a multi-line entry reads as one value — the repo already
 # formats libp2p that way, and a reformat must not blind the guard.
+#
+# Comments are stripped before anything is matched, and that is load-bearing in
+# both directions: a commented-out entry must not be read as live, and a live
+# entry's trailing comment must not be read as a key. The likeliest way this pin
+# ever floats is someone unpinning to test against upstream and leaving the old
+# rev in a trailing comment — a guard that read that comment would call the
+# result pinned.
 entry="$(
-    uncommented "$CARGO_TOML" | awk -v dep="$DEP" '
+    awk -v dep="$DEP" '
+        # Truncate at the first # that is not inside a double-quoted string, so a
+        # fragment in a URL survives while a trailing comment does not. TOML
+        # escapes (\") are not handled: they cannot occur in the keys parsed here,
+        # and mis-stripping one would fail closed rather than pass a floating pin.
+        function strip_comment(line,   i, c, inq, out) {
+            inq = 0; out = ""
+            for (i = 1; i <= length(line); i++) {
+                c = substr(line, i, 1)
+                if (c == "#" && !inq) break
+                if (c == "\"") inq = !inq
+                out = out c
+            }
+            return out
+        }
+        { $0 = strip_comment($0) }
         /^[[:space:]]*\[/ {
             if (capturing) exit
             in_wd = ($0 ~ /^[[:space:]]*\[workspace\.dependencies\][[:space:]]*$/)
@@ -68,10 +87,10 @@ entry="$(
             if (depth <= 0) { print entry; exit }
             capturing = 1
         }
-    '
+    ' "$CARGO_TOML"
 )"
 
-[ -n "$entry" ] || fail "no '$DEP' entry found in [workspace.dependencies] of $CARGO_TOML — the pin is the reason this guard exists; do not remove it"
+[ -n "$entry" ] || fail "no live '$DEP = { ... }' inline table found under [workspace.dependencies] in $CARGO_TOML — the entry must be declared in that form (a [workspace.dependencies.$DEP] sub-table is not read); if it was removed, restore it: the pin is the reason this guard exists"
 
 # Match keys only at a value boundary, so a URL or a longer key name that merely
 # contains "git"/"rev"/"tag" cannot be read as the key itself.
