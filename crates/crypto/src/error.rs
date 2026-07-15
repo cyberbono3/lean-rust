@@ -24,7 +24,7 @@ pub enum CryptoError {
     },
 
     /// The requested epoch lies outside the key's prepared interval.
-    #[error("epoch {epoch} is outside the prepared interval {start}..{end}; call prepare() first")]
+    #[error("epoch {epoch} is outside the prepared interval {start}..{end}")]
     EpochNotPrepared {
         /// Epoch the caller asked to sign.
         epoch: u32,
