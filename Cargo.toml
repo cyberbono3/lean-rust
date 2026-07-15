@@ -118,6 +118,9 @@ hex        = "0.4"
 
 # test
 proptest          = "1"
+# rand 0.9 is not a free choice: leanSig's `key_gen<R: Rng>` takes a rand 0.9
+# `Rng`, so the crypto test fixtures must hand it the same major.
+rand              = "0.9"
 insta             = { version = "1", features = ["yaml"] }
 wiremock          = "0.6"
 tokio-test        = "0.4"
@@ -142,3 +145,33 @@ debug     = true
 [profile.test]
 opt-level = 0
 debug     = true
+
+# Post-quantum signing is optimized in test builds. Without this the crypto suite
+# takes ~6 minutes; with it, ~4 seconds. Both halves below are required, and
+# measured — each alone is not enough:
+#
+#   neither override .................. 347s
+#   dependencies only ("*") .......... 220s
+#   crypto only ........................ 73s
+#   both ................................ 4s
+#
+# Two separate costs are in play. leanSig's own field arithmetic lives in its
+# dependency tree, which `"*"` covers. But its `key_gen` and `sign` are generic
+# over the signature scheme, so they monomorphize into *this workspace's* codegen
+# units and compile at the consuming crate's opt-level — which is why optimizing
+# the dependency alone barely moved the number.
+#
+# Scoped deliberately: `"*"` never applies to workspace members, and the only
+# member named is `crypto`, so every other crate keeps opt-level 0 and stays
+# debuggable. debug-assertions are left on for `crypto` — the goal is faster
+# tests, not fewer checks.
+#
+# Placed under `test` rather than `dev` on purpose. `profile.test` inherits from
+# `profile.dev`, so putting these under `dev` also works (measured: 8s) — but it
+# would optimize dependencies for every `cargo build` too, taxing ordinary dev
+# iteration for a benefit only the test suite needs.
+[profile.test.package."*"]
+opt-level = 3
+
+[profile.test.package.crypto]
+opt-level = 3

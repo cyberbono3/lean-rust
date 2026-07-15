@@ -1088,6 +1088,8 @@ name = "crypto"
 version = "0.1.0"
 dependencies = [
  "leansig",
+ "rand 0.9.4",
+ "thiserror 2.0.18",
  "types",
 ]
 
