@@ -91,13 +91,39 @@ while IFS=$'\t' read -r pkg want reason; do
         continue
     fi
 
-    # The required version must be among those present. Other majors of the same
-    # package are fine and deliberately not asserted on.
-    if printf '%s\n' "$found" | grep -qxF "$want"; then
-        printf '[check-msrv-pins.sh] PASS: %s pinned at %s\n' "$pkg" "$want"
+    # The required version must be the only version present for the same
+    # semver-compatible line. Otherwise a drift could reintroduce an MSRV-raising
+    # version alongside the pinned one and still satisfy a naive "want is present"
+    # check.
+    major="${want%%.*}"
+    rest="${want#*.}"
+    minor="${rest%%.*}"
+    if [ "$major" = "0" ]; then
+        compat_re="^0\\.${minor}\\."
+        compat_line="0.${minor}"
     else
+        compat_re="^${major}\\."
+        compat_line="${major}"
+    fi
+
+    compat_found="$(printf '%s\n' "$found" | grep -E "$compat_re" || true)"
+
+    if [ -z "$compat_found" ]; then
         printf '[check-msrv-pins.sh] FAIL: %s is at [%s], expected %s — %s\n' \
             "$pkg" "$(printf '%s' "$found" | tr '\n' ' ' | sed 's/ $//')" "$want" "$reason" >&2
+        printf '[check-msrv-pins.sh] FAIL: restore with: cargo update -p %s --precise %s\n' \
+            "$pkg" "$want" >&2
+        status=1
+        continue
+    fi
+
+    compat_count="$(printf '%s\n' "$compat_found" | wc -l | tr -d ' ')"
+
+    if [ "$compat_count" -eq 1 ] && printf '%s\n' "$compat_found" | grep -qxF "$want"; then
+        printf '[check-msrv-pins.sh] PASS: %s pinned at %s\n' "$pkg" "$want"
+    else
+        printf '[check-msrv-pins.sh] FAIL: %s has multiple %s.* versions [%s], expected only %s — %s\n' \
+            "$pkg" "$compat_line" "$(printf '%s' "$compat_found" | tr '\n' ' ' | sed 's/ $//')" "$want" "$reason" >&2
         printf '[check-msrv-pins.sh] FAIL: restore with: cargo update -p %s --precise %s\n' \
             "$pkg" "$want" >&2
         status=1
