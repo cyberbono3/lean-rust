@@ -17,7 +17,14 @@
 
 use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
-use types::{Bytes32, Bytes4000};
+use types::Bytes32;
+// Retained construction sites for the deprecated `Bytes4000` placeholder; move
+// to `Signature` with the container refactor. Scoped to the items that name it
+// — the `SignedBlock` field, the decode leg, and the test module — so unrelated
+// deprecations in the rest of this file are still surfaced. `expect` rather than
+// `allow`: once the sites move, the unfulfilled expectation fails the build.
+#[expect(deprecated)]
+use types::Bytes4000;
 
 use crate::internal::{
     decode_fixed_element_list, encode_fixed_element_list, ensure_len, list_hash_tree_root,
@@ -282,6 +289,13 @@ impl HashTreeRoot for Block {
 ///
 /// Variable-length envelope pairing a [`Block`] with the 4000-byte
 /// post-quantum-signature placeholder.
+// `allow` rather than `expect`, unlike the other sites in this file: the derives
+// below expand to code naming the field's type, and a lint *expectation* does
+// not propagate into derive expansion (a field- or struct-level `expect` is
+// reported fulfilled while the expanded `Clone`/`Default`/`PartialEq` impls
+// still warn). `allow` does propagate. Scoped to this struct, and retires with
+// the field when it moves to `Signature`.
+#[allow(deprecated)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SignedBlock {
     /// The unsigned [`Block`] being attested to.
@@ -311,6 +325,7 @@ impl Decode for SignedBlock {
         false
     }
 
+    #[expect(deprecated)]
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < SIGNED_BLOCK_FIXED_PART_LEN {
             return Err(DecodeError::InvalidByteLength {
@@ -341,6 +356,7 @@ impl HashTreeRoot for SignedBlock {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

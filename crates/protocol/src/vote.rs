@@ -14,6 +14,12 @@
 
 use ssz::merkleize::{hash_pair, merkleize, ZERO_HASH};
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
+// Retained construction sites for the deprecated `Bytes4000` placeholder; move
+// to `Signature` with the container refactor. Scoped to the items that name it
+// — the `SignedVote` field, the decode leg, and the test module — so unrelated
+// deprecations in the rest of this file are still surfaced. `expect` rather than
+// `allow`: once the sites move, the unfulfilled expectation fails the build.
+#[expect(deprecated)]
 use types::Bytes4000;
 
 use crate::checkpoint::Checkpoint;
@@ -114,6 +120,13 @@ impl HashTreeRoot for Vote {
 ///
 /// Not [`Copy`]: [`Bytes4000`] is intentionally non-`Copy` to prevent silent
 /// 4 KB stack copies. Pass by reference where ownership is not needed.
+// `allow` rather than `expect`, unlike the other sites in this file: the derives
+// below expand to code naming the field's type, and a lint *expectation* does
+// not propagate into derive expansion (a field- or struct-level `expect` is
+// reported fulfilled while the expanded `Clone`/`Default`/`PartialEq` impls
+// still warn). `allow` does propagate. Scoped to this struct, and retires with
+// the field when it moves to `Signature`.
+#[allow(deprecated)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SignedVote {
     /// Index of the validator that produced [`Self::message`].
@@ -153,6 +166,7 @@ impl Decode for SignedVote {
         SIGNED_VOTE_SSZ_LEN
     }
 
+    #[expect(deprecated)]
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
         ensure_len(bytes, SIGNED_VOTE_SSZ_LEN)?;
         let mut c = 0;
@@ -182,6 +196,7 @@ impl HashTreeRoot for SignedVote {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

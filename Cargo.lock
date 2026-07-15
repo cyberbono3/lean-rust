@@ -4150,6 +4150,7 @@ version = "0.1.0"
 dependencies = [
  "ethereum_ssz",
  "ethereum_ssz_derive",
+ "hex",
  "proptest",
  "sha2",
  "thiserror 2.0.18",

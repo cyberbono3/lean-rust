@@ -26,7 +26,14 @@ use parking_lot::{Mutex, MutexGuard};
 use protocol::{Block, Checkpoint, SignedBlock, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
-use types::{Bytes32, Bytes4000};
+use types::Bytes32;
+// Retained construction site for the deprecated `Bytes4000` placeholder; moves
+// to `Signature` with the container refactor. Scoped to the import and the one
+// function that builds a signature, so unrelated deprecations in the rest of
+// this file are still surfaced. `expect` rather than `allow`: once the site
+// moves, the unfulfilled expectation fails the build.
+#[expect(deprecated)]
+use types::Bytes4000;
 
 use super::error::EngineError;
 use crate::chain::metrics::ChainMetrics;
@@ -231,6 +238,7 @@ impl Engine {
     /// # Errors
     /// Forwards every variant raised by [`Store::produce_block`] via
     /// [`EngineError::Forkchoice`].
+    #[expect(deprecated)]
     pub(crate) fn produce_block_capturing(
         &self,
         slot: Slot,

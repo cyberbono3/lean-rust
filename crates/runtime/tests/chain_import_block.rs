@@ -1,5 +1,11 @@
 //! Integration tests for `Service::import_block`.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced. `expect` rather than `allow`: once this file's last site
+// moves to `Signature`, the unfulfilled expectation fails the build instead of
+// lingering as a stale allow.
+#![expect(deprecated)]
 #![allow(
     missing_docs,
     clippy::expect_used,

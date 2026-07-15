@@ -5,6 +5,12 @@
 //! Shape mirrors `forkchoice::test_fixtures::genesis_anchor` but uses only
 //! re-exported `protocol` types.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced. `expect` rather than `allow`: once this file's last site
+// moves to `Signature`, the unfulfilled expectation fails the build instead of
+// lingering as a stale allow.
+#![expect(deprecated)]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

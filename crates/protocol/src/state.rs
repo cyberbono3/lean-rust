@@ -1122,8 +1122,12 @@ mod justifications_tests {
     }
 }
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod attestation_tests {
     use super::*;
 
@@ -1759,8 +1763,12 @@ mod slot_processing_tests {
     }
 }
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod state_transition_tests {
     use super::*;
     use proptest::prelude::*;

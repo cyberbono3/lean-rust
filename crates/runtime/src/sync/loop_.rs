@@ -611,8 +611,12 @@ fn should_sync(local: &Status, peer: &Status) -> bool {
     peer.finalized.slot > local.finalized.slot || peer.head.slot > local.head.slot
 }
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use protocol::{Block, BlockBody, Checkpoint, Slot, ValidatorIndex};

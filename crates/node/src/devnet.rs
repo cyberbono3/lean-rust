@@ -12,7 +12,14 @@ use runtime::core::{Node, NodeConfig};
 use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
 use storage::{HeadInfo, MemoryStore, RedbStore, Store};
-use types::{Bytes32, Bytes4000};
+use types::Bytes32;
+// Retained construction sites for the deprecated `Bytes4000` placeholder; move
+// to `Signature` with the container refactor. Scoped to the import, the one
+// production site (`new_devnet`), and the test module, so unrelated deprecations
+// in the rest of this file are still surfaced. `expect` rather than `allow`:
+// once the sites move, the unfulfilled expectation fails the build.
+#[expect(deprecated)]
+use types::Bytes4000;
 
 use crate::consensus_loop::ConsensusLoop;
 
@@ -73,6 +80,7 @@ pub struct Config {
 ///
 /// Returns an error if the engine rejects the genesis anchor, p2p host
 /// construction fails, or the consensus loop cannot load its validators.
+#[expect(deprecated)]
 pub fn new_devnet(config: Config) -> Result<Node> {
     let Config {
         node,
@@ -316,6 +324,7 @@ fn persist_anchor(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use runtime::duties::GenesisTimeUnix;

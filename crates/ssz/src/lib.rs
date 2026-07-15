@@ -231,4 +231,143 @@ mod tests {
             prop_assert_eq!(decoded, arr);
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Hash-tree-root of the devnet-1 wire byte-vectors
+    //
+    // `Signature` / `PublicKey` inherit `HashTreeRoot` from the blanket
+    // `impl<const N: usize> HashTreeRoot for types::ByteVector<N>` above — no
+    // per-type impl exists, so these guard the generic path at the two widths
+    // that go on the wire.
+    //
+    // Two kinds of vector below, because they pin different things:
+    //
+    // - The ZERO roots pin tree depth only. An all-zero root depends solely on
+    //   `power_of_two_ceil(ceil(N / 32))`, so it is CONSTANT across huge width
+    //   ranges: every N in 2049..=4096 roots to 87eb0d…, and that range includes
+    //   4000 — the deprecated `Bytes4000` width this type replaces. A zero root
+    //   therefore CANNOT witness the width, and is useless as an interop vector.
+    //   Zero input also hides final-chunk padding: with all-zero bytes, right-pad,
+    //   left-pad, and no-pad are indistinguishable.
+    //
+    // - The NON-ZERO roots are the real width pins and the devnet-1 interop
+    //   vectors. A distinct fill byte makes the root depend on the exact width
+    //   (3116 and 3117 differ) and on the final chunk's padding.
+    //
+    // Both widths have a partial final chunk — 3116 = 97*32 + 12, 52 = 32 + 20 —
+    // so the pad occupies 20 and 12 bytes respectively. That is the only
+    // structurally interesting property of either width, and only the non-zero
+    // vectors cover it.
+    //
+    // All four expectations below were cross-checked against the consensus
+    // spec's own `hash_tree_root` at the pinned revision (leanSpec@050fa4a,
+    // `lean_spec.subspecs.ssz.hash`), so they agree with the spec and not merely
+    // with this crate.
+    // ---------------------------------------------------------------------
+
+    /// Reference zero-hash recursion — deliberately independent of
+    /// `merkleize`/`pack`, so a bug in either is not mirrored into the
+    /// expectation.
+    ///
+    /// `merkleize::zero_tree_root` computes the same value and is deliberately
+    /// NOT used: it lives in the crate under test, and re-deriving here from
+    /// `sha2` alone keeps the expectation independent of the code it checks.
+    fn zero_hash_at_depth(depth: u32) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut h = [0_u8; 32];
+        for _ in 0..depth {
+            let mut hasher = Sha256::new();
+            hasher.update(h);
+            hasher.update(h);
+            h = hasher.finalize().into();
+        }
+        h
+    }
+
+    #[test]
+    fn signature_zero_htr_pins_tree_depth_only() {
+        // 3116 bytes -> 98 chunks -> zero-extended to 128 leaves -> depth 7.
+        // 98 is NOT a power of two, so this exercises the zero-extension path.
+        // This does NOT pin the width — see `signature_htr_matches_pinned_vector`.
+        let root = types::Signature::zero().hash_tree_root();
+
+        let expected: [u8; 32] =
+            hex_to_32("87eb0ddba57e35f6d286673802a4af5975e22506c7cf4c64bb6be5ee11527f2c");
+        assert_eq!(root, expected, "Signature zero-root moved");
+        assert_eq!(
+            root,
+            zero_hash_at_depth(7),
+            "zero-extension to 128 leaves broke"
+        );
+    }
+
+    #[test]
+    fn publickey_zero_htr_pins_tree_depth_only() {
+        // 52 bytes -> 2 chunks -> already a power of two -> depth 1.
+        // This root is the well-known consensus-spec depth-1 zero-hash.
+        // This does NOT pin the width — see `publickey_htr_matches_pinned_vector`.
+        let root = types::PublicKey::zero().hash_tree_root();
+
+        let expected: [u8; 32] =
+            hex_to_32("f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b");
+        assert_eq!(root, expected, "PublicKey zero-root moved");
+        assert_eq!(root, zero_hash_at_depth(1), "2-leaf merkleization broke");
+    }
+
+    /// Width- and padding-discriminating interop vector for the 3116-byte width.
+    ///
+    /// Cross-checked against the consensus spec's own `hash_tree_root` at the
+    /// pinned revision — `hash_tree_root(Bytes3116(b"\x5a" * 3116))` on
+    /// [leanSpec@050fa4a](https://github.com/leanEthereum/leanSpec/tree/050fa4a18881d54d7dc07601fe59e34eb20b9630)
+    /// returns this value. It is therefore a genuine interop vector, not merely
+    /// self-consistent with this crate.
+    ///
+    /// Unlike the zero root, it changes if the width changes at all (3116 vs
+    /// 3117 vs 4000) or if the final chunk's 20 pad bytes move.
+    #[test]
+    fn signature_htr_matches_pinned_vector() {
+        let root = types::Signature::new([0x5a; types::Signature::LEN]).hash_tree_root();
+
+        let expected: [u8; 32] =
+            hex_to_32("074c83eb750d70d0e1168a6b3950ac492cb11ba8653c0160ea4d1740d4f7e7e7");
+        assert_eq!(
+            root, expected,
+            "devnet-1 Signature interop vector moved — width or final-chunk padding changed"
+        );
+    }
+
+    /// Width- and padding-discriminating interop vector for the 52-byte width.
+    ///
+    /// Cross-checked against the consensus spec's own `hash_tree_root` at the
+    /// pinned revision — `hash_tree_root(Bytes52(b"\xa5" * 52))` on
+    /// [leanSpec@050fa4a](https://github.com/leanEthereum/leanSpec/tree/050fa4a18881d54d7dc07601fe59e34eb20b9630)
+    /// returns this value. It is therefore a genuine interop vector, not merely
+    /// self-consistent with this crate.
+    ///
+    /// Unlike the zero root, it changes if the width changes at all (52 vs 48 vs
+    /// 60) or if the final chunk's 12 pad bytes move.
+    #[test]
+    fn publickey_htr_matches_pinned_vector() {
+        let root = types::PublicKey::new([0xa5; types::PublicKey::LEN]).hash_tree_root();
+
+        let expected: [u8; 32] =
+            hex_to_32("ce1646f97d08a4f48e8f811835ab0fc34a2a6f8917b5761308838162e0041927");
+        assert_eq!(
+            root, expected,
+            "devnet-1 PublicKey interop vector moved — width or final-chunk padding changed"
+        );
+    }
+
+    /// Decodes a 64-char hex string into a 32-byte array (test-only helper).
+    ///
+    /// `hex::decode` rejects odd lengths and non-hex digits, naming the offending
+    /// byte; the `try_into` pins the 32-byte width. These inputs are hand-written
+    /// constants, so a typo is the expected failure mode and both messages beat
+    /// an opaque slice-index panic.
+    fn hex_to_32(s: &str) -> [u8; 32] {
+        hex::decode(s)
+            .expect("test vector must be valid hex")
+            .try_into()
+            .expect("test vector must be 32 bytes")
+    }
 }

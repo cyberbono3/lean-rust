@@ -70,7 +70,14 @@ use ssz::HashTreeRoot;
 use storage::HeadInfo;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
-use types::{Bytes32, Bytes4000};
+use types::Bytes32;
+// Retained construction site for the deprecated `Bytes4000` placeholder; moves
+// to `Signature` with the container refactor. Scoped to the import and the one
+// function that builds a signature, so unrelated deprecations in the rest of
+// this file are still surfaced. `expect` rather than `allow`: once the site
+// moves, the unfulfilled expectation fails the build.
+#[expect(deprecated)]
+use types::Bytes4000;
 
 use super::cache::ChainSnapshot;
 use super::error::ChainError;
@@ -263,6 +270,7 @@ impl Service {
     /// # Errors
     /// [`ChainError::Engine`] if [`Engine::produce_attestation_vote`]
     /// rejects the request.
+    #[expect(deprecated)]
     #[instrument(level = "debug", skip_all, fields(slot = slot.get(), validator = validator.get()), err)]
     pub async fn produce_attestation(
         &self,

@@ -23,8 +23,11 @@ pub(crate) const U64_LEN: usize = 8;
 /// Wire size (bytes) of a [`types::Bytes32`] SSZ field.
 pub(crate) const BYTES32_LEN: usize = 32;
 
-/// Wire size (bytes) of a [`types::Bytes4000`] SSZ field — XMSS post-quantum
-/// signature placeholder used by `SignedVote` / `SignedBlock`.
+/// Wire size (bytes) of a [`types::Bytes4000`] SSZ field — signature
+/// placeholder used by `SignedVote` / `SignedBlock`.
+///
+/// Superseded by [`types::Signature`], whose width is [`types::Signature::LEN`];
+/// retires with its last decode consumer when the containers move over.
 pub(crate) const BYTES4000_LEN: usize = 4000;
 
 /// Wire size (bytes) of a `Slot` SSZ field (alias for [`U64_LEN`]).
@@ -78,8 +81,19 @@ pub(crate) fn read_fixed<T: Decode>(bytes: &[u8], cursor: &mut usize) -> Result<
 }
 
 /// Reads `N` raw bytes from `bytes[*cursor..]` into a stack array and
-/// advances `*cursor` by `N`. Panic-free for in-bounds slices because
-/// `<[u8]>::copy_from_slice` is total when both sides have equal length.
+/// advances `*cursor` by `N`.
+///
+/// Caller is responsible for verifying that the slice covers the read — same
+/// contract as [`read_fixed`].
+///
+/// # Panics
+/// Panics if `bytes.len() < *cursor + N`: the slice index below is the failure
+/// mode, not the subsequent `copy_from_slice` (which is total once the index
+/// has succeeded, since both sides then have length `N`). Every caller in this
+/// crate pre-checks the length at the decode boundary — `ensure_len` or an
+/// explicit `bytes.len() < ..` guard — so the panic is unreachable from a
+/// network-supplied buffer. A future caller that skips that check turns a
+/// truncated peer message into a panic.
 pub(crate) fn read_byte_array<const N: usize>(bytes: &[u8], cursor: &mut usize) -> [u8; N] {
     let mut arr = [0_u8; N];
     arr.copy_from_slice(&bytes[*cursor..*cursor + N]);
@@ -281,7 +295,8 @@ pub(crate) use impl_u64_ssz_newtype;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use super::u64_chunk;
+    use super::{read_byte_array, u64_chunk};
+    use types::{PublicKey, Signature};
 
     #[test]
     fn u64_chunk_zero_is_zero_chunk() {
@@ -293,5 +308,69 @@ mod tests {
         let chunk = u64_chunk(0xdead_beef);
         assert_eq!(&chunk[..8], &0xdead_beef_u64.to_le_bytes());
         assert!(chunk[8..].iter().all(|&b| b == 0));
+    }
+
+    // -- devnet-1 wire byte-vectors ride the manual encode/decode path -------
+    //
+    // There is no `Encode`/`Decode` derive on `ByteVector`: containers write
+    // via `.as_slice()` and read via `read_byte_array::<N>`. These witness that
+    // `Signature` / `PublicKey` work on that same path at their wire widths.
+    // The `Signature::new(..)` wrapper is load-bearing — `read_byte_array`
+    // returns `[u8; N]`, not the newtype.
+
+    #[test]
+    fn signature_wire_round_trips_through_read_byte_array() {
+        let sig = Signature::new([0x5a; Signature::LEN]);
+
+        let encoded = sig.as_slice().to_vec();
+        assert_eq!(encoded.len(), Signature::LEN);
+
+        let mut cursor = 0_usize;
+        let decoded = Signature::new(read_byte_array::<{ Signature::LEN }>(&encoded, &mut cursor));
+
+        assert_eq!(decoded, sig);
+        assert_eq!(cursor, Signature::LEN);
+    }
+
+    #[test]
+    fn publickey_wire_round_trips_through_read_byte_array() {
+        let pk = PublicKey::new([0xa5; PublicKey::LEN]);
+
+        let encoded = pk.as_slice().to_vec();
+        assert_eq!(encoded.len(), PublicKey::LEN);
+
+        let mut cursor = 0_usize;
+        let decoded = PublicKey::new(read_byte_array::<{ PublicKey::LEN }>(&encoded, &mut cursor));
+
+        assert_eq!(decoded, pk);
+        assert_eq!(cursor, PublicKey::LEN);
+    }
+
+    /// Pins the documented panic contract: `read_byte_array` does not bounds-check,
+    /// so a caller that forgets to `ensure_len` turns a truncated buffer into a
+    /// panic rather than a `DecodeError`. Every production caller pre-checks;
+    /// this witnesses what happens if one stops.
+    #[test]
+    #[should_panic(expected = "range end index")]
+    fn read_byte_array_panics_on_truncated_input() {
+        let truncated = vec![0_u8; Signature::LEN - 1];
+        let mut cursor = 0_usize;
+        let _ = read_byte_array::<{ Signature::LEN }>(&truncated, &mut cursor);
+    }
+
+    /// Decoding from a non-zero offset must honour the cursor rather than
+    /// re-reading from the start.
+    #[test]
+    fn signature_decode_respects_starting_cursor() {
+        let sig = Signature::new([0x27; Signature::LEN]);
+
+        let mut buf = vec![0xff_u8; 8];
+        buf.extend_from_slice(sig.as_slice());
+
+        let mut cursor = 8_usize;
+        let decoded = Signature::new(read_byte_array::<{ Signature::LEN }>(&buf, &mut cursor));
+
+        assert_eq!(decoded, sig);
+        assert_eq!(cursor, 8 + Signature::LEN);
     }
 }

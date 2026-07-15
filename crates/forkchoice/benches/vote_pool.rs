@@ -12,6 +12,12 @@
 //!
 //! Run: `cargo bench -p forkchoice --bench vote_pool`.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced. `expect` rather than `allow`: once this file's last site
+// moves to `Signature`, the unfulfilled expectation fails the build instead of
+// lingering as a stale allow.
+#![expect(deprecated)]
 // `criterion_group!` expands to an undocumented `pub fn`; benches are not part
 // of the public API surface, so the workspace `missing_docs` lint is waived here.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
