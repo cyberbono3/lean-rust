@@ -78,10 +78,10 @@ mod tests {
 
     /// Flips a byte inside the payload, not in the padding.
     ///
-    /// The distinction matters: the container's trailing bytes are padding that
-    /// verification slices off, so flipping one there is a no-op (pinned by
-    /// `test_tampered_padding_is_ignored`). A tamper test that targeted the last
-    /// byte of the container would assert a rejection that cannot happen.
+    /// The distinction matters: tampering with the trailing padding is rejected
+    /// with [`CryptoError::NonZeroPadding`], so a "flip the last byte" test would
+    /// exercise padding validation rather than payload integrity.
+    /// This test flips a payload byte to ensure payload tampering is rejected.
     #[test]
     fn test_tampered_signature_rejected() {
         let (wire_pk, mut sk) = test_key_pair();
