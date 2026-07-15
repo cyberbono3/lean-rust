@@ -4,6 +4,7 @@ members = [
     "crates/types",
     "crates/ssz",
     "crates/config",
+    "crates/crypto",
     "crates/protocol",
     "crates/forkchoice",
     "crates/storage",

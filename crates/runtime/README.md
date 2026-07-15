@@ -53,9 +53,9 @@ is the composition root that owns the slots and enforces ordered startup
   formerly a Cargo crate boundary; after consolidation it is a review
   convention, not a compiler barrier — keep truly-internal items scoped with
   `pub(in crate::<module>)` / `pub(super)` rather than `pub(crate)`.
-- **Audit boundary preserved.** The seven sync-core crates (`types`, `ssz`,
-  `config`, `protocol`, `forkchoice`, `storage`, `networking`) stay separate so
-  `cargo tree` keeps consensus logic free of `tokio`/`libp2p`/`axum`. `libp2p`
+- **Audit boundary preserved.** The eight sync-core crates (`types`, `ssz`,
+  `config`, `crypto`, `protocol`, `forkchoice`, `storage`, `networking`) stay
+  separate so `cargo tree` keeps consensus logic free of `tokio`/`libp2p`/`axum`. `libp2p`
   is confined to `p2p`; `axum`/`prometheus` to `api`.
 
 [Decision 7]: ../../.claude/PROJECT-KNOWLEDGE.md
