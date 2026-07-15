@@ -65,6 +65,13 @@ out="$(cd "$d" && bash scripts/check-msrv-pins.sh 2>&1)"; rc=$?
 check "accepts the 0.7 major coexisting with the pinned 0.10.0" 0 "$rc" "$out"
 rm -rf "$d"
 
+# 4b. The pinned 0.10.0 must be exclusive within the 0.10.* line — if a newer
+#     0.10.x is also present, the MSRV-raising version has drifted back in.
+d="$(mktemp -d)"; make_fixture "$d" "$(lock_entry ruint 1.17.2)$(lock_entry ethereum_ssz_derive 0.10.0)$(lock_entry ethereum_ssz_derive 0.10.4)"
+out="$(cd "$d" && bash scripts/check-msrv-pins.sh 2>&1)"; rc=$?
+check "rejects ethereum_ssz_derive 0.10.4 present alongside 0.10.0" 1 "$rc" "$out"
+rm -rf "$d"
+
 # 5. A pinned package missing entirely → fail, never silently skip.
 d="$(mktemp -d)"; make_fixture "$d" "$(lock_entry ruint 1.17.2)"
 out="$(cd "$d" && bash scripts/check-msrv-pins.sh 2>&1)"; rc=$?
