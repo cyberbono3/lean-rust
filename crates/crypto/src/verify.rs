@@ -97,26 +97,48 @@ mod tests {
         assert!(verify::<TestScheme>(&wire_pk, EPOCH, &MESSAGE, &tampered).is_err());
     }
 
-    /// The padding region is not authenticated — mutating it does not invalidate
-    /// the signature.
+    /// Tampering with the padding is rejected, not ignored.
     ///
-    /// This is a property of the spec's wire format, not a defect introduced
-    /// here: the container is fixed-width and verification slices to the payload
-    /// length, discarding the rest without inspection. Pinned deliberately so
-    /// the behaviour is a recorded decision rather than a surprise, and so a
-    /// future change that starts authenticating the padding breaks this test
-    /// loudly.
+    /// An earlier revision accepted this and pinned it as spec-mandated. That was
+    /// wrong. The spec requires verification to *slice* the payload out, which is
+    /// a ceiling on what must be accepted, not a floor: since no correct
+    /// implementation emits non-zero padding, rejecting it is strictly narrower
+    /// than the spec permits and costs nothing against honest peers.
+    ///
+    /// Accepting it made one logical signature into many valid containers, each
+    /// with a distinct gossip message-id — so the duplicate cache missed and every
+    /// variant was fully verified and re-forwarded. That is amplification on the
+    /// most expensive operation in the protocol.
     #[test]
-    fn test_tampered_padding_is_ignored() {
+    fn test_tampered_padding_rejected() {
         let (wire_pk, mut sk) = test_key_pair();
         let sig = sk.sign(EPOCH, &MESSAGE).unwrap();
 
         let mut bytes = sig.0;
         bytes[TestScheme::PAYLOAD_LEN] ^= 0xff;
-        bytes[Signature::LEN - 1] ^= 0xff;
         let padded_tamper = Signature::new(bytes);
 
-        assert!(verify::<TestScheme>(&wire_pk, EPOCH, &MESSAGE, &padded_tamper).is_ok());
+        let err = verify::<TestScheme>(&wire_pk, EPOCH, &MESSAGE, &padded_tamper).unwrap_err();
+        assert!(matches!(err, CryptoError::NonZeroPadding));
+    }
+
+    /// A re-split payload is rejected rather than crashing the node.
+    ///
+    /// End-to-end regression for the remote-panic path: this exact input reached
+    /// `index out of bounds: the len is 63 but the index is 63` inside leanSig
+    /// before the layout check existed.
+    #[test]
+    fn test_rewritten_layout_rejected_not_panic() {
+        let (wire_pk, mut sk) = test_key_pair();
+        let sig = sk.sign(EPOCH, &MESSAGE).unwrap();
+
+        let mut bytes = sig.0;
+        let attacked: u32 = TestScheme::OFFSET_HASHES + 32;
+        bytes[32..36].copy_from_slice(&attacked.to_le_bytes());
+
+        let err =
+            verify::<TestScheme>(&wire_pk, EPOCH, &MESSAGE, &Signature::new(bytes)).unwrap_err();
+        assert!(matches!(err, CryptoError::MalformedLayout { .. }));
     }
 
     #[test]

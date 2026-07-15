@@ -165,6 +165,11 @@ debug     = true
 # member named is `crypto`, so every other crate keeps opt-level 0 and stays
 # debuggable. debug-assertions are left on for `crypto` — the goal is faster
 # tests, not fewer checks.
+#
+# Placed under `test` rather than `dev` on purpose. `profile.test` inherits from
+# `profile.dev`, so putting these under `dev` also works (measured: 8s) — but it
+# would optimize dependencies for every `cargo build` too, taxing ordinary dev
+# iteration for a benefit only the test suite needs.
 [profile.test.package."*"]
 opt-level = 3
 

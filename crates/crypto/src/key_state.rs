@@ -32,6 +32,11 @@ use crate::error::CryptoError;
 /// Both have the same root cause: nothing binds the watermark to the key. Fixing
 /// that needs persisted key state carrying its own watermark, which is out of
 /// scope here.
+///
+/// Separately, the secret key is not zeroized on drop: it lingers in freed
+/// memory, and moves may leave copies behind. leanSig's own secret-key type does
+/// not zeroize either, so closing this properly is an upstream change rather than
+/// something this wrapper can do alone. Recorded rather than fixed.
 pub struct SigningKey<S: SignatureScheme> {
     secret: S::SecretKey,
     last_signed: Option<u32>,
@@ -39,8 +44,17 @@ pub struct SigningKey<S: SignatureScheme> {
 
 impl<S: SignatureScheme> SigningKey<S> {
     /// Wraps a freshly generated leanSig secret key.
+    ///
+    /// `pub(crate)`: [`crate::generate`] is the only supported way to obtain a
+    /// `SigningKey`, and that claim has to be enforced rather than merely
+    /// documented. A public constructor taking leanSig's own secret-key type
+    /// would let a caller round-trip a secret through serialization into a fresh
+    /// wrapper with an empty watermark — re-opening the one-time-key reuse this
+    /// type exists to prevent. With this crate-private, `generate` never yields
+    /// the secret, and `secret` has no accessor, so that escape is closed for
+    /// every out-of-crate caller.
     #[must_use]
-    pub const fn new(secret: S::SecretKey) -> Self {
+    pub(crate) const fn new(secret: S::SecretKey) -> Self {
         Self {
             secret,
             last_signed: None,
@@ -82,8 +96,8 @@ impl<S: SignatureScheme> SigningKey<S> {
     /// - [`CryptoError::EpochNotActive`] when `epoch` lies outside the activation
     ///   interval — advancing could never reach it, so looping would spin
     ///   forever.
-    /// - [`CryptoError::EpochNotPrepared`] when the window stops moving before
-    ///   reaching `epoch`.
+    /// - [`CryptoError::EpochNotPrepared`] when `epoch` lies behind the prepared
+    ///   window, or when the window stops moving before reaching it.
     pub fn prepare(&mut self, epoch: u32) -> Result<(), CryptoError> {
         let activation = self.activation_interval();
         let target = u64::from(epoch);
@@ -92,6 +106,23 @@ impl<S: SignatureScheme> SigningKey<S> {
                 epoch,
                 start: activation.start,
                 end: activation.end,
+            });
+        }
+
+        // The window only moves forward, so an epoch behind it is unreachable and
+        // must be refused *before* the loop. Without this check the loop would
+        // advance all the way to the end of the activation interval and only then
+        // report failure — for the production scheme that is on the order of 2^16
+        // bottom-tree rebuilds, so the call would appear to hang for hours, and it
+        // would leave the key advanced far past where the caller wanted it.
+        // Advancing is irreversible: the key would be effectively destroyed by
+        // what should have been a rejected request.
+        let prepared = self.prepared_interval();
+        if target < prepared.start {
+            return Err(CryptoError::EpochNotPrepared {
+                epoch,
+                start: prepared.start,
+                end: prepared.end,
             });
         }
 
@@ -213,12 +244,68 @@ mod tests {
         ));
     }
 
+    /// `advance` moves the window by exactly one step.
+    ///
+    /// leanSig defines the step as `sqrt(LIFETIME)`, which is 16 for the 2^8 test
+    /// scheme. Asserting the exact new start rather than `>=` — a `>=` assertion
+    /// holds even if `advance` does nothing at all, so it could not fail.
     #[test]
     fn test_advance_moves_prepared_window() {
         let (_pk, mut sk) = test_key_pair();
         let before = sk.prepared_interval();
         sk.advance();
-        assert!(sk.prepared_interval().start >= before.start);
+        assert_eq!(sk.prepared_interval().start, before.start + 16);
+    }
+
+    #[test]
+    fn test_prepare_reaches_a_forward_epoch() {
+        let (_pk, mut sk) = test_key_pair();
+        let target = 200_u32;
+        assert!(!sk.prepared_interval().contains(&u64::from(target)));
+
+        sk.prepare(target).unwrap();
+
+        assert!(sk.prepared_interval().contains(&u64::from(target)));
+        sk.sign_raw(target, &[1_u8; 32]).unwrap();
+    }
+
+    #[test]
+    fn test_prepare_is_a_noop_when_already_prepared() {
+        let (_pk, mut sk) = test_key_pair();
+        let before = sk.prepared_interval();
+        let target = u32::try_from(before.start).unwrap();
+
+        sk.prepare(target).unwrap();
+
+        assert_eq!(sk.prepared_interval(), before);
+    }
+
+    /// A backward epoch is refused immediately, without walking the window.
+    ///
+    /// The window only moves forward, so a backward target is unreachable. Before
+    /// this guard the loop advanced all the way to the end of the activation
+    /// interval and only then errored — for the production scheme that is ~2^16
+    /// bottom-tree rebuilds, appearing to hang for hours, and it left the key
+    /// irreversibly advanced past where the caller wanted it. The assertion that
+    /// the window did not move is the point of the test.
+    #[test]
+    fn test_prepare_rejects_backward_epoch_without_advancing() {
+        let (_pk, mut sk) = test_key_pair();
+        sk.prepare(200).unwrap();
+        let after_forward = sk.prepared_interval();
+        assert!(after_forward.start > 0);
+
+        let err = sk.prepare(0).unwrap_err();
+
+        assert!(matches!(
+            err,
+            CryptoError::EpochNotPrepared { epoch: 0, .. }
+        ));
+        assert_eq!(
+            sk.prepared_interval(),
+            after_forward,
+            "a rejected prepare must not advance the key",
+        );
     }
 
     #[test]

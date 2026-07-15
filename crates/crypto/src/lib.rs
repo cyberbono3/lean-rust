@@ -5,9 +5,19 @@
 //! runtime module is deliberate — Cargo then enforces what this crate may reach
 //! for, which a module split would leave to review discipline.
 //!
-//! Sync-core: no `tokio`, `tracing`, `libp2p`, or `axum`. Signing and
-//! verification are pure functions of their inputs; the runtime layer owns
-//! scheduling, logging, and I/O.
+//! Sync-core: signing and verification are pure functions of their inputs. This
+//! crate uses no async runtime and does no logging or I/O — it returns errors and
+//! the runtime layer decides what to log. Its direct dependencies are `leansig`,
+//! `types`, `rand`, and `thiserror`; no `tokio`, `libp2p`, or `axum` appears
+//! anywhere in its tree.
+//!
+//! One caveat, stated plainly because the layer rule is written in terms of
+//! `cargo tree`: `tracing` *does* appear transitively, via leanSig's Plonky3
+//! dependencies (`p3-dft` declares it unconditionally, with no feature to
+//! disable it). No code here imports or emits it, and no other sync-core crate
+//! pulls it today. Whether the rule should distinguish "must not use" from "must
+//! not transitively pull" is an open decision, not something this crate settled
+//! on its own.
 //!
 //! # Surface
 //!
@@ -45,12 +55,14 @@
 //!   through leanSig's own serialization surface.
 #![forbid(unsafe_code)]
 
-pub mod error;
-pub mod key_state;
-pub mod sign;
-pub mod verify;
-
+// Modules are crate-private; the public surface is the re-exports below. Keeping
+// the API in one place is the architecture rule, and it also means module layout
+// stays an implementation detail rather than a compatibility promise.
+pub(crate) mod error;
+pub(crate) mod key_state;
 pub(crate) mod scheme;
+pub(crate) mod sign;
+pub(crate) mod verify;
 
 pub use error::CryptoError;
 pub use key_state::SigningKey;
