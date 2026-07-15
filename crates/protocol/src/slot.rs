@@ -289,7 +289,7 @@ mod tests {
         }
 
         #[test]
-        fn isqrt_floor_property(n in 0_u64..=1_000_000) {
+        fn isqrt_floor_property(n in any::<u64>()) {
             let r = isqrt_u64(n);
             prop_assert!(r * r <= n);
             prop_assert!((r + 1).saturating_mul(r + 1) > n);

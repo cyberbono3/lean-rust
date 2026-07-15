@@ -1,4 +1,8 @@
 [toolchain]
+# Three-component on purpose. The Docker builder installs the rustup descriptor
+# `1.87.0-<triple>`; a two-component "1.87" is a *different* descriptor, which
+# rustup would treat as absent and re-download. Keep the patch component; the
+# consistency guard compares at major.minor, so trackers stay free to differ there.
 channel    = "1.87.0"
 components = ["clippy", "rust-src", "rustfmt"]
 profile    = "minimal"

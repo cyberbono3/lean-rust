@@ -19,6 +19,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: check every toolchain source declares the same MSRV
         run: scripts/check-msrv-consistency.sh
+      - name: check the guard itself catches drift
+        run: bash scripts/tests/test-check-msrv-consistency.sh
 
   fmt:
     name: rustfmt
