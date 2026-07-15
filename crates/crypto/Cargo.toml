@@ -5,11 +5,20 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Sync-core crypto adapter home for the leanSig PQ signature scheme (Tier 1). No async/net deps."
+description   = "Sync-core crypto adapter for the leanSig PQ signature scheme (Tier 1). No async/net deps."
 
 [lints]
 workspace = true
 
 [dependencies]
-types = { path = "../types" }
-leansig = { workspace = true }
+types     = { path = "../types" }
+leansig   = { workspace = true }
+thiserror = { workspace = true }
+# rand appears in the public signature of `generate`, so it is a real dependency
+# rather than dev-only. The major must match leanSig's: its `key_gen` takes a
+# rand 0.9 `Rng`, and handing it a different major would not compile.
+rand      = { workspace = true }
+
+# Deliberately absent: `ssz`. leanSig implements ethereum_ssz 0.10 while the
+# workspace `ssz` crate pins 0.7; naming an ssz trait here would resolve 0.7's
+# and collide. All encoding goes through leansig::serialization::Serializable.
