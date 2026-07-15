@@ -32,6 +32,16 @@ jobs:
       - name: check the guard itself rejects a floating ref
         run: bash scripts/tests/test-check-leansig-pin.sh
 
+  msrv-pins:
+    name: msrv pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check MSRV-constrained lock pins have not drifted
+        run: scripts/check-msrv-pins.sh
+      - name: check the guard itself catches drift
+        run: bash scripts/tests/test-check-msrv-pins.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
