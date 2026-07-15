@@ -1,0 +1,14 @@
+[package]
+name          = "crypto"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description   = "Sync-core crypto adapter home for the leanSig PQ signature scheme (Tier 1). No async/net deps."
+
+[lints]
+workspace = true
+
+[dependencies]
+types = { path = "../types" }
