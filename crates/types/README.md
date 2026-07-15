@@ -13,7 +13,11 @@ no project dependencies.
 - [`Boolean`] (alias to [`bool`]) + [`decode_boolean`] — SSZ-compatible
   boolean.
 - [`BasisPoint`] / [`MAX_BASIS_POINT`] — range-checked `0..=10_000` value.
-- [`ByteVector<N>`], [`Bytes32`], [`Bytes4000`] — fixed-width byte vectors.
+- [`ByteVector<N>`], [`Bytes32`] — fixed-width byte vectors.
+- [`Signature`] (3116 B), [`PublicKey`] (52 B) — devnet-1 XMSS wire byte
+  vectors. Widths are interop parameters, not permanent constants.
+- [`Bytes4000`] — **deprecated** signature placeholder; [`Signature`]
+  replaces it.
 - [`ByteList`] / [`ByteListLimit<LIMIT>`] — variable-length byte lists
   (runtime / compile-time limit).
 - [`Bitvector<N>`] / [`Bitlist<LIMIT>`] — SSZ bitfields.
@@ -31,6 +35,8 @@ no project dependencies.
 [`MAX_BASIS_POINT`]: ./src/basispt.rs
 [`ByteVector<N>`]: ./src/byte_arrays.rs
 [`Bytes32`]: ./src/byte_arrays.rs
+[`Signature`]: ./src/byte_arrays.rs
+[`PublicKey`]: ./src/byte_arrays.rs
 [`Bytes4000`]: ./src/byte_arrays.rs
 [`ByteList`]: ./src/bytes.rs
 [`ByteListLimit<LIMIT>`]: ./src/bytes.rs

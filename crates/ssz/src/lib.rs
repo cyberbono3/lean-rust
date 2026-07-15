@@ -231,4 +231,72 @@ mod tests {
             prop_assert_eq!(decoded, arr);
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Hash-tree-root of the devnet-1 wire byte-vectors
+    //
+    // `Signature` / `PublicKey` inherit `HashTreeRoot` from the blanket
+    // `impl<const N: usize> HashTreeRoot for types::ByteVector<N>` above — no
+    // per-type impl exists, so these guard the generic path at the two widths
+    // that go on the wire.
+    //
+    // The expected roots are derived independently of this crate: packing `N`
+    // zero bytes yields `ceil(N / 32)` zero chunks, which `merkleize`
+    // zero-extends to `power_of_two_ceil(chunks)` leaves, so the root is the
+    // depth-`log2(leaves)` zero-hash of the recursion
+    //   zh[0] = [0; 32];  zh[i] = sha256(zh[i-1] || zh[i-1]).
+    // They double as the first devnet-1 interop vectors for the two widths.
+    // ---------------------------------------------------------------------
+
+    /// Reference zero-hash recursion — deliberately independent of
+    /// `merkleize`/`pack`, so a bug in either is not mirrored into the
+    /// expectation.
+    fn zero_hash_at_depth(depth: u32) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut h = [0_u8; 32];
+        for _ in 0..depth {
+            let mut hasher = Sha256::new();
+            hasher.update(h);
+            hasher.update(h);
+            h = hasher.finalize().into();
+        }
+        h
+    }
+
+    #[test]
+    fn signature_zero_htr_matches_pinned_root() {
+        // 3116 bytes -> 98 chunks -> zero-extended to 128 leaves -> depth 7.
+        // 98 is NOT a power of two, so this exercises the zero-extension path.
+        let root = types::Signature::zero().hash_tree_root();
+
+        let expected: [u8; 32] =
+            hex_to_32("87eb0ddba57e35f6d286673802a4af5975e22506c7cf4c64bb6be5ee11527f2c");
+        assert_eq!(root, expected, "devnet-1 Signature zero-root moved");
+        assert_eq!(
+            root,
+            zero_hash_at_depth(7),
+            "zero-extension to 128 leaves broke"
+        );
+    }
+
+    #[test]
+    fn publickey_zero_htr_matches_pinned_root() {
+        // 52 bytes -> 2 chunks -> already a power of two -> depth 1.
+        // This root is the well-known consensus-spec depth-1 zero-hash.
+        let root = types::PublicKey::zero().hash_tree_root();
+
+        let expected: [u8; 32] =
+            hex_to_32("f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b");
+        assert_eq!(root, expected, "devnet-1 PublicKey zero-root moved");
+        assert_eq!(root, zero_hash_at_depth(1), "2-leaf merkleization broke");
+    }
+
+    /// Decodes a 64-char hex string into a 32-byte array (test-only helper).
+    fn hex_to_32(s: &str) -> [u8; 32] {
+        let bytes: Vec<u8> = (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect();
+        bytes.try_into().unwrap()
+    }
 }

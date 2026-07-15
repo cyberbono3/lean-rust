@@ -1,5 +1,10 @@
 //! Devnet composition entry point.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;

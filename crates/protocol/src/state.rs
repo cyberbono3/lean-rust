@@ -23,6 +23,11 @@
 //! cross-client compatibility of that shape (and the genesis-interop
 //! decoder for the compact form) lives in [`crate::ream`].
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
+
 use std::collections::BTreeMap;
 
 use ssz::merkleize::merkleize;

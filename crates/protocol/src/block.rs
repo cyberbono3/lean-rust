@@ -15,6 +15,11 @@
 //! - [`SignedBlock`] — variable-length `message: Block` plus the fixed
 //!   4000-byte signature. Variable-length SSZ container with one offset.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
+
 use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::{Bytes32, Bytes4000};

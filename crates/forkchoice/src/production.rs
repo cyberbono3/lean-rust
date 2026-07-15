@@ -16,6 +16,11 @@
 //! has no I/O, no async, and no dependencies outside the state-transition
 //! and protocol crates.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
+
 use std::cmp::Ordering;
 
 use protocol::{

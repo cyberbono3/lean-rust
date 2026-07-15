@@ -23,9 +23,23 @@ pub(crate) const U64_LEN: usize = 8;
 /// Wire size (bytes) of a [`types::Bytes32`] SSZ field.
 pub(crate) const BYTES32_LEN: usize = 32;
 
-/// Wire size (bytes) of a [`types::Bytes4000`] SSZ field — XMSS post-quantum
-/// signature placeholder used by `SignedVote` / `SignedBlock`.
+/// Wire size (bytes) of a [`types::Bytes4000`] SSZ field — signature
+/// placeholder used by `SignedVote` / `SignedBlock`.
+///
+/// Superseded by [`SIGNATURE_LEN`]; retires with its last decode consumer when
+/// the containers move to [`types::Signature`].
 pub(crate) const BYTES4000_LEN: usize = 4000;
+
+/// Wire size (bytes) of a [`types::Signature`] SSZ field — the devnet-1 XMSS
+/// signature width (`src/lean_spec/subspecs/containers/signature.py:12@050fa4a`).
+///
+/// Not yet consumed by a container decode path: the containers still carry
+/// [`BYTES4000_LEN`] until the wire refactor lands. The `dead_code` allow is
+/// deliberate and comes off with the first real consumer — a `#[cfg(test)]`
+/// consumer does not retire it, because `--all-targets` also compiles the lib
+/// target without `cfg(test)`, where the const remains dead.
+#[allow(dead_code)]
+pub(crate) const SIGNATURE_LEN: usize = 3116;
 
 /// Wire size (bytes) of a `Slot` SSZ field (alias for [`U64_LEN`]).
 pub(crate) const SLOT_LEN: usize = U64_LEN;
@@ -281,7 +295,7 @@ pub(crate) use impl_u64_ssz_newtype;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use super::u64_chunk;
+    use super::{read_byte_array, u64_chunk, SIGNATURE_LEN};
 
     #[test]
     fn u64_chunk_zero_is_zero_chunk() {
@@ -293,5 +307,60 @@ mod tests {
         let chunk = u64_chunk(0xdead_beef);
         assert_eq!(&chunk[..8], &0xdead_beef_u64.to_le_bytes());
         assert!(chunk[8..].iter().all(|&b| b == 0));
+    }
+
+    // -- devnet-1 wire byte-vectors ride the manual encode/decode path -------
+    //
+    // There is no `Encode`/`Decode` derive on `ByteVector`: containers write
+    // via `.as_slice()` and read via `read_byte_array::<N>`. These witness that
+    // `Signature` / `PublicKey` work on that same path at their wire widths.
+    // The `Signature::new(..)` wrapper is load-bearing — `read_byte_array`
+    // returns `[u8; N]`, not the newtype.
+
+    #[test]
+    fn signature_wire_round_trips_through_read_byte_array() {
+        let sig = types::Signature::new([0x5a; SIGNATURE_LEN]);
+
+        let encoded = sig.as_slice().to_vec();
+        assert_eq!(encoded.len(), SIGNATURE_LEN);
+
+        let mut cursor = 0_usize;
+        let decoded =
+            types::Signature::new(read_byte_array::<SIGNATURE_LEN>(&encoded, &mut cursor));
+
+        assert_eq!(decoded, sig);
+        assert_eq!(cursor, SIGNATURE_LEN);
+    }
+
+    #[test]
+    fn publickey_wire_round_trips_through_read_byte_array() {
+        const PUBLIC_KEY_LEN: usize = 52;
+        let pk = types::PublicKey::new([0xa5; PUBLIC_KEY_LEN]);
+
+        let encoded = pk.as_slice().to_vec();
+        assert_eq!(encoded.len(), PUBLIC_KEY_LEN);
+
+        let mut cursor = 0_usize;
+        let decoded =
+            types::PublicKey::new(read_byte_array::<PUBLIC_KEY_LEN>(&encoded, &mut cursor));
+
+        assert_eq!(decoded, pk);
+        assert_eq!(cursor, PUBLIC_KEY_LEN);
+    }
+
+    /// Decoding from a non-zero offset must honour the cursor rather than
+    /// re-reading from the start.
+    #[test]
+    fn signature_decode_respects_starting_cursor() {
+        let sig = types::Signature::new([0x27; SIGNATURE_LEN]);
+
+        let mut buf = vec![0xff_u8; 8];
+        buf.extend_from_slice(sig.as_slice());
+
+        let mut cursor = 8_usize;
+        let decoded = types::Signature::new(read_byte_array::<SIGNATURE_LEN>(&buf, &mut cursor));
+
+        assert_eq!(decoded, sig);
+        assert_eq!(cursor, 8 + SIGNATURE_LEN);
     }
 }

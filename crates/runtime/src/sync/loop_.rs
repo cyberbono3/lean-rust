@@ -12,6 +12,11 @@
 //! finds a known block) is the expected outcome and is resolved on a
 //! future peer-connect or via gossip.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

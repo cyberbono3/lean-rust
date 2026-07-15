@@ -52,6 +52,10 @@
 //! cache refreshed after every write (eventually consistent); this commits to
 //! one primitive instead.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
 // The engine `Mutex` is the sole write-serialization primitive. Deny
 // `await_holding_lock` so any future edit that holds a lock guard across an
 // `.await` (which would stall the tokio worker thread) fails the build. Note

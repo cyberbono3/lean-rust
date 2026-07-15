@@ -12,6 +12,11 @@
 //! All fields are SSZ-fixed-length, so both containers serialize to a fixed
 //! byte count: 128 bytes for [`Vote`], 4136 bytes for [`SignedVote`].
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
+
 use ssz::merkleize::{hash_pair, merkleize, ZERO_HASH};
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::Bytes4000;

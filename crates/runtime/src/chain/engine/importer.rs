@@ -15,6 +15,11 @@
 //!   `crates/protocol/src/state.rs:762`), and `track_block` is the only
 //!   subsequent mutator. So a `Rejected` arm also leaves the store byte-equal.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
+
 use std::time::Instant;
 
 use forkchoice::Store;

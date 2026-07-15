@@ -34,7 +34,14 @@ use ssz::HashTreeRoot;
 use tempfile::{tempdir, TempDir};
 use tokio::time::{sleep, timeout, Instant};
 use tokio_util::sync::CancellationToken;
-use types::{Bytes32, Bytes4000};
+use types::Bytes32;
+// Retained construction site for the deprecated `Bytes4000` placeholder; moves
+// to `Signature` with the container refactor. Scoped to the two items that
+// touch it rather than this crate root, which would also blanket the
+// `p2p_common` submodule declared below — a file with no deprecated usage that
+// three test binaries share.
+#[allow(deprecated)]
+use types::Bytes4000;
 
 /// Overall per-test wall-clock budget.
 const TEST_DEADLINE: Duration = Duration::from_secs(15);
@@ -51,6 +58,7 @@ const GOSSIP_DELIVERY_DEADLINE: Duration = Duration::from_secs(5);
 /// Builds a [`SignedBlock`] with a non-default `slot`/`proposer_index`
 /// pair so two seeds produce distinct tree roots. Returns the block and
 /// its hash-tree-root keyed by the [`RpcProvider`].
+#[allow(deprecated)]
 fn block_with_seed(slot: u64, proposer: u64) -> (SignedBlock, Bytes32) {
     let message = Block {
         slot: Slot::new(slot),

@@ -1,5 +1,9 @@
 //! Integration tests for `Service::import_block`.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
 #![allow(
     missing_docs,
     clippy::expect_used,

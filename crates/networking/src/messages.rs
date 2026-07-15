@@ -13,6 +13,11 @@
 //! element count before allocation — adversarial peers can't OOM the
 //! receiver via a length-claim.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
+
 use protocol::{Checkpoint, SignedBlock};
 use ssz::merkleize::hash_pair;
 use ssz::{

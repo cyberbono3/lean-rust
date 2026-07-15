@@ -4,6 +4,10 @@
 //! distinct seeds produce distinct values. Used by the concurrent smoke
 //! test to give each thread its own root without collisions.
 
+// Retained construction sites for the deprecated `Bytes4000` placeholder.
+// Scoped to this file so unrelated deprecations elsewhere in the crate are
+// still surfaced; removed when this file's last site moves to `Signature`.
+#![allow(deprecated)]
 #![allow(
     dead_code,
     missing_docs,

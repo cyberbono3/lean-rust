@@ -1,15 +1,17 @@
 //! Fixed-width byte vectors used by the Lean consensus protocol.
 //!
 //! [`ByteVector<N>`] is a const-generic newtype over `[u8; N]` providing the
-//! SSZ `Vector[byte, N]` shape. Two aliases used by the consensus protocol:
-//! [`Bytes32`] (e.g. block roots, state roots) and [`Bytes4000`] (BLS
-//! signature placeholder).
+//! SSZ `Vector[byte, N]` shape. Aliases used by the consensus protocol:
+//! [`Bytes32`] (e.g. block roots, state roots), [`Signature`] and
+//! [`PublicKey`] (the devnet-1 XMSS wire types), and the deprecated
+//! [`Bytes4000`] signature placeholder that [`Signature`] replaces.
 //!
 //! # `Copy` semantics
 //! `ByteVector<N>` does NOT derive [`Copy`]. Explicit `impl Copy` is provided
-//! for `N` in `0..=64` so small fixed-width types (`Bytes32`, addresses,
-//! hashes) move cheaply. Larger sizes — notably [`Bytes4000`] — are
-//! intentionally `Clone`-only to prevent silent 4 KB stack copies.
+//! for `N` in `0..=64` so small fixed-width types ([`Bytes32`], [`PublicKey`],
+//! addresses, hashes) move cheaply. Larger sizes — [`Signature`] and
+//! [`Bytes4000`] — are intentionally `Clone`-only to prevent silent multi-KB
+//! stack copies.
 
 use core::fmt::{self, Write};
 
@@ -31,10 +33,41 @@ pub struct ByteVector<const N: usize>(pub [u8; N]);
 /// 32-byte vector — block roots, state roots, validator pubkey hashes.
 pub type Bytes32 = ByteVector<32>;
 
-/// 4000-byte vector — BLS signature placeholder (Lean devnet0 wire format).
+/// 3116-byte vector — XMSS post-quantum signature on the devnet-1 wire.
+///
+/// Mirrors the spec's `Signature(Bytes3116)`
+/// (`src/lean_spec/subspecs/containers/signature.py:12@050fa4a`;
+/// `src/lean_spec/types/byte_arrays.py:241@050fa4a`, `LENGTH = 3116`).
+///
+/// The width is a devnet-1 interop parameter, not a permanent constant — later
+/// devnets may change it. Every participating client must agree on it.
+///
+/// Intentionally not [`Copy`] — 3116 exceeds the `0..=64` range covered by the
+/// `Copy` impls below, so every move/clone is an explicit ~3 KB byte copy. Pass
+/// by reference (`&Signature`) wherever ownership is not needed.
+pub type Signature = ByteVector<3116>;
+
+/// 52-byte vector — XMSS one-time-signature public key on the devnet-1 wire.
+///
+/// Mirrors the spec's `Validator.pubkey: Bytes52`
+/// (`src/lean_spec/subspecs/containers/validator.py:15@050fa4a`;
+/// `src/lean_spec/types/byte_arrays.py:229@050fa4a`, `LENGTH = 52`).
+///
+/// The width is a devnet-1 interop parameter, not a permanent constant — later
+/// devnets may change it. Every participating client must agree on it.
+///
+/// 52 falls inside the `0..=64` range covered by the `Copy` impls below, so
+/// this type is [`Copy`].
+pub type PublicKey = ByteVector<52>;
+
+/// 4000-byte vector — signature placeholder (Lean devnet0 wire format).
 ///
 /// Intentionally not [`Copy`] — every move/clone is an explicit 4 KB byte
 /// copy. Pass by reference (`&Bytes4000`) wherever ownership is not needed.
+#[deprecated(
+    note = "devnet-1 replaces the Bytes4000 placeholder with Signature (Bytes3116); \
+            remaining construction sites migrate with the container refactor"
+)]
 pub type Bytes4000 = ByteVector<4000>;
 
 impl<const N: usize> ByteVector<N> {
@@ -119,19 +152,64 @@ impl_copy_for_byte_vector!(
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
 );
 
+// The `deprecated` allow covers the Bytes4000 witnesses below, which
+// deliberately exercise the deprecated alias. Scoped to this test module —
+// retires with the alias itself, and is NOT part of the file-level allow set
+// carried by the construction sites. Kept as an outer attribute alongside the
+// others: mixing inner and outer attributes on one item trips
+// `clippy::mixed_attributes_style`.
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, deprecated)]
 mod tests {
     use super::*;
     use crate::error::TypesError;
     use proptest::prelude::*;
-    use static_assertions::{assert_impl_all, assert_not_impl_all};
+    use static_assertions::{assert_impl_all, assert_not_impl_all, assert_type_eq_all};
 
     // -- Compile-time witness: Bytes32 is Copy, Bytes4000 is NOT -----------
 
     assert_impl_all!(Bytes32: Copy, Clone, Default);
     assert_not_impl_all!(Bytes4000: Copy);
     assert_impl_all!(Bytes4000: Clone, Default);
+
+    // -- devnet-1 wire newtypes: shape, width, Copy split ------------------
+
+    // The aliases are structural, not nominal: `Signature` IS `ByteVector<3116>`
+    // and is interchangeable with any other `ByteVector<3116>`. Asserted rather
+    // than hidden.
+    //
+    // This says nothing about serde, and is not a no-serde witness: it would
+    // pass unchanged if serde derives were added. Domain purity rests on
+    // `types` declaring no serde dependency at all (see Cargo.toml) — a derive
+    // could not compile without one.
+    assert_type_eq_all!(Signature, ByteVector<3116>);
+    assert_type_eq_all!(PublicKey, ByteVector<52>);
+
+    // 52 <= 64, so `PublicKey` is covered by the Copy macro below; 3116 is not,
+    // keeping `Signature` Clone-only to prevent silent 3 KB stack copies.
+    assert_impl_all!(PublicKey: Copy, Clone, Default);
+    assert_not_impl_all!(Signature: Copy);
+    assert_impl_all!(Signature: Clone, Default);
+
+    #[test]
+    fn sizes_match_spec() {
+        assert_eq!(core::mem::size_of::<Signature>(), 3116);
+        assert_eq!(core::mem::size_of::<PublicKey>(), 52);
+    }
+
+    #[test]
+    fn signature_new_round_trips_to_as_slice() {
+        let sig = Signature::new([0x5a; 3116]);
+        assert_eq!(sig.as_slice(), &[0x5a; 3116][..]);
+        assert_eq!(sig.as_slice().len(), 3116);
+    }
+
+    #[test]
+    fn publickey_new_round_trips_to_as_slice() {
+        let pk = PublicKey::new([0xa5; 52]);
+        assert_eq!(pk.as_slice(), &[0xa5; 52][..]);
+        assert_eq!(pk.as_slice().len(), 52);
+    }
 
     // -- Construction + accessors -------------------------------------------
 

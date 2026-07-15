@@ -7,7 +7,9 @@
 //! - Little-endian SSZ decode helpers for native `u8`/`u16`/`u32`/`u64`.
 //! - SSZ-compatible [`Boolean`] (alias to [`bool`]) plus [`decode_boolean`].
 //! - Range-checked [`BasisPoint`] (`0..=10_000`).
-//! - Fixed-width byte vectors: [`ByteVector<N>`], [`Bytes32`], [`Bytes4000`].
+//! - Fixed-width byte vectors: [`ByteVector<N>`], [`Bytes32`], the devnet-1
+//!   XMSS wire types [`Signature`] and [`PublicKey`], and the deprecated
+//!   [`Bytes4000`] placeholder that [`Signature`] replaces.
 //! - Variable-length byte lists: [`ByteList`] (runtime limit) and
 //!   [`ByteListLimit<const LIMIT: usize>`] (compile-time limit).
 //! - SSZ bitfields: [`Bitvector<const N: usize>`] (fixed length) and
@@ -63,7 +65,12 @@ pub mod uint;
 pub use basispt::{BasisPoint, MAX_BASIS_POINT};
 pub use bitfields::{Bitlist, Bitvector};
 pub use boolean::{decode_boolean, Boolean};
-pub use byte_arrays::{ByteVector, Bytes32, Bytes4000};
+pub use byte_arrays::{ByteVector, Bytes32, PublicKey, Signature};
+// Split out of the group above: an attribute cannot be applied to one name
+// inside a brace list, and re-exporting a deprecated item warns. Retires with
+// the alias itself.
+#[allow(deprecated)]
+pub use byte_arrays::Bytes4000;
 pub use bytes::{ByteList, ByteListLimit};
 pub use error::TypesError;
 pub use uint::{decode_u16_le, decode_u32_le, decode_u64_le, decode_u8_le, U128, U256};
