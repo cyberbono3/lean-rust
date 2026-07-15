@@ -292,7 +292,21 @@ mod tests {
     }
 
     /// Decodes a 64-char hex string into a 32-byte array (test-only helper).
+    ///
+    /// Panics with a clear message on a malformed literal rather than an opaque
+    /// slice-index panic — these inputs are hand-written constants, so a typo is
+    /// the expected failure mode.
     fn hex_to_32(s: &str) -> [u8; 32] {
+        assert_eq!(
+            s.len(),
+            64,
+            "expected a 64-char hex literal, got {}",
+            s.len()
+        );
+        assert!(
+            s.bytes().all(|b| b.is_ascii_hexdigit()),
+            "expected hex digits only, got {s:?}"
+        );
         let bytes: Vec<u8> = (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())

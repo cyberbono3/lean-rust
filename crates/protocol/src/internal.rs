@@ -31,7 +31,9 @@ pub(crate) const BYTES32_LEN: usize = 32;
 pub(crate) const BYTES4000_LEN: usize = 4000;
 
 /// Wire size (bytes) of a [`types::Signature`] SSZ field — the devnet-1 XMSS
-/// signature width (`src/lean_spec/subspecs/containers/signature.py:12@050fa4a`).
+/// signature width, per the consensus spec's
+/// [`class Signature(Bytes3116)`](https://github.com/leanEthereum/leanSpec/blob/050fa4a18881d54d7dc07601fe59e34eb20b9630/src/lean_spec/subspecs/containers/signature.py#L12)
+/// at the pinned revision.
 ///
 /// Not yet consumed by a container decode path: the containers still carry
 /// [`BYTES4000_LEN`] until the wire refactor lands. The `dead_code` allow is

@@ -35,9 +35,11 @@ pub type Bytes32 = ByteVector<32>;
 
 /// 3116-byte vector — XMSS post-quantum signature on the devnet-1 wire.
 ///
-/// Mirrors the spec's `Signature(Bytes3116)`
-/// (`src/lean_spec/subspecs/containers/signature.py:12@050fa4a`;
-/// `src/lean_spec/types/byte_arrays.py:241@050fa4a`, `LENGTH = 3116`).
+/// Mirrors the consensus spec's `Signature(Bytes3116)`. Links are pinned to the
+/// spec revision this width was taken from; the paths have since moved upstream,
+/// so a branch link would not resolve:
+/// - [`class Signature(Bytes3116)`](https://github.com/leanEthereum/leanSpec/blob/050fa4a18881d54d7dc07601fe59e34eb20b9630/src/lean_spec/subspecs/containers/signature.py#L12)
+/// - [`Bytes3116.LENGTH = 3116`](https://github.com/leanEthereum/leanSpec/blob/050fa4a18881d54d7dc07601fe59e34eb20b9630/src/lean_spec/types/byte_arrays.py#L241)
 ///
 /// The width is a devnet-1 interop parameter, not a permanent constant — later
 /// devnets may change it. Every participating client must agree on it.
@@ -49,9 +51,11 @@ pub type Signature = ByteVector<3116>;
 
 /// 52-byte vector — XMSS one-time-signature public key on the devnet-1 wire.
 ///
-/// Mirrors the spec's `Validator.pubkey: Bytes52`
-/// (`src/lean_spec/subspecs/containers/validator.py:15@050fa4a`;
-/// `src/lean_spec/types/byte_arrays.py:229@050fa4a`, `LENGTH = 52`).
+/// Mirrors the consensus spec's `Validator.pubkey: Bytes52`. Links are pinned to
+/// the spec revision this width was taken from; the paths have since moved
+/// upstream, so a branch link would not resolve:
+/// - [`Validator.pubkey: Bytes52`](https://github.com/leanEthereum/leanSpec/blob/050fa4a18881d54d7dc07601fe59e34eb20b9630/src/lean_spec/subspecs/containers/validator.py#L15)
+/// - [`Bytes52.LENGTH = 52`](https://github.com/leanEthereum/leanSpec/blob/050fa4a18881d54d7dc07601fe59e34eb20b9630/src/lean_spec/types/byte_arrays.py#L229)
 ///
 /// The width is a devnet-1 interop parameter, not a permanent constant — later
 /// devnets may change it. Every participating client must agree on it.
