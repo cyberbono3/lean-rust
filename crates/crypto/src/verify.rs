@@ -17,10 +17,11 @@ use crate::scheme::{public_key_from_wire, signature_from_wire, SchemeWire};
 ///
 /// # Errors
 ///
-/// - [`CryptoError::PublicKeyDecode`] / [`CryptoError::SignatureDecode`] when the
-///   wire bytes are malformed.
-/// - [`CryptoError::InvalidSignature`] when the signature does not verify, or
-///   when `epoch` exceeds the scheme's lifetime.
+/// - [`CryptoError::PublicKeyDecode`] when the public key bytes are malformed.
+/// - [`CryptoError::SignatureDecode`], [`CryptoError::NonZeroPadding`],
+///   [`CryptoError::MalformedLayout`], or [`CryptoError::SchemeMisconfigured`]
+///   when the signature bytes are invalid.
+/// - [`CryptoError::InvalidSignature`] when the signature does not verify, or when `epoch` exceeds the scheme's lifetime.
 pub fn verify<S: SchemeWire>(
     public_key: &PublicKey,
     epoch: u32,
