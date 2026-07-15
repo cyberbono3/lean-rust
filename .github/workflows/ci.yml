@@ -22,6 +22,16 @@ jobs:
       - name: check the guard itself catches drift
         run: bash scripts/tests/test-check-msrv-consistency.sh
 
+  leansig-pin:
+    name: leansig pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check leanSig is pinned to an exact commit
+        run: scripts/check-leansig-pin.sh
+      - name: check the guard itself rejects a floating ref
+        run: bash scripts/tests/test-check-leansig-pin.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
