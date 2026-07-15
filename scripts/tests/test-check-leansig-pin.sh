@@ -14,7 +14,7 @@
 #   TC-4  bare version, no git                -> fail
 #   TC-5  git present but no rev              -> fail
 #   TC-6  rev alongside branch                -> fail   (false-pass: rev found, branch unread)
-#   TC-7  rev too short to identify a commit  -> fail
+#   TC-7  rev is a 7-char prefix              -> fail   (the pin must be the full hash)
 #   TC-8  leansig entry absent entirely       -> fail   (false-pass: unasserted)
 #   TC-9  commented-out entry is ignored      -> pass   (false-FAIL guard)
 #   TC-10 unreadable source                   -> fail   (must not default to pass)
@@ -25,6 +25,7 @@
 #   TC-15 version + rev but no git            -> fail   (false-pass: git check unasserted)
 #   TC-16 rev in a URL query string only      -> fail   (false-pass: unbounded key match)
 #   TC-17 key names appear inside the git URL -> pass   (false-FAIL: unbounded key match)
+#   TC-18 rev is 39 chars                     -> fail   (off-by-one at the length boundary)
 #
 # Every case above is mutation-checked: removing the assertion it names from the
 # guard turns it red. The one exception is deliberate — deleting `has_key rev`
@@ -130,9 +131,15 @@ run "TC-5  git present but no rev" fail \
 run "TC-6  rev alongside branch" fail \
     "$(cargo_with 'leansig = { git = "https://github.com/leanEthereum/leanSig", rev = "f10dcbefac2502d356d93f686e8b4ecd8dc8840a", branch = "main" }')"
 
-# 6 hex is not a commit identifier — it is a prefix that will collide.
-run "TC-7  rev too short" fail \
-    "$(cargo_with 'leansig = { git = "https://github.com/leanEthereum/leanSig", rev = "f10dcb" }')"
+# Any prefix is rejected, not just an implausibly short one. `f10dcbe` is the
+# abbreviated form of the very commit this repo pins, so it is the prefix most
+# likely to be typed by hand — and with no lockfile entry to disambiguate it,
+# the manifest line is the only record. It must be the full hash.
+run "TC-7  rev is a 7-char prefix of the real commit" fail \
+    "$(cargo_with 'leansig = { git = "https://github.com/leanEthereum/leanSig", rev = "f10dcbe" }')"
+
+run "TC-18 rev is 39 chars — one short of a full hash" fail \
+    "$(cargo_with 'leansig = { git = "https://github.com/leanEthereum/leanSig", rev = "f10dcbefac2502d356d93f686e8b4ecd8dc884" }')"
 
 # --- false-pass: the assertion silently stops applying ---
 

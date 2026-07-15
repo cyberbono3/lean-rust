@@ -34,10 +34,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CARGO_TOML="Cargo.toml"
 DEP="leansig"
 
-# A commit is identified by its full 40-char hash. Cargo accepts a prefix, but for
-# interop we require the full hash to avoid ambiguity/collisions as the upstream
-# repository grows.
-REV_MIN_HEX=40
+# A commit is identified by its full 40-char hash. Cargo would accept a prefix,
+# but a prefix can collide as the upstream repository grows, and until a member
+# crate consumes leanSig there is no Cargo.lock entry recording the resolved
+# commit — so this manifest line is the only record of the revision, and it is
+# required to be exact.
+REV_HEX_LEN=40
 
 fail() { printf 'check-leansig-pin: %s\n' "$1" >&2; exit 1; }
 
@@ -111,15 +113,10 @@ has_key rev || fail "$DEP has a git source but no 'rev' — without one cargo tr
 rev="$(printf '%s' "$entry" | sed -n 's/.*[[:space:],{]rev[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p')"
 [ -n "$rev" ] || fail "could not read the 'rev' value of $DEP from $CARGO_TOML"
 
-printf '%s' "$rev" | grep -Eq "^[0-9a-fA-F]{${REV_MIN_HEX},40}$" ||
-    fail "$DEP rev '$rev' is not a commit hash of $REV_MIN_HEX-40 hex characters"
+printf '%s' "$rev" | grep -Eq "^[0-9a-fA-F]{${REV_HEX_LEN}}$" ||
+    fail "$DEP rev '$rev' is not a full ${REV_HEX_LEN}-character commit hash — a prefix can collide, and this line is the only record of the revision"
 
 printf '  ok    %-34s %s\n' "git source" "pinned by rev"
 printf '  ok    %-34s %s\n' "rev" "$rev"
-
-if [ "${#rev}" -lt 40 ]; then
-    printf '\nNote: rev is a %d-char prefix. The full 40-char hash is unambiguous;\n' "${#rev}"
-    printf 'a prefix can collide as the upstream repository grows.\n'
-fi
 
 printf '\n%s is pinned to an exact commit.\n' "$DEP"
