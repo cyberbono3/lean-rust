@@ -109,8 +109,22 @@ run "TC-4  Dockerfile drifts" fail \
     "$CARGO_OK" "$TOOLCHAIN_OK" "$CI_OK" 'FROM rust:1.85-bookworm AS builder
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./'
 
-run "TC-5  patch-level tracker vs major.minor manifest" pass \
-    "$CARGO_OK" "$TOOLCHAIN_OK" "$CI_OK" "$DOCKER_OK"
+# Distinct patch levels on every tracker: all normalize to 1.87, so this must pass.
+# Identical fixtures would only re-run TC-1; differing patches prove the guard
+# normalizes to major.minor instead of comparing full strings.
+run "TC-5  trackers differ at patch level only" pass \
+    "$CARGO_OK" '[toolchain]
+channel    = "1.87.1"' 'jobs:
+  fmt:
+    steps:
+      - uses: dtolnay/rust-toolchain@1.87.2
+  clippy:
+    steps:
+      - uses: dtolnay/rust-toolchain@1.87.0
+  test:
+    steps:
+      - uses: dtolnay/rust-toolchain@1.87.3' 'FROM rust:1.87.4-bookworm AS builder
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./'
 
 # --- false-pass regressions (reviewer-reproduced) ---
 
@@ -141,6 +155,15 @@ run "TC-8  Dockerfile drops the rust-toolchain.toml COPY" fail \
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 RUN cargo build --release'
+
+run "TC-11 COPY present only in a later non-builder stage" fail \
+    "$CARGO_OK" "$TOOLCHAIN_OK" "$CI_OK" 'FROM rust:1.87-bookworm AS builder
+WORKDIR /workspace
+COPY Cargo.toml Cargo.lock ./
+RUN cargo build --release
+
+FROM debian:bookworm-slim AS runtime
+COPY --from=builder /workspace/rust-toolchain.toml /etc/rust-toolchain.toml'
 
 # --- false-FAIL guard ---
 

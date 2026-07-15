@@ -119,8 +119,19 @@ done <<< "$docker_versions"
 # The builder must COPY rust-toolchain.toml, or it silently uses the base image's
 # rustc and the pinned channel becomes decorative — the drift this guard exists
 # to prevent, reintroduced one deleted line at a time.
-if ! printf '%s\n' "$docker_body" | grep -q '^[[:space:]]*COPY[[:space:]].*rust-toolchain\.toml'; then
-    printf '  DRIFT %-34s %s\n' "$DOCKERFILE" "does not COPY rust-toolchain.toml"
+#
+# Scoped to the builder stage: a COPY in a later stage does not put the file
+# where cargo reads it, so an unscoped search would pass while the builder still
+# used the base image toolchain.
+builder_stage="$(printf '%s\n' "$docker_body" | awk '
+    /^[[:space:]]*FROM[[:space:]]/ {
+        if (in_builder) exit
+        if ($0 ~ /^[[:space:]]*FROM[[:space:]][[:space:]]*rust:/) { in_builder = 1; next }
+    }
+    in_builder { print }
+')"
+if ! printf '%s\n' "$builder_stage" | grep -q '^[[:space:]]*COPY[[:space:]].*rust-toolchain\.toml'; then
+    printf '  DRIFT %-34s %s\n' "$DOCKERFILE" "builder stage does not COPY rust-toolchain.toml"
     printf '        the builder would fall back to its base image rustc\n'
     status=1
 fi
