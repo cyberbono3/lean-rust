@@ -18,7 +18,7 @@ members = [
 [workspace.package]
 version       = "0.1.0"
 edition       = "2021"
-rust-version  = "1.80"
+rust-version  = "1.87"
 license       = "MIT OR Apache-2.0"
 repository    = "https://github.com/cyberbono3/lean-rust"
 
@@ -38,12 +38,12 @@ panic       = "deny"
 
 [workspace.dependencies]
 # foundation
-# ruint pinned to ~1.12 (>=1.12.0, <1.13.0): later 1.x releases bump MSRV
-# beyond the workspace's `rust-version = "1.80"`. Narrow pin keeps
-# `cargo build` succeeding under Rust 1.80 in CI.
+# ruint pinned to ~1.12 (>=1.12.0, <1.13.0): narrow pin for resolution stability.
+# It once held the workspace MSRV down; that reason retired with the floor bump.
+# The pin stays deliberately — widening it is a separate, testable change.
 ruint     = { version = "~1.12", features = ["std"] }
-# redb pinned to ~2.1 (>=2.1.0, <2.2.0): keeps the embedded-DB MSRV within the
-# workspace's `rust-version = "1.80"`. Narrow pin per the ruint precedent above.
+# redb pinned to ~2.1 (>=2.1.0, <2.2.0): the embedded DB owns on-disk state, so
+# the pin is held for format stability. Per the ruint precedent above.
 redb      = "~2.1"
 sha2      = "0.10"
 thiserror = "2"
