@@ -1,7 +1,9 @@
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.87-bookworm AS builder
 
 WORKDIR /workspace
-COPY Cargo.toml Cargo.lock ./
+# rust-toolchain.toml is copied so the builder resolves the pinned channel rather
+# than silently relying on the base image's rustc — the two drifted apart before.
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY bin ./bin
 

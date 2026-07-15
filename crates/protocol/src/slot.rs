@@ -95,12 +95,12 @@ const fn isqrt_u64(n: u64) -> u64 {
     if n < 2 {
         return n;
     }
-    // Bit length of `n` (here 2..=64). `(bits + 1) / 2` is in 2..=32, so the
+    // Bit length of `n` (here 2..=64). `bits.div_ceil(2)` is in 2..=32, so the
     // shift produces a tight upper bound on √n without overflow.
     let bits = u64::BITS - n.leading_zeros();
-    let mut x = 1_u64 << ((bits + 1) / 2);
+    let mut x = 1_u64 << bits.div_ceil(2);
     loop {
-        let next = (x + n / x) / 2;
+        let next = u64::midpoint(x, n / x);
         if next >= x {
             return x;
         }

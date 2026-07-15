@@ -345,14 +345,13 @@ mod tests {
         assert!(!under.is_empty());
 
         let at_cap =
-            BlocksByRootRequest::new(std::iter::repeat(Bytes32::zero()).take(MAX_REQUEST_BLOCKS))
+            BlocksByRootRequest::new(std::iter::repeat_n(Bytes32::zero(), MAX_REQUEST_BLOCKS))
                 .unwrap();
         assert_eq!(at_cap.len(), MAX_REQUEST_BLOCKS);
 
-        let err = BlocksByRootRequest::new(
-            std::iter::repeat(Bytes32::zero()).take(MAX_REQUEST_BLOCKS + 1),
-        )
-        .unwrap_err();
+        let err =
+            BlocksByRootRequest::new(std::iter::repeat_n(Bytes32::zero(), MAX_REQUEST_BLOCKS + 1))
+                .unwrap_err();
         assert!(matches!(
             err,
             NetworkingError::ListTooLarge { kind, len, max }
