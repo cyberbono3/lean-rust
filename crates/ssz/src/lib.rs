@@ -258,6 +258,11 @@ mod tests {
     // so the pad occupies 20 and 12 bytes respectively. That is the only
     // structurally interesting property of either width, and only the non-zero
     // vectors cover it.
+    //
+    // All four expectations below were cross-checked against the consensus
+    // spec's own `hash_tree_root` at the pinned revision (leanSpec@050fa4a,
+    // `lean_spec.subspecs.ssz.hash`), so they agree with the spec and not merely
+    // with this crate.
     // ---------------------------------------------------------------------
 
     /// Reference zero-hash recursion — deliberately independent of
@@ -311,9 +316,14 @@ mod tests {
 
     /// Width- and padding-discriminating interop vector for the 3116-byte width.
     ///
-    /// Expectation derived from an independent SSZ reference implementation, not
-    /// from this crate. Unlike the zero root, it changes if the width changes at
-    /// all (3116 vs 3117 vs 4000) or if the final chunk's 20 pad bytes move.
+    /// Cross-checked against the consensus spec's own `hash_tree_root` at the
+    /// pinned revision — `hash_tree_root(Bytes3116(b"\x5a" * 3116))` on
+    /// [leanSpec@050fa4a](https://github.com/leanEthereum/leanSpec/tree/050fa4a18881d54d7dc07601fe59e34eb20b9630)
+    /// returns this value. It is therefore a genuine interop vector, not merely
+    /// self-consistent with this crate.
+    ///
+    /// Unlike the zero root, it changes if the width changes at all (3116 vs
+    /// 3117 vs 4000) or if the final chunk's 20 pad bytes move.
     #[test]
     fn signature_htr_matches_pinned_vector() {
         let root = types::Signature::new([0x5a; types::Signature::LEN]).hash_tree_root();
@@ -328,9 +338,14 @@ mod tests {
 
     /// Width- and padding-discriminating interop vector for the 52-byte width.
     ///
-    /// Expectation derived from an independent SSZ reference implementation, not
-    /// from this crate. Unlike the zero root, it changes if the width changes at
-    /// all (52 vs 48 vs 60) or if the final chunk's 12 pad bytes move.
+    /// Cross-checked against the consensus spec's own `hash_tree_root` at the
+    /// pinned revision — `hash_tree_root(Bytes52(b"\xa5" * 52))` on
+    /// [leanSpec@050fa4a](https://github.com/leanEthereum/leanSpec/tree/050fa4a18881d54d7dc07601fe59e34eb20b9630)
+    /// returns this value. It is therefore a genuine interop vector, not merely
+    /// self-consistent with this crate.
+    ///
+    /// Unlike the zero root, it changes if the width changes at all (52 vs 48 vs
+    /// 60) or if the final chunk's 12 pad bytes move.
     #[test]
     fn publickey_htr_matches_pinned_vector() {
         let root = types::PublicKey::new([0xa5; types::PublicKey::LEN]).hash_tree_root();
