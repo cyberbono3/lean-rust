@@ -34,10 +34,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CARGO_TOML="Cargo.toml"
 DEP="leansig"
 
-# A commit is identified by its full 40-char hash. Cargo accepts a prefix, so the
-# floor is what still names one commit rather than a family of them; the pin we
-# ship is the full hash.
-REV_MIN_HEX=7
+# A commit is identified by its full 40-char hash. Cargo accepts a prefix, but for
+# interop we require the full hash to avoid ambiguity/collisions as the upstream
+# repository grows.
+REV_MIN_HEX=40
 
 fail() { printf 'check-leansig-pin: %s\n' "$1" >&2; exit 1; }
 
