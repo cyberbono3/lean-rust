@@ -16,11 +16,6 @@
 //! has no I/O, no async, and no dependencies outside the state-transition
 //! and protocol crates.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced; removed when this file's last site moves to `Signature`.
-#![allow(deprecated)]
-
 use std::cmp::Ordering;
 
 use protocol::{
@@ -285,8 +280,12 @@ fn advance_state_to_slot(mut state: State, target: Slot) -> Result<State, Forkch
     }
 }
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use protocol::Slot;

@@ -12,11 +12,6 @@
 //! finds a known block) is the expected outcome and is resolved on a
 //! future peer-connect or via gossip.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced; removed when this file's last site moves to `Signature`.
-#![allow(deprecated)]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -616,8 +611,12 @@ fn should_sync(local: &Status, peer: &Status) -> bool {
     peer.finalized.slot > local.finalized.slot || peer.head.slot > local.head.slot
 }
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use protocol::{Block, BlockBody, Checkpoint, Slot, ValidatorIndex};

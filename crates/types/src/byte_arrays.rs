@@ -75,6 +75,26 @@ pub type PublicKey = ByteVector<52>;
 pub type Bytes4000 = ByteVector<4000>;
 
 impl<const N: usize> ByteVector<N> {
+    /// Width in bytes — the single source of truth for `N`.
+    ///
+    /// Resolves through the aliases (`Signature::LEN` is `3116`), so consumers
+    /// read the width off the type instead of restating the literal.
+    ///
+    /// Equals the SSZ wire size, because [`Self::as_slice`] yields exactly `N`
+    /// bytes. That is a property of this type, not an encoder contract:
+    /// `ByteVector` has no `Encode` impl, and the containers still carry their
+    /// own wire-size constants. This is the width the container refactor is
+    /// expected to read once the wire moves to `Signature`, not a value any
+    /// encoder consults today.
+    ///
+    /// # Example
+    /// ```
+    /// use types::{ByteVector, Signature};
+    /// assert_eq!(ByteVector::<4>::LEN, 4);
+    /// assert_eq!(Signature::LEN, 3116);
+    /// ```
+    pub const LEN: usize = N;
+
     /// Constructs a [`ByteVector`] from an owned `[u8; N]`.
     ///
     /// # Example
@@ -197,22 +217,36 @@ mod tests {
 
     #[test]
     fn sizes_match_spec() {
-        assert_eq!(core::mem::size_of::<Signature>(), 3116);
-        assert_eq!(core::mem::size_of::<PublicKey>(), 52);
+        // The spec widths, pinned against the literals they were taken from.
+        assert_eq!(Signature::LEN, 3116);
+        assert_eq!(PublicKey::LEN, 52);
+
+        // `LEN` equals the number of bytes that reach the wire. This is the
+        // property that makes `LEN` usable as a wire size; `size_of` below is a
+        // separate, in-memory claim and says nothing about serialization.
+        assert_eq!(Signature::zero().as_slice().len(), Signature::LEN);
+        assert_eq!(PublicKey::zero().as_slice().len(), PublicKey::LEN);
+
+        // No padding, so the value costs exactly its payload to move — which is
+        // what the `Copy` split above is reasoning about (3 KB vs 52 bytes).
+        assert_eq!(core::mem::size_of::<Signature>(), Signature::LEN);
+        assert_eq!(core::mem::size_of::<PublicKey>(), PublicKey::LEN);
     }
 
+    // Widths come off `LEN` rather than a restated literal — `sizes_match_spec`
+    // is the one place that pins `LEN` to the spec numbers.
     #[test]
     fn signature_new_round_trips_to_as_slice() {
-        let sig = Signature::new([0x5a; 3116]);
-        assert_eq!(sig.as_slice(), &[0x5a; 3116][..]);
-        assert_eq!(sig.as_slice().len(), 3116);
+        let sig = Signature::new([0x5a; Signature::LEN]);
+        assert_eq!(sig.as_slice(), &[0x5a; Signature::LEN][..]);
+        assert_eq!(sig.as_slice().len(), Signature::LEN);
     }
 
     #[test]
     fn publickey_new_round_trips_to_as_slice() {
-        let pk = PublicKey::new([0xa5; 52]);
-        assert_eq!(pk.as_slice(), &[0xa5; 52][..]);
-        assert_eq!(pk.as_slice().len(), 52);
+        let pk = PublicKey::new([0xa5; PublicKey::LEN]);
+        assert_eq!(pk.as_slice(), &[0xa5; PublicKey::LEN][..]);
+        assert_eq!(pk.as_slice().len(), PublicKey::LEN);
     }
 
     // -- Construction + accessors -------------------------------------------

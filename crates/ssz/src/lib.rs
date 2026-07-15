@@ -240,17 +240,33 @@ mod tests {
     // per-type impl exists, so these guard the generic path at the two widths
     // that go on the wire.
     //
-    // The expected roots are derived independently of this crate: packing `N`
-    // zero bytes yields `ceil(N / 32)` zero chunks, which `merkleize`
-    // zero-extends to `power_of_two_ceil(chunks)` leaves, so the root is the
-    // depth-`log2(leaves)` zero-hash of the recursion
-    //   zh[0] = [0; 32];  zh[i] = sha256(zh[i-1] || zh[i-1]).
-    // They double as the first devnet-1 interop vectors for the two widths.
+    // Two kinds of vector below, because they pin different things:
+    //
+    // - The ZERO roots pin tree depth only. An all-zero root depends solely on
+    //   `power_of_two_ceil(ceil(N / 32))`, so it is CONSTANT across huge width
+    //   ranges: every N in 2049..=4096 roots to 87eb0d…, and that range includes
+    //   4000 — the deprecated `Bytes4000` width this type replaces. A zero root
+    //   therefore CANNOT witness the width, and is useless as an interop vector.
+    //   Zero input also hides final-chunk padding: with all-zero bytes, right-pad,
+    //   left-pad, and no-pad are indistinguishable.
+    //
+    // - The NON-ZERO roots are the real width pins and the devnet-1 interop
+    //   vectors. A distinct fill byte makes the root depend on the exact width
+    //   (3116 and 3117 differ) and on the final chunk's padding.
+    //
+    // Both widths have a partial final chunk — 3116 = 97*32 + 12, 52 = 32 + 20 —
+    // so the pad occupies 20 and 12 bytes respectively. That is the only
+    // structurally interesting property of either width, and only the non-zero
+    // vectors cover it.
     // ---------------------------------------------------------------------
 
     /// Reference zero-hash recursion — deliberately independent of
     /// `merkleize`/`pack`, so a bug in either is not mirrored into the
     /// expectation.
+    ///
+    /// `merkleize::zero_tree_root` computes the same value and is deliberately
+    /// NOT used: it lives in the crate under test, and re-deriving here from
+    /// `sha2` alone keeps the expectation independent of the code it checks.
     fn zero_hash_at_depth(depth: u32) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let mut h = [0_u8; 32];
@@ -264,14 +280,15 @@ mod tests {
     }
 
     #[test]
-    fn signature_zero_htr_matches_pinned_root() {
+    fn signature_zero_htr_pins_tree_depth_only() {
         // 3116 bytes -> 98 chunks -> zero-extended to 128 leaves -> depth 7.
         // 98 is NOT a power of two, so this exercises the zero-extension path.
+        // This does NOT pin the width — see `signature_htr_matches_pinned_vector`.
         let root = types::Signature::zero().hash_tree_root();
 
         let expected: [u8; 32] =
             hex_to_32("87eb0ddba57e35f6d286673802a4af5975e22506c7cf4c64bb6be5ee11527f2c");
-        assert_eq!(root, expected, "devnet-1 Signature zero-root moved");
+        assert_eq!(root, expected, "Signature zero-root moved");
         assert_eq!(
             root,
             zero_hash_at_depth(7),
@@ -280,37 +297,62 @@ mod tests {
     }
 
     #[test]
-    fn publickey_zero_htr_matches_pinned_root() {
+    fn publickey_zero_htr_pins_tree_depth_only() {
         // 52 bytes -> 2 chunks -> already a power of two -> depth 1.
         // This root is the well-known consensus-spec depth-1 zero-hash.
+        // This does NOT pin the width — see `publickey_htr_matches_pinned_vector`.
         let root = types::PublicKey::zero().hash_tree_root();
 
         let expected: [u8; 32] =
             hex_to_32("f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b");
-        assert_eq!(root, expected, "devnet-1 PublicKey zero-root moved");
+        assert_eq!(root, expected, "PublicKey zero-root moved");
         assert_eq!(root, zero_hash_at_depth(1), "2-leaf merkleization broke");
+    }
+
+    /// Width- and padding-discriminating interop vector for the 3116-byte width.
+    ///
+    /// Expectation derived from an independent SSZ reference implementation, not
+    /// from this crate. Unlike the zero root, it changes if the width changes at
+    /// all (3116 vs 3117 vs 4000) or if the final chunk's 20 pad bytes move.
+    #[test]
+    fn signature_htr_matches_pinned_vector() {
+        let root = types::Signature::new([0x5a; types::Signature::LEN]).hash_tree_root();
+
+        let expected: [u8; 32] =
+            hex_to_32("074c83eb750d70d0e1168a6b3950ac492cb11ba8653c0160ea4d1740d4f7e7e7");
+        assert_eq!(
+            root, expected,
+            "devnet-1 Signature interop vector moved — width or final-chunk padding changed"
+        );
+    }
+
+    /// Width- and padding-discriminating interop vector for the 52-byte width.
+    ///
+    /// Expectation derived from an independent SSZ reference implementation, not
+    /// from this crate. Unlike the zero root, it changes if the width changes at
+    /// all (52 vs 48 vs 60) or if the final chunk's 12 pad bytes move.
+    #[test]
+    fn publickey_htr_matches_pinned_vector() {
+        let root = types::PublicKey::new([0xa5; types::PublicKey::LEN]).hash_tree_root();
+
+        let expected: [u8; 32] =
+            hex_to_32("ce1646f97d08a4f48e8f811835ab0fc34a2a6f8917b5761308838162e0041927");
+        assert_eq!(
+            root, expected,
+            "devnet-1 PublicKey interop vector moved — width or final-chunk padding changed"
+        );
     }
 
     /// Decodes a 64-char hex string into a 32-byte array (test-only helper).
     ///
-    /// Panics with a clear message on a malformed literal rather than an opaque
-    /// slice-index panic — these inputs are hand-written constants, so a typo is
-    /// the expected failure mode.
+    /// `hex::decode` rejects odd lengths and non-hex digits, naming the offending
+    /// byte; the `try_into` pins the 32-byte width. These inputs are hand-written
+    /// constants, so a typo is the expected failure mode and both messages beat
+    /// an opaque slice-index panic.
     fn hex_to_32(s: &str) -> [u8; 32] {
-        assert_eq!(
-            s.len(),
-            64,
-            "expected a 64-char hex literal, got {}",
-            s.len()
-        );
-        assert!(
-            s.bytes().all(|b| b.is_ascii_hexdigit()),
-            "expected hex digits only, got {s:?}"
-        );
-        let bytes: Vec<u8> = (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-            .collect();
-        bytes.try_into().unwrap()
+        hex::decode(s)
+            .expect("test vector must be valid hex")
+            .try_into()
+            .expect("test vector must be 32 bytes")
     }
 }

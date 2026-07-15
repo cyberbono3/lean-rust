@@ -23,11 +23,6 @@
 //! cross-client compatibility of that shape (and the genesis-interop
 //! decoder for the compact form) lives in [`crate::ream`].
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced; removed when this file's last site moves to `Signature`.
-#![allow(deprecated)]
-
 use std::collections::BTreeMap;
 
 use ssz::merkleize::merkleize;
@@ -1127,8 +1122,12 @@ mod justifications_tests {
     }
 }
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod attestation_tests {
     use super::*;
 
@@ -1764,8 +1763,12 @@ mod slot_processing_tests {
     }
 }
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod state_transition_tests {
     use super::*;
     use proptest::prelude::*;

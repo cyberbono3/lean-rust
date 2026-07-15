@@ -13,11 +13,6 @@
 //! element count before allocation — adversarial peers can't OOM the
 //! receiver via a length-claim.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced; removed when this file's last site moves to `Signature`.
-#![allow(deprecated)]
-
 use protocol::{Checkpoint, SignedBlock};
 use ssz::merkleize::hash_pair;
 use ssz::{
@@ -265,8 +260,12 @@ impl Decode for BlocksByRootResponse {
 // Tests
 // =============================================================================
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use protocol::{Block, BlockBody, Slot, ValidatorIndex};

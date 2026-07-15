@@ -15,11 +15,6 @@
 //!   `crates/protocol/src/state.rs:762`), and `track_block` is the only
 //!   subsequent mutator. So a `Rejected` arm also leaves the store byte-equal.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced; removed when this file's last site moves to `Signature`.
-#![allow(deprecated)]
-
 use std::time::Instant;
 
 use forkchoice::Store;
@@ -186,8 +181,12 @@ fn transition_and_track(
     Ok(post_state_root)
 }
 
+// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
+// rather than `allow` so it retires itself when the fixture moves to
+// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[expect(deprecated)]
 mod tests {
     use super::*;
     use forkchoice::ForkchoiceError;
