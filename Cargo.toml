@@ -53,6 +53,15 @@ anyhow    = "1"
 ethereum_ssz        = "0.7"
 ethereum_ssz_derive = "0.7"
 
+# pq crypto
+# Pinned to an exact commit, not a branch or tag: the revision is an interop
+# parameter — every client on the network must build against the same one, or
+# signatures do not verify across clients and existing keys stop working.
+# Declared here only; no member crate consumes it yet, so cargo does not resolve
+# it and it contributes nothing to the build. `scripts/check-leansig-pin.sh`
+# fails if this ever floats. Scheme parameters are recorded in README.md.
+leansig = { git = "https://github.com/leanEthereum/leanSig", rev = "f10dcbefac2502d356d93f686e8b4ecd8dc8840a" }
+
 # async + concurrency
 tokio       = { version = "1", features = ["full"] }
 tokio-util  = { version = "0.7", features = ["rt"] }

@@ -81,6 +81,33 @@ containers, and Docker volumes should be removed. See
 [`docs/local-pq-devnet0.md`](docs/local-pq-devnet0.md) for the full operator
 guide and troubleshooting notes.
 
+## Interop parameters (pq-devnet-1)
+
+These are contract values, not version preferences. Every client on the network
+must agree on them: a different signature-scheme revision, or a different
+container size, means signed blocks and attestations do not verify across
+clients. Changing any row is an interop break, not a routine bump.
+
+| Parameter | Value | Source |
+| --------- | ----- | ------ |
+| leanSpec revision | `050fa4a` | [leanEthereum/leanSpec](https://github.com/leanEthereum/leanSpec) |
+| leanSig revision | `f10dcbefac2502d356d93f686e8b4ecd8dc8840a` | [leanEthereum/leanSig](https://github.com/leanEthereum/leanSig) — pinned in `Cargo.toml` |
+| leanSig scheme alias | `SIGTopLevelTargetSumLifetime32Dim64Base8` | `signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized` |
+| Scheme parameters | `LIFETIME = 2^32`, `DIM = 64`, `BASE = 8`, `TARGET_SUM = 375` | leanSpec `xmss` `PROD_CONFIG` |
+| leanMetrics revision | `e077ac2` | [leanEthereum/leanMetrics](https://github.com/leanEthereum/leanMetrics) |
+| Validator registry limit | `2^12` = `4096` | `config::DEVNET_CONFIG.validator_registry_limit` |
+| `Signature` | 3116 bytes | leanSpec `Signature` container |
+| `PublicKey` | 52 bytes | leanSpec `Validator.pubkey` |
+
+The leanSig revision is pinned to an exact commit rather than a branch or tag,
+because a moving reference would rebuild against a different scheme and
+invalidate keys already generated against this one. `scripts/check-leansig-pin.sh`
+fails if the pin ever floats.
+
+The signature and public-key sizes above are the devnet-1 values confirmed
+against leanSpec. They are recorded, not frozen: confirmation against live
+cross-client traffic is still outstanding.
+
 ## Building and Testing
 
 ```sh
