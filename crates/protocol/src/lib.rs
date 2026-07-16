@@ -8,6 +8,8 @@
 //!   [`Slot::is_justifiable_after`] rule.
 //! - [`ValidatorIndex`] — `u64` newtype identifying a registry slot, plus
 //!   the round-robin [`is_proposer`] helper.
+//! - [`Validator`] / [`Validators`] — a registry entry (`pubkey`, `index`) and
+//!   the bounded validator-registry alias carried by [`State`].
 //! - [`Checkpoint`] — `(root, slot)` container with SSZ codec and Merkle
 //!   hash-tree-root.
 //! - [`AttestationData`] / [`Attestation`] / [`SignedAttestation`] — the
@@ -78,5 +80,5 @@ pub use state::{
     ProtocolConfig, State, HISTORICAL_ROOTS_LIMIT, JUSTIFICATIONS_VALIDATORS_LIMIT,
     STATE_FIXED_PART_LEN, VALIDATOR_REGISTRY_LIMIT,
 };
-pub use validator::{is_proposer, ValidatorIndex};
+pub use validator::{is_proposer, Validator, ValidatorIndex, Validators};
 pub use vote::{Attestation, AttestationData, SignedAttestation};

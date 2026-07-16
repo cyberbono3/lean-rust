@@ -12,11 +12,12 @@ use std::fs;
 use std::path::Path;
 
 use protocol::{
-    Attestation, AttestationData, Block, BlockBody, BlockSignatures, BlockWithAttestation,
-    Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot, ValidatorIndex,
+    stf::genesis_state_with_validators, Attestation, AttestationData, Block, BlockBody,
+    BlockSignatures, BlockWithAttestation, Checkpoint, SignedAttestation,
+    SignedBlockWithAttestation, Slot, Validator, ValidatorIndex,
 };
 use ssz::{encode, HashTreeRoot};
-use types::{Bytes32, Signature};
+use types::{Bytes32, PublicKey, Signature};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let attestation = Attestation {
@@ -56,15 +57,29 @@ fn main() -> Result<(), Box<dyn Error>> {
         signature: BlockSignatures::default(),
     };
 
+    // Genesis 4-validator devnet-1 `State` with a populated registry. Demoted
+    // here from `wire-parity/` when the validator-registry field changed the
+    // native `State` SSZ format — there is no devnet-1 cross-client `State`
+    // blob to copy yet, so this is a self-generated vector (see PROVENANCE.md).
+    let validators: Vec<Validator> = (0..4_u8)
+        .map(|i| Validator {
+            pubkey: PublicKey::new([i; PublicKey::LEN]),
+            index: ValidatorIndex::new(u64::from(i)),
+        })
+        .collect();
+    let genesis_state = genesis_state_with_validators(4, 1_700_000_000, validators);
+
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/synthetic");
     fs::create_dir_all(&dir)?;
 
     let signed_bytes = encode(&signed);
     let body_bytes = encode(&body);
     let signed_block_bytes = encode(&signed_block);
+    let genesis_state_bytes = encode(&genesis_state);
     fs::write(dir.join("validator3.signedattestation.ssz"), &signed_bytes)?;
     fs::write(dir.join("two-attestations.blockbody.ssz"), &body_bytes)?;
     fs::write(dir.join("slot1-empty.signedblock.ssz"), &signed_block_bytes)?;
+    fs::write(dir.join("genesis-4val.state.ssz"), &genesis_state_bytes)?;
 
     // `hex::encode` produces the same lower-hex the PROVENANCE table records; it
     // is already a dev-dependency and used by tests/parity.rs.
@@ -82,6 +97,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         "slot1-empty.signedblock.ssz       {} bytes  root {}",
         signed_block_bytes.len(),
         hex::encode(signed_block.hash_tree_root()),
+    );
+    println!(
+        "genesis-4val.state.ssz            {} bytes  root {}",
+        genesis_state_bytes.len(),
+        hex::encode(genesis_state.hash_tree_root()),
     );
     Ok(())
 }

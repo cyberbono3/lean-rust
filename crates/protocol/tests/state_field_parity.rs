@@ -64,6 +64,12 @@ const FIELDS: &[Field] = &[
         },
     },
     Field {
+        name: "validators",
+        shape: Shape::Variable {
+            _limit: VALIDATOR_REGISTRY_LIMIT,
+        },
+    },
+    Field {
         name: "justifications_roots",
         shape: Shape::Variable {
             _limit: HISTORICAL_ROOTS_LIMIT,
@@ -85,6 +91,7 @@ const ROOT_FIELDS: &[&str] = &[
     "latest_finalized",
     "historical_block_hashes",
     "justified_slots",
+    "validators",
     "justifications_roots",
     "justifications_validators",
 ];
@@ -92,8 +99,8 @@ const ROOT_FIELDS: &[&str] = &[
 const BYTES_PER_LENGTH_OFFSET: usize = 4;
 
 #[test]
-fn native_wire_field_set_has_nine_fields_in_declaration_order() {
-    assert_eq!(FIELDS.len(), 9, "State has 9 fields");
+fn native_wire_field_set_has_ten_fields_in_declaration_order() {
+    assert_eq!(FIELDS.len(), 10, "State has 10 fields");
     let names: Vec<&str> = FIELDS.iter().map(|f| f.name).collect();
     assert_eq!(
         names,
@@ -105,6 +112,7 @@ fn native_wire_field_set_has_nine_fields_in_declaration_order() {
             "latest_finalized",
             "historical_block_hashes",
             "justified_slots",
+            "validators",
             "justifications_roots",
             "justifications_validators",
         ]
@@ -112,8 +120,8 @@ fn native_wire_field_set_has_nine_fields_in_declaration_order() {
 }
 
 #[test]
-fn ream_root_field_set_has_nine_fields_in_declaration_order() {
-    assert_eq!(ROOT_FIELDS.len(), 9, "Ream State root has 9 fields");
+fn ream_root_field_set_has_ten_fields_in_declaration_order() {
+    assert_eq!(ROOT_FIELDS.len(), 10, "Ream State root has 10 fields");
     assert_eq!(
         ROOT_FIELDS,
         &[
@@ -124,6 +132,7 @@ fn ream_root_field_set_has_nine_fields_in_declaration_order() {
             "latest_finalized",
             "historical_block_hashes",
             "justified_slots",
+            "validators",
             "justifications_roots",
             "justifications_validators",
         ]
@@ -131,12 +140,12 @@ fn ream_root_field_set_has_nine_fields_in_declaration_order() {
 }
 
 #[test]
-fn variable_field_count_is_four() {
+fn variable_field_count_is_five() {
     let variable_count = FIELDS
         .iter()
         .filter(|f| matches!(f.shape, Shape::Variable { .. }))
         .count();
-    assert_eq!(variable_count, 4);
+    assert_eq!(variable_count, 5);
 }
 
 #[test]
@@ -149,7 +158,7 @@ fn fixed_portion_length_matches_state_fixed_part_len() {
         })
         .sum();
     assert_eq!(computed, STATE_FIXED_PART_LEN);
-    assert_eq!(STATE_FIXED_PART_LEN, 232);
+    assert_eq!(STATE_FIXED_PART_LEN, 236);
 }
 
 #[test]
@@ -167,7 +176,7 @@ fn fixed_field_widths_sum_to_two_sixteen() {
 
 #[test]
 fn merkleization_width_is_next_power_of_two() {
-    // 9 Ream root fields → next power of two is 16.
+    // 10 Ream root fields → next power of two is 16.
     let next_pow2 = ROOT_FIELDS.len().next_power_of_two();
     assert_eq!(next_pow2, 16);
 }

@@ -84,7 +84,7 @@ fn genesis_2node_fixture_decodes_to_protocol_state() {
     assert!(state.justified_slots.is_empty());
     assert_eq!(
         hex::encode(state.hash_tree_root()),
-        "8d30f4011dddd48e95d246ba5438c131864e1c8184b30844687a30728fc2461e"
+        "70ea466fb4da8f44f62612d7394bbe5f8c8e9afdd6488fbebd0ce44fa096be37"
     );
 }
 
