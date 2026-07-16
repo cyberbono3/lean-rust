@@ -1080,6 +1080,7 @@ mod tick_interval_tests {
 mod attestation_tests {
     use super::*;
     use protocol::{Checkpoint, Slot, ValidatorIndex};
+    use types::Signature;
 
     use crate::test_fixtures::{pinned_chain, signed_vote, signed_vote_at};
 
@@ -1416,6 +1417,39 @@ mod attestation_tests {
     // INTERVALS_PER_SLOT` is bounded by `u64::MAX / 4`, so `Slot::advance`
     // always succeeds. The variant is retained as defense-in-depth for
     // future `Slot` constructors that bypass the clock.
+
+    /// Fork choice weighs participation from plain `Attestation` data only —
+    /// never from `signature` bytes. Two independent stores over the identical
+    /// chain are fed the identical `Attestation` payloads but differing
+    /// signatures; every vote must be admitted and retained in both, and both
+    /// must resolve the same head. This is the crypto-free guarantee (no
+    /// signature verify on any fork-choice path).
+    #[test]
+    fn participation_ignores_signature_bytes() {
+        // Runs the same 4-voter chain under one fixed signature value; returns
+        // the resolved head and the retained-vote count.
+        let run = |sig: Signature| -> (Bytes32, usize) {
+            let (mut store, roots) = store_with_chain_at_slot_3();
+            for v in 0..4 {
+                let mut vote = self_referential_vote(v, &roots, 2, 2);
+                vote.signature = sig.clone();
+                // Gossip branch → latest_new_votes. The `true` return proves
+                // the vote was admitted, NOT rejected on signature content.
+                assert!(store.process_attestation(vote, false).unwrap());
+            }
+            store.accept_new_votes().unwrap();
+            (store.head(), store.latest_known_votes().len())
+        };
+
+        let (head_zero, kept_zero) = run(Signature::zero());
+        let (head_filled, kept_filled) = run(Signature::new([0x7u8; Signature::LEN]));
+
+        // Non-vacuous: every vote admitted and retained regardless of signature.
+        assert_eq!(kept_zero, 4);
+        assert_eq!(kept_filled, 4);
+        // Identical plain data → identical head, independent of signature bytes.
+        assert_eq!(head_zero, head_filled);
+    }
 }
 
 // ============================================================================
