@@ -26,7 +26,7 @@
 
 use lean_wire::NetworkingError;
 use libp2p::gossipsub;
-use protocol::{SignedBlock, SignedVote};
+use protocol::{SignedAttestation, SignedBlock};
 use ssz::Decode;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -74,9 +74,9 @@ impl<T> GossipReceiver<T> {
 /// [`lean_wire::BLOCK_TOPIC_V1`].
 pub type BlockReceiver = GossipReceiver<SignedBlock>;
 
-/// Inbound channel for [`SignedVote`] payloads received on
+/// Inbound channel for [`SignedAttestation`] payloads received on
 /// [`lean_wire::VOTE_TOPIC_V1`].
-pub type VoteReceiver = GossipReceiver<SignedVote>;
+pub type VoteReceiver = GossipReceiver<SignedAttestation>;
 
 /// Routes an inbound `gossipsub::Message` to the matching per-topic
 /// sender after SSZ + Snappy decode.
@@ -95,7 +95,7 @@ pub(crate) fn route_gossipsub_message(
     message_id: &gossipsub::MessageId,
     msg: &gossipsub::Message,
     block_tx: &mpsc::Sender<SignedBlock>,
-    vote_tx: &mpsc::Sender<SignedVote>,
+    vote_tx: &mpsc::Sender<SignedAttestation>,
 ) {
     // Drain the cache exactly once per message regardless of topic —
     // keeps the populate-by-`gossipsub_message_id` ↔ consume-here
@@ -108,7 +108,7 @@ pub(crate) fn route_gossipsub_message(
             forward::<SignedBlock>(&msg.data, cached.as_deref(), block_tx, "block");
         }
         lean_wire::VOTE_TOPIC_V1 => {
-            forward::<SignedVote>(&msg.data, cached.as_deref(), vote_tx, "vote");
+            forward::<SignedAttestation>(&msg.data, cached.as_deref(), vote_tx, "vote");
         }
         _ => debug!(topic = %topic_str, "unknown gossip topic"),
     }
@@ -165,7 +165,7 @@ mod tests {
     #[tokio::test]
     async fn routes_valid_block_to_block_receiver() {
         let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
-        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedVote>(8);
+        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
         let block = SignedBlock::default();
         let payload = lean_wire::encode_gossip(&block);
@@ -184,9 +184,9 @@ mod tests {
     #[tokio::test]
     async fn routes_valid_vote_to_vote_receiver() {
         let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
-        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedVote>(8);
+        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
-        let vote = SignedVote::default();
+        let vote = SignedAttestation::default();
         let payload = lean_wire::encode_gossip(&vote);
         route_gossipsub_message(
             &dummy_id(),
@@ -206,7 +206,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_topic_is_ignored() {
         let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
-        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedVote>(8);
+        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
         route_gossipsub_message(
             &dummy_id(),
@@ -222,7 +222,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_block_payload_drops_silently() {
         let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
-        let (vote_tx, _vote_rx) = mpsc::channel::<SignedVote>(8);
+        let (vote_tx, _vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
         // Valid snappy frame, but the decompressed bytes are too short
         // to be a SignedBlock — decode_gossip returns NetworkingError::Ssz.
@@ -250,7 +250,7 @@ mod tests {
         use crate::p2p::host::behaviour::gossipsub_message_id;
 
         let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
-        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedVote>(8);
+        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
         let block = SignedBlock::default();
         let payload = lean_wire::encode_gossip(&block);

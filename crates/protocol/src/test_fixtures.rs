@@ -11,27 +11,68 @@
 // lingering as a stale allow.
 #![expect(deprecated)]
 #![allow(dead_code)]
+// `assert_ssz_round_trip` reports a decode failure by panicking, which is the
+// only way a test helper can fail. Narrower than the blanket allow a `mod tests`
+// block takes: `unwrap_used` / `expect_used` stay denied here, so the
+// `.unwrap_or(0)` style below remains enforced.
+#![allow(clippy::panic)]
 
-use types::{Bytes32, Bytes4000};
+use ssz::{decode, encode, Decode, Encode};
+use types::{Bytes32, Bytes4000, Signature};
 
 use crate::block::{Block, BlockBody, BlockHeader, SignedBlock};
 use crate::checkpoint::Checkpoint;
 use crate::slot::Slot;
 use crate::validator::ValidatorIndex;
-use crate::vote::{SignedVote, Vote};
+use crate::vote::{Attestation, AttestationData, SignedAttestation};
 
-/// Deterministic [`SignedVote`] keyed off `seed`.
-pub(crate) fn sample_signed_vote(seed: u64) -> SignedVote {
+/// Asserts that `value` survives an SSZ encode/decode round-trip unchanged, and
+/// that its self-reported [`Encode::ssz_bytes_len`] agrees with the encoding.
+///
+/// The one round-trip assertion for this crate's wire containers — call it
+/// instead of open-coding `decode(&encode(v))` in each test.
+///
+/// # Panics
+/// Panics if `value` fails to decode, does not round-trip, or reports a length
+/// that disagrees with its encoded form.
+pub(crate) fn assert_ssz_round_trip<T>(value: &T)
+where
+    T: Encode + Decode + PartialEq + core::fmt::Debug,
+{
+    let bytes = encode(value);
+    assert_eq!(
+        bytes.len(),
+        value.ssz_bytes_len(),
+        "ssz_bytes_len disagrees with encoded length",
+    );
+    match decode::<T>(&bytes) {
+        Ok(back) => assert_eq!(&back, value, "ssz round-trip mismatch"),
+        Err(e) => panic!("ssz decode failed: {e:?}"),
+    }
+}
+
+/// Deterministic [`Signature`] filled with `seed`.
+///
+/// The one construction site for signature test values — call this rather than
+/// open-coding the byte array, so the container width lives in one place.
+pub(crate) fn sample_signature(seed: u8) -> Signature {
+    Signature::new([seed; Signature::LEN])
+}
+
+/// Deterministic [`SignedAttestation`] keyed off `seed`.
+pub(crate) fn sample_signed_attestation(seed: u64) -> SignedAttestation {
     let byte = u8::try_from(seed & 0xff).unwrap_or(0);
-    SignedVote {
-        validator_id: ValidatorIndex::new(seed),
-        message: Vote {
-            slot: Slot::new(seed),
-            head: Checkpoint::new(Bytes32::new([byte; 32]), Slot::new(seed)),
-            target: Checkpoint::default(),
-            source: Checkpoint::default(),
+    SignedAttestation {
+        message: Attestation {
+            validator_id: ValidatorIndex::new(seed),
+            data: AttestationData {
+                slot: Slot::new(seed),
+                head: Checkpoint::new(Bytes32::new([byte; 32]), Slot::new(seed)),
+                target: Checkpoint::default(),
+                source: Checkpoint::default(),
+            },
         },
-        signature: Bytes4000::new([byte; 4000]),
+        signature: sample_signature(byte),
     }
 }
 
@@ -54,12 +95,15 @@ pub(crate) fn sample_block() -> Block {
         parent_root: Bytes32::new([0x11; 32]),
         state_root: Bytes32::new([0x22; 32]),
         body: BlockBody {
-            attestations: vec![sample_signed_vote(1), sample_signed_vote(2)],
+            attestations: vec![sample_signed_attestation(1), sample_signed_attestation(2)],
         },
     }
 }
 
 /// Canonical [`SignedBlock`] wrapping [`sample_block`] with a 0xcd signature.
+///
+/// Still on the [`Bytes4000`] placeholder — the block envelope moves to
+/// [`Signature`] with the block container refactor, not here.
 pub(crate) fn sample_signed_block() -> SignedBlock {
     SignedBlock {
         message: sample_block(),

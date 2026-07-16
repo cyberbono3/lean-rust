@@ -65,19 +65,12 @@ use std::sync::Arc;
 use crate::chain::engine::{AttestationImportResult, BlockImportResult, Engine, PersistPlan};
 use async_trait::async_trait;
 use lean_wire::Status;
-use protocol::{Checkpoint, SignedBlock, SignedVote, Slot, ValidatorIndex};
+use protocol::{Attestation, Checkpoint, SignedAttestation, SignedBlock, Slot, ValidatorIndex};
 use ssz::HashTreeRoot;
 use storage::HeadInfo;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
-use types::Bytes32;
-// Retained construction site for the deprecated `Bytes4000` placeholder; moves
-// to `Signature` with the container refactor. Scoped to the import and the one
-// function that builds a signature, so unrelated deprecations in the rest of
-// this file are still surfaced. `expect` rather than `allow`: once the site
-// moves, the unfulfilled expectation fails the build.
-#[expect(deprecated)]
-use types::Bytes4000;
+use types::{Bytes32, Signature};
 
 use super::cache::ChainSnapshot;
 use super::error::ChainError;
@@ -181,13 +174,13 @@ impl Service {
     /// This method is currently infallible at the infrastructure layer —
     /// the [`Result`] is preserved for symmetry with [`Self::import_block`]
     /// and to leave room for future side effects.
-    #[instrument(level = "debug", skip_all, fields(validator = signed.validator_id.get()), err)]
+    #[instrument(level = "debug", skip_all, fields(validator = signed.message.validator_id.get()), err)]
     pub async fn import_attestation(
         &self,
-        signed: SignedVote,
+        signed: SignedAttestation,
     ) -> Result<AttestationImportResult, ChainError> {
-        let slot = signed.message.slot;
-        let validator = signed.validator_id;
+        let slot = signed.message.data.slot;
+        let validator = signed.message.validator_id;
         let outcome = self.engine.import_attestation(signed);
         if let AttestationImportResult::Accepted { head_root, .. } = &outcome {
             debug!(
@@ -258,7 +251,7 @@ impl Service {
     }
 
     /// Builds one locally authored attestation via
-    /// [`Engine::produce_attestation_vote`], wraps it as a [`SignedVote`]
+    /// [`Engine::produce_attestation_vote`], wraps it as a [`SignedAttestation`]
     /// with a zero-filled signature placeholder, and re-imports the vote
     /// locally so it lands in the engine's `latest_known_votes` pool.
     ///
@@ -270,18 +263,19 @@ impl Service {
     /// # Errors
     /// [`ChainError::Engine`] if [`Engine::produce_attestation_vote`]
     /// rejects the request.
-    #[expect(deprecated)]
     #[instrument(level = "debug", skip_all, fields(slot = slot.get(), validator = validator.get()), err)]
     pub async fn produce_attestation(
         &self,
         slot: Slot,
         validator: ValidatorIndex,
-    ) -> Result<SignedVote, ChainError> {
+    ) -> Result<SignedAttestation, ChainError> {
         let produced = self.engine.produce_attestation_vote(slot)?;
-        let signed = SignedVote {
-            validator_id: validator,
-            message: produced.vote,
-            signature: Bytes4000::new([0; 4000]),
+        let signed = SignedAttestation {
+            message: Attestation {
+                validator_id: validator,
+                data: produced.vote,
+            },
+            signature: Signature::zero(),
         };
         // Best-effort re-import: when `latest_justified` is still the
         // zero-sentinel (e.g. fresh anchor before the first justified

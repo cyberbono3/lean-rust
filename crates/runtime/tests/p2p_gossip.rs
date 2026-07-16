@@ -12,7 +12,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use protocol::{SignedBlock, SignedVote};
+use protocol::{SignedAttestation, SignedBlock};
 use runtime::core::Service;
 use runtime::p2p::PublishError;
 use tokio_util::sync::CancellationToken;
@@ -76,7 +76,7 @@ async fn publish_vote_without_mesh_peers_returns_insufficient_peers() {
     let host = service.host().expect("host handle available while running");
 
     let err = host
-        .publish_vote(&SignedVote::default())
+        .publish_vote(&SignedAttestation::default())
         .await
         .expect_err("publish must fail without mesh peers");
     // The specific variant is `InsufficientPeers` under single-node

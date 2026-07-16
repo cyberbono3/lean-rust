@@ -85,8 +85,8 @@ async fn produce_attestation_carries_validator_id_and_holds_head() {
         .produce_attestation(Slot::ONE, ValidatorIndex::new(0))
         .await
         .unwrap();
-    assert_eq!(signed.validator_id, ValidatorIndex::new(0));
-    assert_eq!(signed.message.slot, Slot::ONE);
+    assert_eq!(signed.message.validator_id, ValidatorIndex::new(0));
+    assert_eq!(signed.message.data.slot, Slot::ONE);
 
     // Read on demand after the own vote was imported.
     let post = service.snapshot();
@@ -108,8 +108,8 @@ async fn produce_attestation_reimports_early_vote_with_anchor_source() {
         .produce_attestation(Slot::ONE, ValidatorIndex::new(0))
         .await
         .unwrap();
-    assert_eq!(own.validator_id, ValidatorIndex::new(0));
-    assert_eq!(own.message.slot, Slot::ONE);
+    assert_eq!(own.message.validator_id, ValidatorIndex::new(0));
+    assert_eq!(own.message.data.slot, Slot::ONE);
 
     let (in_pending, in_known) = engine.with_store(|s| {
         (

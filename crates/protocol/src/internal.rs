@@ -24,11 +24,18 @@ pub(crate) const U64_LEN: usize = 8;
 pub(crate) const BYTES32_LEN: usize = 32;
 
 /// Wire size (bytes) of a [`types::Bytes4000`] SSZ field — signature
-/// placeholder used by `SignedVote` / `SignedBlock`.
+/// placeholder used by `SignedBlock`.
 ///
 /// Superseded by [`types::Signature`], whose width is [`types::Signature::LEN`];
 /// retires with its last decode consumer when the containers move over.
 pub(crate) const BYTES4000_LEN: usize = 4000;
+
+/// Wire size (bytes) of a [`types::Signature`] SSZ field.
+///
+/// This is the container *width*, not the signature payload length:
+/// [`types::Signature`] is a padded envelope that carries a shorter
+/// scheme-produced payload.
+pub(crate) const SIGNATURE_LEN: usize = 3116;
 
 /// Wire size (bytes) of a `Slot` SSZ field (alias for [`U64_LEN`]).
 pub(crate) const SLOT_LEN: usize = U64_LEN;

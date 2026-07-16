@@ -7,7 +7,7 @@
 //! [`gossipsub::PublishError`] as a typed [`PublishError`] for callers.
 
 use libp2p::gossipsub;
-use protocol::{SignedBlock, SignedVote};
+use protocol::{SignedAttestation, SignedBlock};
 use tokio::sync::oneshot;
 
 use crate::p2p::host::{Host, HostCommand};
@@ -52,7 +52,7 @@ impl Host {
     ///
     /// # Errors
     /// Same shape as [`Self::publish_block`].
-    pub async fn publish_vote(&self, vote: &SignedVote) -> Result<MessageId, PublishError> {
+    pub async fn publish_vote(&self, vote: &SignedAttestation) -> Result<MessageId, PublishError> {
         self.publish_raw(Topic::Vote, lean_wire::encode_gossip(vote))
             .await
     }

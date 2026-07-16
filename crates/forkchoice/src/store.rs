@@ -16,16 +16,16 @@
 //!
 //! # Vote-map cost note
 //!
-//! `latest_known_votes` and `latest_new_votes` hold [`SignedVote`] values
-//! by-value. Each [`SignedVote`] carries a 4000-byte signature placeholder,
-//! so the maps grow by ≈4 KB per validator. Vote-pool churn happens
+//! `latest_known_votes` and `latest_new_votes` hold [`SignedAttestation`] values
+//! by-value. Each [`SignedAttestation`] carries a 3116-byte signature container,
+//! so the maps grow by ≈3.2 KB per validator. Vote-pool churn happens
 //! through [`Store::process_attestation`] and the phase hooks.
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
 use config::INTERVALS_PER_SLOT;
-use protocol::{Block, Checkpoint, ProtocolConfig, SignedVote, Slot, State, ValidatorIndex};
+use protocol::{Block, Checkpoint, ProtocolConfig, SignedAttestation, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
 use types::Bytes32;
 
@@ -64,8 +64,8 @@ pub struct Store {
     // under the engine mutex (see lean-chain `capture_persist_plan`).
     states: HashMap<Bytes32, Arc<State>>,
     block_order: Vec<Bytes32>,
-    latest_known_votes: HashMap<ValidatorIndex, SignedVote>,
-    latest_new_votes: HashMap<ValidatorIndex, SignedVote>,
+    latest_known_votes: HashMap<ValidatorIndex, SignedAttestation>,
+    latest_new_votes: HashMap<ValidatorIndex, SignedAttestation>,
 }
 
 impl Store {
@@ -250,18 +250,18 @@ impl Store {
         self.blocks.contains_key(root)
     }
 
-    /// Returns the accepted full [`SignedVote`]s by validator. Populated
+    /// Returns the accepted full [`SignedAttestation`]s by validator. Populated
     /// by [`Self::process_attestation`] (on-chain branch) and promoted
     /// from [`Self::latest_new_votes`] by [`Self::accept_new_votes`].
     #[must_use]
-    pub fn latest_known_votes(&self) -> &HashMap<ValidatorIndex, SignedVote> {
+    pub fn latest_known_votes(&self) -> &HashMap<ValidatorIndex, SignedAttestation> {
         &self.latest_known_votes
     }
 
-    /// Returns pending full [`SignedVote`]s received via gossip but not
+    /// Returns pending full [`SignedAttestation`]s received via gossip but not
     /// yet promoted into [`Self::latest_known_votes`].
     #[must_use]
-    pub fn latest_new_votes(&self) -> &HashMap<ValidatorIndex, SignedVote> {
+    pub fn latest_new_votes(&self) -> &HashMap<ValidatorIndex, SignedAttestation> {
         &self.latest_new_votes
     }
 
@@ -330,7 +330,7 @@ impl Store {
     // Attestation processing
     // ==================================================================
 
-    /// Validates the structural and timing rules a [`SignedVote`] must
+    /// Validates the structural and timing rules a [`SignedAttestation`] must
     /// satisfy before [`Self::process_attestation`] will route it into
     /// either vote pool.
     ///
@@ -350,14 +350,14 @@ impl Store {
     ///   `current_vote_slot() + 1` would overflow `u64`.
     /// - [`ForkchoiceError::AttestationTooFarInFuture`] when
     ///   `vote.slot > current_vote_slot() + 1`.
-    pub fn validate_attestation(&self, sv: &SignedVote) -> Result<(), ForkchoiceError> {
-        let vote = &sv.message;
+    pub fn validate_attestation(&self, sv: &SignedAttestation) -> Result<(), ForkchoiceError> {
+        let vote = &sv.message.data;
 
         // Bound validator_id against config.num_validators BEFORE any
         // block lookups. The vote pool is keyed by validator id; without
         // this gate a malicious peer can flood with arbitrary u64 ids
-        // (~4 KiB per pool entry) and OOM the process.
-        let vid = sv.validator_id.get();
+        // (multi-KB per pool entry) and OOM the process.
+        let vid = sv.message.validator_id.get();
         if vid >= self.config.num_validators {
             return Err(ForkchoiceError::ValidatorIndexOutOfRange {
                 validator_id: vid,
@@ -397,7 +397,7 @@ impl Store {
         Ok(())
     }
 
-    /// Applies a [`SignedVote`] either as an on-chain vote
+    /// Applies a [`SignedAttestation`] either as an on-chain vote
     /// (`is_from_block == true`) or a gossip vote (`is_from_block ==
     /// false`).
     ///
@@ -408,8 +408,8 @@ impl Store {
     /// On-chain branch:
     /// 1. Insert into `latest_known_votes` only when strictly newer.
     /// 2. Evict from `latest_new_votes` only when the pending entry is
-    ///    strictly older. Eviction compares `vote.message.slot` (the
-    ///    attestation slot), not `vote.message.target.slot`.
+    ///    strictly older. Eviction compares `vote.message.data.slot` (the
+    ///    attestation slot), not `vote.message.data.target.slot`.
     ///
     /// Gossip branch: insert into `latest_new_votes` when strictly newer.
     /// Future-slot votes within the `current_vote_slot + 1` window are
@@ -420,14 +420,14 @@ impl Store {
     /// Forwards any error from [`Self::validate_attestation`].
     pub fn process_attestation(
         &mut self,
-        mut signed_vote: SignedVote,
+        mut signed_vote: SignedAttestation,
         is_from_block: bool,
     ) -> Result<bool, ForkchoiceError> {
         self.normalize_genesis_zero_source(&mut signed_vote);
         self.validate_attestation(&signed_vote)?;
 
-        let validator = signed_vote.validator_id;
-        let vote_slot = signed_vote.message.slot;
+        let validator = signed_vote.message.validator_id;
+        let vote_slot = signed_vote.message.data.slot;
 
         if is_from_block {
             let promoted = insert_if_newer(&mut self.latest_known_votes, validator, signed_vote);
@@ -457,8 +457,8 @@ impl Store {
     /// justified checkpoint at the anchor root, so normalize exactly that
     /// genesis shape before validation/storage. Non-genesis zero roots still
     /// fail normal source lookup.
-    fn normalize_genesis_zero_source(&self, signed_vote: &mut SignedVote) {
-        let vote = &mut signed_vote.message;
+    fn normalize_genesis_zero_source(&self, signed_vote: &mut SignedAttestation) {
+        let vote = &mut signed_vote.message.data;
         if vote.source == Checkpoint::default()
             && vote.target.slot.is_zero()
             && vote.target.root == self.latest_justified.root
@@ -649,8 +649,9 @@ impl Store {
     /// `update_safe_target` tests that need to seed votes without driving
     /// the full `process_attestation` validation path.
     #[cfg(test)]
-    pub(crate) fn insert_new_vote_for_test(&mut self, vote: SignedVote) {
-        self.latest_new_votes.insert(vote.validator_id, vote);
+    pub(crate) fn insert_new_vote_for_test(&mut self, vote: SignedAttestation) {
+        self.latest_new_votes
+            .insert(vote.message.validator_id, vote);
     }
 
     /// Test-only setter for the justified-checkpoint descent origin.
@@ -690,12 +691,12 @@ impl Store {
 /// strictly older (by `message.slot`). Returns `true` when the map was
 /// mutated.
 fn insert_if_newer(
-    map: &mut HashMap<ValidatorIndex, SignedVote>,
+    map: &mut HashMap<ValidatorIndex, SignedAttestation>,
     validator: ValidatorIndex,
-    vote: SignedVote,
+    vote: SignedAttestation,
 ) -> bool {
     match map.get(&validator) {
-        Some(existing) if existing.message.slot >= vote.message.slot => false,
+        Some(existing) if existing.message.data.slot >= vote.message.data.slot => false,
         _ => {
             map.insert(validator, vote);
             true
@@ -707,21 +708,29 @@ fn insert_if_newer(
 /// strictly older than `newer_than`. Returns `true` when the map was
 /// mutated.
 fn evict_if_older(
-    map: &mut HashMap<ValidatorIndex, SignedVote>,
+    map: &mut HashMap<ValidatorIndex, SignedAttestation>,
     validator: ValidatorIndex,
     newer_than: Slot,
 ) -> bool {
-    matches!(map.get(&validator), Some(prev) if prev.message.slot < newer_than)
-        && map.remove(&validator).is_some()
+    match map.entry(validator) {
+        Entry::Occupied(e) if e.get().message.data.slot < newer_than => {
+            e.remove();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Extracts the per-validator `head` checkpoint from a vote map. Shared by
 /// the head-refresh and safe-target hooks; both score by the LMD-GHOST
 /// *head* checkpoint, not the FFG target.
 fn vote_head_checkpoints(
-    votes: &HashMap<ValidatorIndex, SignedVote>,
+    votes: &HashMap<ValidatorIndex, SignedAttestation>,
 ) -> HashMap<ValidatorIndex, Checkpoint> {
-    votes.iter().map(|(v, sv)| (*v, sv.message.head)).collect()
+    votes
+        .iter()
+        .map(|(v, sv)| (*v, sv.message.data.head))
+        .collect()
 }
 
 fn normalize_genesis_checkpoint(
@@ -1090,7 +1099,7 @@ mod attestation_tests {
         roots: &[Bytes32],
         idx: usize,
         vote_slot: u64,
-    ) -> SignedVote {
+    ) -> SignedAttestation {
         let cp = Checkpoint::new(roots[idx], Slot::new(idx as u64));
         signed_vote(
             ValidatorIndex::new(validator),
@@ -1109,7 +1118,7 @@ mod attestation_tests {
         let vote = self_referential_vote(0, &roots, 2, 2);
         assert!(store.process_attestation(vote.clone(), true).unwrap());
         assert_eq!(
-            store.latest_known_votes().get(&vote.validator_id),
+            store.latest_known_votes().get(&vote.message.validator_id),
             Some(&vote)
         );
         assert!(store.latest_new_votes().is_empty());
@@ -1133,7 +1142,7 @@ mod attestation_tests {
         assert!(store.process_attestation(newer.clone(), true).unwrap());
         assert!(!store.process_attestation(older, true).unwrap());
         assert_eq!(
-            store.latest_known_votes().get(&newer.validator_id),
+            store.latest_known_votes().get(&newer.message.validator_id),
             Some(&newer)
         );
     }
@@ -1148,7 +1157,9 @@ mod attestation_tests {
         // the stale pending entry (a single `true` return covers both).
         assert!(store.process_attestation(on_chain.clone(), true).unwrap());
         assert_eq!(
-            store.latest_known_votes().get(&on_chain.validator_id),
+            store
+                .latest_known_votes()
+                .get(&on_chain.message.validator_id),
             Some(&on_chain)
         );
         assert!(store.latest_new_votes().is_empty());
@@ -1192,7 +1203,7 @@ mod attestation_tests {
         assert!(store.process_attestation(vote.clone(), false).unwrap());
         assert!(store.latest_known_votes().is_empty());
         assert_eq!(
-            store.latest_new_votes().get(&vote.validator_id),
+            store.latest_new_votes().get(&vote.message.validator_id),
             Some(&vote)
         );
     }
@@ -1231,7 +1242,7 @@ mod attestation_tests {
             .latest_new_votes()
             .get(&ValidatorIndex::new(0))
             .expect("normalized vote should enter pending pool");
-        assert_eq!(stored.message.source, anchor);
+        assert_eq!(stored.message.data.source, anchor);
     }
 
     #[test]
@@ -1425,7 +1436,7 @@ mod update_safe_target_tests {
         pinned_chain(n_blocks, num_validators, Time::ZERO)
     }
 
-    fn vote_for(validator: u64, roots: &[Bytes32], head_idx: usize) -> SignedVote {
+    fn vote_for(validator: u64, roots: &[Bytes32], head_idx: usize) -> SignedAttestation {
         signed_vote_at(
             ValidatorIndex::new(validator),
             roots[head_idx],

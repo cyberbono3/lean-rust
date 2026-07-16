@@ -20,26 +20,28 @@
 )]
 
 use protocol::{
-    Block, BlockBody, BlockHeader, Checkpoint, ProtocolConfig, SignedBlock, SignedVote, Slot,
-    State, ValidatorIndex, Vote,
+    Attestation, AttestationData, Block, BlockBody, BlockHeader, Checkpoint, ProtocolConfig,
+    SignedAttestation, SignedBlock, Slot, State, ValidatorIndex,
 };
 use storage::HeadInfo;
-use types::{Bytes32, Bytes4000};
+use types::{Bytes32, Bytes4000, Signature};
 
 pub const fn sample_root(seed: u8) -> Bytes32 {
     Bytes32::new([seed; 32])
 }
 
 pub fn sample_signed_block(seed: u8) -> SignedBlock {
-    let attestation = SignedVote {
-        validator_id: ValidatorIndex::new(u64::from(seed)),
-        message: Vote {
-            slot: Slot::new(u64::from(seed)),
-            head: Checkpoint::new(sample_root(seed), Slot::new(u64::from(seed))),
-            target: Checkpoint::default(),
-            source: Checkpoint::default(),
+    let attestation = SignedAttestation {
+        message: Attestation {
+            validator_id: ValidatorIndex::new(u64::from(seed)),
+            data: AttestationData {
+                slot: Slot::new(u64::from(seed)),
+                head: Checkpoint::new(sample_root(seed), Slot::new(u64::from(seed))),
+                target: Checkpoint::default(),
+                source: Checkpoint::default(),
+            },
         },
-        signature: Bytes4000::new([seed; 4000]),
+        signature: Signature::new([seed; Signature::LEN]),
     };
     SignedBlock {
         message: Block {
