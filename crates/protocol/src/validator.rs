@@ -4,6 +4,7 @@
 
 use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
+use types::PublicKey;
 
 use crate::error::ProtocolError;
 use crate::internal::{
@@ -81,7 +82,7 @@ pub fn is_proposer(
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Validator {
     /// XMSS one-time-signature public key (`Bytes52`).
-    pub pubkey: types::PublicKey,
+    pub pubkey: PublicKey,
     /// Index of this validator within the registry.
     pub index: ValidatorIndex,
 }
@@ -126,8 +127,7 @@ impl Decode for Validator {
         ensure_len(bytes, VALIDATOR_SSZ_LEN)?;
         // Length verified above; both reads are in-bounds.
         let mut cursor = 0_usize;
-        let pubkey =
-            types::PublicKey::new(read_byte_array::<{ PUBLIC_KEY_LEN }>(bytes, &mut cursor));
+        let pubkey = PublicKey::new(read_byte_array::<{ PUBLIC_KEY_LEN }>(bytes, &mut cursor));
         let index = ValidatorIndex::from_ssz_bytes(&bytes[cursor..cursor + VALIDATOR_INDEX_LEN])?;
         Ok(Self { pubkey, index })
     }
@@ -202,7 +202,7 @@ mod tests {
             *b = u8::try_from(i).unwrap();
         }
         let v = Validator {
-            pubkey: types::PublicKey::new(pubkey_bytes),
+            pubkey: PublicKey::new(pubkey_bytes),
             index: ValidatorIndex::new(0x1122_3344_5566_7788),
         };
         let bytes = encode(&v);
@@ -222,7 +222,7 @@ mod tests {
             ([0xff_u8; PUBLIC_KEY_LEN], ValidatorIndex::new(u64::MAX)),
         ] {
             let v = Validator {
-                pubkey: types::PublicKey::new(pk),
+                pubkey: PublicKey::new(pk),
                 index: idx,
             };
             let bytes = encode(&v);
@@ -242,13 +242,13 @@ mod tests {
     fn validator_default_index_is_zero() {
         let v = Validator::default();
         assert_eq!(v.index, ValidatorIndex::default());
-        assert_eq!(v.pubkey, types::PublicKey::new([0_u8; PUBLIC_KEY_LEN]));
+        assert_eq!(v.pubkey, PublicKey::new([0_u8; PUBLIC_KEY_LEN]));
     }
 
     #[test]
     fn validator_htr_two_leaf_shape_and_field_sensitivity() {
         let base = Validator {
-            pubkey: types::PublicKey::new([0x11; PUBLIC_KEY_LEN]),
+            pubkey: PublicKey::new([0x11; PUBLIC_KEY_LEN]),
             index: ValidatorIndex::new(7),
         };
         assert_eq!(
@@ -257,7 +257,7 @@ mod tests {
         );
 
         let mut pubkey_changed = base.clone();
-        pubkey_changed.pubkey = types::PublicKey::new([0x22; PUBLIC_KEY_LEN]);
+        pubkey_changed.pubkey = PublicKey::new([0x22; PUBLIC_KEY_LEN]);
         assert_ne!(pubkey_changed.hash_tree_root(), base.hash_tree_root());
 
         let mut index_changed = base.clone();
@@ -332,7 +332,7 @@ mod tests {
             let mut pk = [0_u8; PUBLIC_KEY_LEN];
             pk.copy_from_slice(&pubkey_bytes);
             let v = Validator {
-                pubkey: types::PublicKey::new(pk),
+                pubkey: PublicKey::new(pk),
                 index: ValidatorIndex::new(index),
             };
             let back: Validator = decode(&encode(&v)).unwrap();
