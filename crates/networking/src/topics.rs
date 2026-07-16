@@ -7,7 +7,7 @@
 //! constants — `lean-p2p-host::gossip::Topic` is a typed wrapper that
 //! delegates to these values.
 
-/// Gossipsub topic carrying [`protocol::SignedBlock`] payloads
+/// Gossipsub topic carrying [`protocol::SignedBlockWithAttestation`] payloads
 /// (SSZ + Snappy block compression — see [`crate::encode_gossip`]).
 pub const BLOCK_TOPIC_V1: &str = "/leanconsensus/devnet0/block/ssz_snappy";
 

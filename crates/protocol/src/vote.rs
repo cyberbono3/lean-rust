@@ -33,7 +33,7 @@ use crate::slot::Slot;
 use crate::validator::ValidatorIndex;
 
 const ATTESTATION_DATA_SSZ_LEN: usize = SLOT_LEN + 3 * CHECKPOINT_LEN; // 128
-const ATTESTATION_SSZ_LEN: usize = VALIDATOR_INDEX_LEN + ATTESTATION_DATA_SSZ_LEN; // 136
+pub(crate) const ATTESTATION_SSZ_LEN: usize = VALIDATOR_INDEX_LEN + ATTESTATION_DATA_SSZ_LEN; // 136
 const SIGNED_ATTESTATION_SSZ_LEN: usize = ATTESTATION_SSZ_LEN + SIGNATURE_LEN; // 3252
 
 /// Unsigned attestation body.

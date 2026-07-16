@@ -62,7 +62,7 @@ pub(crate) fn on_inbound(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use protocol::SignedBlock;
+    use protocol::SignedBlockWithAttestation;
     use std::sync::Arc;
     use storage::{MemoryStore, Store};
     use types::Bytes32;
@@ -78,7 +78,9 @@ mod tests {
     fn provider_with(known: &[u8]) -> RpcProvider {
         let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
         for &b in known {
-            store.save_block(root(b), SignedBlock::default()).unwrap();
+            store
+                .save_block(root(b), SignedBlockWithAttestation::default())
+                .unwrap();
         }
         let (state, block) = crate::chain::engine::test_fixtures::anchor_pair(4);
         let engine = crate::chain::engine::Engine::from_anchor(state, block).unwrap();

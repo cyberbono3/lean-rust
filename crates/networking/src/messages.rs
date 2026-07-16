@@ -4,7 +4,7 @@
 //!
 //! - [`Status`] — fixed 80-byte container of `(finalized, head)` checkpoints.
 //! - [`BlocksByRootRequest`] — bounded `List[Bytes32, MAX_REQUEST_BLOCKS]`.
-//! - [`BlocksByRootResponse`] — bounded `List[SignedBlock, MAX_REQUEST_BLOCKS]`
+//! - [`BlocksByRootResponse`] — bounded `List[SignedBlockWithAttestation, MAX_REQUEST_BLOCKS]`
 //!   over variable-length elements.
 //!
 //! Length invariants are enforced at construction time
@@ -13,7 +13,7 @@
 //! element count before allocation — adversarial peers can't OOM the
 //! receiver via a length-claim.
 
-use protocol::{Checkpoint, SignedBlock};
+use protocol::{Checkpoint, SignedBlockWithAttestation};
 use ssz::merkleize::hash_pair;
 use ssz::{
     decode_bytes32_list, decode_variable_element_list, encode_bytes32_list,
@@ -188,11 +188,11 @@ impl Decode for BlocksByRootRequest {
 /// request.
 ///
 /// Length is capped at [`MAX_REQUEST_BLOCKS`] by [`Self::new`] and by the
-/// SSZ decode helper. The element type (`SignedBlock`) is variable-length,
+/// SSZ decode helper. The element type (`SignedBlockWithAttestation`) is variable-length,
 /// so the encoded form carries a 4-byte offset per element.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BlocksByRootResponse {
-    blocks: Vec<SignedBlock>,
+    blocks: Vec<SignedBlockWithAttestation>,
 }
 
 impl BlocksByRootResponse {
@@ -203,7 +203,7 @@ impl BlocksByRootResponse {
     /// than [`MAX_REQUEST_BLOCKS`] blocks.
     pub fn new<I>(blocks: I) -> Result<Self, NetworkingError>
     where
-        I: IntoIterator<Item = SignedBlock>,
+        I: IntoIterator<Item = SignedBlockWithAttestation>,
     {
         let blocks = enforce_list_cap(blocks.into_iter().collect(), "blocks_by_root response")?;
         Ok(Self { blocks })
@@ -211,7 +211,7 @@ impl BlocksByRootResponse {
 
     /// Returns the underlying validated block slice.
     #[must_use]
-    pub fn blocks(&self) -> &[SignedBlock] {
+    pub fn blocks(&self) -> &[SignedBlockWithAttestation] {
         &self.blocks
     }
 
@@ -235,7 +235,11 @@ impl Encode for BlocksByRootResponse {
 
     fn ssz_bytes_len(&self) -> usize {
         let offsets = self.blocks.len() * BYTES_PER_LENGTH_OFFSET;
-        let payload: usize = self.blocks.iter().map(SignedBlock::ssz_bytes_len).sum();
+        let payload: usize = self
+            .blocks
+            .iter()
+            .map(SignedBlockWithAttestation::ssz_bytes_len)
+            .sum();
         offsets + payload
     }
 
@@ -251,7 +255,10 @@ impl Decode for BlocksByRootResponse {
 
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
         Ok(Self {
-            blocks: decode_variable_element_list::<SignedBlock>(bytes, MAX_REQUEST_BLOCKS)?,
+            blocks: decode_variable_element_list::<SignedBlockWithAttestation>(
+                bytes,
+                MAX_REQUEST_BLOCKS,
+            )?,
         })
     }
 }
@@ -260,18 +267,15 @@ impl Decode for BlocksByRootResponse {
 // Tests
 // =============================================================================
 
-// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
-// rather than `allow` so it retires itself when the fixture moves to
-// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[expect(deprecated)]
 mod tests {
     use super::*;
-    use protocol::{Block, BlockBody, Slot, ValidatorIndex};
+    use protocol::{
+        Attestation, Block, BlockBody, BlockSignatures, BlockWithAttestation, Slot, ValidatorIndex,
+    };
     use ssz::{decode, encode};
     use static_assertions::{assert_impl_all, const_assert_eq};
-    use types::Bytes4000;
 
     // -- compile-time witnesses ---------------------------------------------
 
@@ -295,16 +299,19 @@ mod tests {
         }
     }
 
-    fn sample_signed_block(seed: u8) -> SignedBlock {
-        SignedBlock {
-            message: Block {
-                slot: Slot::new(u64::from(seed)),
-                proposer_index: ValidatorIndex::new(u64::from(seed)),
-                parent_root: Bytes32::new([seed; 32]),
-                state_root: Bytes32::new([seed.wrapping_add(1); 32]),
-                body: BlockBody::default(),
+    fn sample_signed_block(seed: u8) -> SignedBlockWithAttestation {
+        SignedBlockWithAttestation {
+            message: BlockWithAttestation {
+                block: Block {
+                    slot: Slot::new(u64::from(seed)),
+                    proposer_index: ValidatorIndex::new(u64::from(seed)),
+                    parent_root: Bytes32::new([seed; 32]),
+                    state_root: Bytes32::new([seed.wrapping_add(1); 32]),
+                    body: BlockBody::default(),
+                },
+                proposer_attestation: Attestation::default(),
             },
-            signature: Bytes4000::new([seed; 4000]),
+            signature: BlockSignatures::default(),
         }
     }
 
@@ -407,7 +414,8 @@ mod tests {
 
     #[test]
     fn response_rejects_over_cap() {
-        let blocks = std::iter::repeat_with(SignedBlock::default).take(MAX_REQUEST_BLOCKS + 1);
+        let blocks = std::iter::repeat_with(SignedBlockWithAttestation::default)
+            .take(MAX_REQUEST_BLOCKS + 1);
         let err = BlocksByRootResponse::new(blocks).unwrap_err();
         assert!(matches!(
             err,

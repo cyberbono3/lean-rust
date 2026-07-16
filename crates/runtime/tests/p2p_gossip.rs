@@ -12,7 +12,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use protocol::{SignedAttestation, SignedBlock};
+use protocol::{SignedAttestation, SignedBlockWithAttestation};
 use runtime::core::Service;
 use runtime::p2p::PublishError;
 use tokio_util::sync::CancellationToken;
@@ -54,7 +54,7 @@ async fn publish_block_without_mesh_peers_returns_insufficient_peers() {
     let host = service.host().expect("host handle available while running");
 
     let err = host
-        .publish_block(&SignedBlock::default())
+        .publish_block(&SignedBlockWithAttestation::default())
         .await
         .expect_err("publish must fail without mesh peers");
     // The specific variant is `InsufficientPeers` under single-node
@@ -99,7 +99,7 @@ async fn publish_after_stop_returns_channel_closed() {
     service.stop(CancellationToken::new()).await.unwrap();
 
     let err = host
-        .publish_block(&SignedBlock::default())
+        .publish_block(&SignedBlockWithAttestation::default())
         .await
         .expect_err("publish after stop must fail");
     assert!(

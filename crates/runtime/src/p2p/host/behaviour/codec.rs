@@ -21,14 +21,14 @@ use lean_wire::{
     BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1,
 };
 use libp2p::{request_response, StreamProtocol};
-use protocol::SignedBlock;
+use protocol::SignedBlockWithAttestation;
 
 /// Defensive upper bound on a single inbound req/resp stream payload.
 ///
 /// A malicious peer that holds the substream open and keeps sending bytes
 /// can OOM the process via `read_to_end` if no cap exists. Sized
 /// generously enough for a full `BlocksByRoot` response (≤ `MAX_REQUEST_BLOCKS`
-/// = 1024 `SignedBlock`s plus per-frame snappy / uvarint overhead) but
+/// = 1024 `SignedBlockWithAttestation`s plus per-frame snappy / uvarint overhead) but
 /// tight enough to fault-stop an attacker.
 const MAX_RPC_STREAM_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -206,7 +206,7 @@ fn decode_single_frame<T: ssz::Decode>(buf: &[u8]) -> io::Result<T> {
 }
 
 fn decode_blocks_by_root_response(buf: &[u8]) -> io::Result<BlocksByRootResponse> {
-    let blocks = decode_frames::<SignedBlock>(buf)?;
+    let blocks = decode_frames::<SignedBlockWithAttestation>(buf)?;
     BlocksByRootResponse::new(blocks)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))
 }
@@ -251,7 +251,7 @@ mod tests {
     use futures::io::Cursor;
     use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
     use libp2p::request_response::Codec;
-    use protocol::SignedBlock;
+    use protocol::SignedBlockWithAttestation;
 
     fn status_proto() -> StreamProtocol {
         StreamProtocol::new(STATUS_PROTOCOL_V1.as_str())
@@ -309,7 +309,7 @@ mod tests {
     async fn blocks_by_root_response_round_trip() {
         let mut codec = SszSnappyCodec;
         let resp = RpcResponse::BlocksByRoot(
-            BlocksByRootResponse::new(vec![SignedBlock::default()]).unwrap(),
+            BlocksByRootResponse::new(vec![SignedBlockWithAttestation::default()]).unwrap(),
         );
 
         let mut wire = Vec::new();

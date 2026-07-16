@@ -65,7 +65,9 @@ use std::sync::Arc;
 use crate::chain::engine::{AttestationImportResult, BlockImportResult, Engine, PersistPlan};
 use async_trait::async_trait;
 use lean_wire::Status;
-use protocol::{Attestation, Checkpoint, SignedAttestation, SignedBlock, Slot, ValidatorIndex};
+use protocol::{
+    Attestation, Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot, ValidatorIndex,
+};
 use ssz::HashTreeRoot;
 use storage::HeadInfo;
 use tokio_util::sync::CancellationToken;
@@ -140,9 +142,12 @@ impl Service {
     /// - [`ChainError::PostStateMissing`] if the engine accepted the
     ///   block but the post-state has vanished by the time persistence
     ///   re-acquires the lock (engine invariant violation).
-    #[instrument(level = "debug", skip_all, fields(slot = signed.message.slot.get()), err)]
-    pub async fn import_block(&self, signed: SignedBlock) -> Result<BlockImportResult, ChainError> {
-        let slot = signed.message.slot;
+    #[instrument(level = "debug", skip_all, fields(slot = signed.message.block.slot.get()), err)]
+    pub async fn import_block(
+        &self,
+        signed: SignedBlockWithAttestation,
+    ) -> Result<BlockImportResult, ChainError> {
+        let slot = signed.message.block.slot;
         // Import and capture the persist inputs under one engine-lock
         // acquisition, so no concurrent writer can shift the head/finalized
         // checkpoint between accept and capture.
@@ -213,7 +218,7 @@ impl Service {
     }
 
     /// Builds one locally authored block via [`Engine::produce_block`],
-    /// wraps it as a [`SignedBlock`] with a zero-filled signature
+    /// wraps it as a [`SignedBlockWithAttestation`] with a zero-filled signature
     /// placeholder, and persists block + post-state + head to storage.
     ///
     /// The engine has already tracked the produced block (its `track_block`
@@ -232,13 +237,13 @@ impl Service {
         &self,
         slot: Slot,
         validator: ValidatorIndex,
-    ) -> Result<SignedBlock, ChainError> {
+    ) -> Result<SignedBlockWithAttestation, ChainError> {
         // Produce and capture the persist inputs under one engine-lock
         // acquisition: the block, its post-state, the head, and the finalized
         // checkpoint all come from one consistent store snapshot, instead of
         // the prior three separate acquisitions (produce, head(), persist).
         let (signed, plan) = self.engine.produce_block_capturing(slot, validator)?;
-        let block_root: Bytes32 = signed.message.hash_tree_root().into();
+        let block_root: Bytes32 = signed.message.block.hash_tree_root().into();
         let plan = plan.ok_or(ChainError::PostStateMissing { block_root })?;
         self.persist_plan(plan)?;
         debug!(

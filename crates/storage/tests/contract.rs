@@ -188,7 +188,7 @@ impl Store for FailingStateStore {
     fn save_block(
         &self,
         root: types::Bytes32,
-        block: protocol::SignedBlock,
+        block: protocol::SignedBlockWithAttestation,
     ) -> Result<(), storage::StorageError> {
         self.inner.save_block(root, block)
     }
@@ -218,7 +218,7 @@ impl Store for FailingStateStore {
     fn load_block(
         &self,
         root: &types::Bytes32,
-    ) -> Result<Option<protocol::SignedBlock>, storage::StorageError> {
+    ) -> Result<Option<protocol::SignedBlockWithAttestation>, storage::StorageError> {
         self.inner.load_block(root)
     }
 

@@ -4,12 +4,6 @@
 //! distinct seeds produce distinct values. Used by the concurrent smoke
 //! test to give each thread its own root without collisions.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced. `expect` rather than `allow`: once this file's last site
-// moves to `Signature`, the unfulfilled expectation fails the build instead of
-// lingering as a stale allow.
-#![expect(deprecated)]
 #![allow(
     dead_code,
     missing_docs,
@@ -20,40 +14,42 @@
 )]
 
 use protocol::{
-    Attestation, AttestationData, Block, BlockBody, BlockHeader, Checkpoint, ProtocolConfig,
-    SignedAttestation, SignedBlock, Slot, State, ValidatorIndex,
+    Attestation, AttestationData, Block, BlockBody, BlockHeader, BlockWithAttestation, Checkpoint,
+    ProtocolConfig, SignedBlockWithAttestation, Slot, State, ValidatorIndex,
 };
 use storage::HeadInfo;
-use types::{Bytes32, Bytes4000, Signature};
+use types::{Bytes32, Signature};
 
 pub const fn sample_root(seed: u8) -> Bytes32 {
     Bytes32::new([seed; 32])
 }
 
-pub fn sample_signed_block(seed: u8) -> SignedBlock {
-    let attestation = SignedAttestation {
-        message: Attestation {
-            validator_id: ValidatorIndex::new(u64::from(seed)),
-            data: AttestationData {
-                slot: Slot::new(u64::from(seed)),
-                head: Checkpoint::new(sample_root(seed), Slot::new(u64::from(seed))),
-                target: Checkpoint::default(),
-                source: Checkpoint::default(),
-            },
-        },
-        signature: Signature::new([seed; Signature::LEN]),
-    };
-    SignedBlock {
-        message: Block {
+pub fn sample_signed_block(seed: u8) -> SignedBlockWithAttestation {
+    let attestation = Attestation {
+        validator_id: ValidatorIndex::new(u64::from(seed)),
+        data: AttestationData {
             slot: Slot::new(u64::from(seed)),
-            proposer_index: ValidatorIndex::new(u64::from(seed)),
-            parent_root: sample_root(seed.wrapping_sub(1)),
-            state_root: sample_root(seed.wrapping_add(1)),
-            body: BlockBody {
-                attestations: vec![attestation],
-            },
+            head: Checkpoint::new(sample_root(seed), Slot::new(u64::from(seed))),
+            target: Checkpoint::default(),
+            source: Checkpoint::default(),
         },
-        signature: Bytes4000::new([seed; 4000]),
+    };
+    SignedBlockWithAttestation {
+        message: BlockWithAttestation {
+            block: Block {
+                slot: Slot::new(u64::from(seed)),
+                proposer_index: ValidatorIndex::new(u64::from(seed)),
+                parent_root: sample_root(seed.wrapping_sub(1)),
+                state_root: sample_root(seed.wrapping_add(1)),
+                body: BlockBody {
+                    attestations: vec![attestation],
+                },
+            },
+            proposer_attestation: attestation,
+        },
+        signature: [Signature::new([seed; Signature::LEN])]
+            .into_iter()
+            .collect(),
     }
 }
 

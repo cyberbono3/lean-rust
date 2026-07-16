@@ -29,7 +29,7 @@ use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 use types::{Bitlist, Bytes32};
 
-use crate::block::{Block, BlockHeader, SignedBlock};
+use crate::block::{Block, BlockHeader, SignedBlockWithAttestation};
 use crate::checkpoint::Checkpoint;
 use crate::error::{AttSlotKind, StateTransitionError};
 use crate::internal::{
@@ -39,7 +39,7 @@ use crate::internal::{
 };
 use crate::slot::Slot;
 use crate::validator::is_proposer;
-use crate::vote::SignedAttestation;
+use crate::vote::Attestation;
 
 /// Maximum number of historical block roots retained in the state.
 ///
@@ -649,7 +649,7 @@ impl State {
     ///   working bitmap rebuild.
     pub fn process_attestations(
         &mut self,
-        attestations: &[SignedAttestation],
+        attestations: &[Attestation],
     ) -> Result<(), StateTransitionError> {
         let num_validators = self.config.num_validators;
         let just_len = self.justified_slots.len();
@@ -667,9 +667,9 @@ impl State {
             }
         })?;
 
-        for signed in attestations {
-            let vote = &signed.message.data;
-            let validator_id = signed.message.validator_id;
+        for att in attestations {
+            let vote = &att.data;
+            let validator_id = att.validator_id;
             let source_slot = vote.source.slot;
             let target_slot = vote.target.slot;
 
@@ -752,7 +752,7 @@ impl State {
     /// Composes [`State::process_slots`] (to the block's slot),
     /// [`State::process_block_header`], and [`State::process_attestations`].
     /// When `validate_state_root` is `true`, also asserts that the post-state
-    /// `hash_tree_root` equals `signed_block.message.state_root`.
+    /// `hash_tree_root` equals `signed_block.message.block.state_root`.
     ///
     /// Transactional: the transition is computed in a local working copy
     /// and swapped into `self` only when every step succeeds, so an `Err`
@@ -764,13 +764,13 @@ impl State {
     ///   [`State::process_block_header`] / [`State::process_attestations`].
     /// - [`StateTransitionError::StateRootMismatch`] when
     ///   `validate_state_root` is `true` and `next.hash_tree_root() !=
-    ///   signed_block.message.state_root`.
+    ///   signed_block.message.block.state_root`.
     pub fn state_transition(
         &mut self,
-        signed_block: &SignedBlock,
+        signed_block: &SignedBlockWithAttestation,
         validate_state_root: bool,
     ) -> Result<(), StateTransitionError> {
-        let block = &signed_block.message;
+        let block = &signed_block.message.block;
         let mut next = self.clone();
         next.process_slots(block.slot)?;
         next.process_block_header(block)?;
@@ -1130,7 +1130,7 @@ mod attestation_tests {
     use crate::block::BlockHeader;
     use crate::checkpoint::Checkpoint;
     use crate::validator::ValidatorIndex;
-    use crate::vote::{Attestation, AttestationData, SignedAttestation};
+    use crate::vote::{Attestation, AttestationData};
 
     /// Builds a state with `num_validators` validators, populated history of
     /// `historical_roots`, and `justified_slots` matching the
@@ -1161,24 +1161,21 @@ mod attestation_tests {
         }
     }
 
-    fn signed_vote(
+    fn attestation(
         validator_id: u64,
         source_root: Bytes32,
         source_slot: u64,
         target_root: Bytes32,
         target_slot: u64,
-    ) -> SignedAttestation {
-        SignedAttestation {
-            message: Attestation {
-                validator_id: ValidatorIndex::new(validator_id),
-                data: AttestationData {
-                    slot: Slot::new(target_slot),
-                    head: Checkpoint::new(target_root, Slot::new(target_slot)),
-                    target: Checkpoint::new(target_root, Slot::new(target_slot)),
-                    source: Checkpoint::new(source_root, Slot::new(source_slot)),
-                },
+    ) -> Attestation {
+        Attestation {
+            validator_id: ValidatorIndex::new(validator_id),
+            data: AttestationData {
+                slot: Slot::new(target_slot),
+                head: Checkpoint::new(target_root, Slot::new(target_slot)),
+                target: Checkpoint::new(target_root, Slot::new(target_slot)),
+                source: Checkpoint::new(source_root, Slot::new(source_slot)),
             },
-            signature: types::Signature::zero(),
         }
     }
 
@@ -1191,7 +1188,7 @@ mod attestation_tests {
     #[test]
     fn out_of_range_source_slot_aborts() {
         let mut state = populated_state(4, vec![root(0xaa)], &[true], Slot::ZERO);
-        let votes = vec![signed_vote(0, root(0xaa), 5, root(0xbb), 6)];
+        let votes = vec![attestation(0, root(0xaa), 5, root(0xbb), 6)];
         let err = state.process_attestations(&votes).unwrap_err();
         assert!(matches!(
             err,
@@ -1206,7 +1203,7 @@ mod attestation_tests {
     fn out_of_range_target_slot_aborts() {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
-        let votes = vec![signed_vote(0, root(0xaa), 0, root(0xcc), 9)];
+        let votes = vec![attestation(0, root(0xaa), 0, root(0xcc), 9)];
         let err = state.process_attestations(&votes).unwrap_err();
         assert!(matches!(
             err,
@@ -1221,7 +1218,7 @@ mod attestation_tests {
     fn out_of_range_validator_aborts() {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
-        let votes = vec![signed_vote(99, root(0xaa), 0, root(0xbb), 1)];
+        let votes = vec![attestation(99, root(0xaa), 0, root(0xbb), 1)];
         let err = state.process_attestations(&votes).unwrap_err();
         assert_eq!(
             err,
@@ -1237,7 +1234,7 @@ mod attestation_tests {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
         let snapshot = state.clone();
-        let votes = vec![signed_vote(99, root(0xaa), 0, root(0xbb), 1)];
+        let votes = vec![attestation(99, root(0xaa), 0, root(0xbb), 1)];
         let _ = state.process_attestations(&votes).unwrap_err();
         assert_eq!(state, snapshot);
     }
@@ -1249,7 +1246,7 @@ mod attestation_tests {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[false, false], Slot::ZERO);
         let snapshot = state.clone();
-        let votes = vec![signed_vote(0, root(0xaa), 0, root(0xbb), 1)];
+        let votes = vec![attestation(0, root(0xaa), 0, root(0xbb), 1)];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state, snapshot);
     }
@@ -1258,7 +1255,7 @@ mod attestation_tests {
     fn skips_when_target_already_justified() {
         let mut state = populated_state(4, vec![root(0xaa), root(0xbb)], &[true, true], Slot::ZERO);
         let snapshot = state.clone();
-        let votes = vec![signed_vote(0, root(0xaa), 0, root(0xbb), 1)];
+        let votes = vec![attestation(0, root(0xaa), 0, root(0xbb), 1)];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state, snapshot);
     }
@@ -1268,7 +1265,7 @@ mod attestation_tests {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
         let snapshot = state.clone();
-        let votes = vec![signed_vote(0, root(0xff), 0, root(0xbb), 1)];
+        let votes = vec![attestation(0, root(0xff), 0, root(0xbb), 1)];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state, snapshot);
     }
@@ -1282,7 +1279,7 @@ mod attestation_tests {
             Slot::ZERO,
         );
         let snapshot = state.clone();
-        let votes = vec![signed_vote(0, root(0xaa), 0, root(0xaa), 0)];
+        let votes = vec![attestation(0, root(0xaa), 0, root(0xaa), 0)];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state, snapshot);
     }
@@ -1295,7 +1292,7 @@ mod attestation_tests {
         just_pattern[0] = true;
         let mut state = populated_state(4, history, &just_pattern, Slot::ZERO);
         let snapshot = state.clone();
-        let votes = vec![signed_vote(0, root(0), 0, root(7), 7)];
+        let votes = vec![attestation(0, root(0), 0, root(7), 7)];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state, snapshot);
     }
@@ -1306,7 +1303,7 @@ mod attestation_tests {
     fn single_subthreshold_vote_does_not_justify() {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
-        let votes = vec![signed_vote(0, root(0xaa), 0, root(0xbb), 1)];
+        let votes = vec![attestation(0, root(0xaa), 0, root(0xbb), 1)];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state.justified_slots.get(1), Some(false));
         assert_eq!(state.justifications_roots, vec![root(0xbb)]);
@@ -1320,9 +1317,9 @@ mod attestation_tests {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
         let votes = vec![
-            signed_vote(0, root(0xaa), 0, root(0xbb), 1),
-            signed_vote(1, root(0xaa), 0, root(0xbb), 1),
-            signed_vote(2, root(0xaa), 0, root(0xbb), 1),
+            attestation(0, root(0xaa), 0, root(0xbb), 1),
+            attestation(1, root(0xaa), 0, root(0xbb), 1),
+            attestation(2, root(0xaa), 0, root(0xbb), 1),
         ];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state.justified_slots.get(1), Some(true));
@@ -1337,9 +1334,9 @@ mod attestation_tests {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
         let votes = vec![
-            signed_vote(0, root(0xaa), 0, root(0xbb), 1),
-            signed_vote(1, root(0xaa), 0, root(0xbb), 1),
-            signed_vote(2, root(0xaa), 0, root(0xbb), 1),
+            attestation(0, root(0xaa), 0, root(0xbb), 1),
+            attestation(1, root(0xaa), 0, root(0xbb), 1),
+            attestation(2, root(0xaa), 0, root(0xbb), 1),
         ];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state.latest_finalized.root, root(0xaa));
@@ -1354,9 +1351,9 @@ mod attestation_tests {
         let mut state = populated_state(4, history, &just_pattern, Slot::ZERO);
         let original_finalized = state.latest_finalized;
         let votes = vec![
-            signed_vote(0, root(0), 0, root(9), 9),
-            signed_vote(1, root(0), 0, root(9), 9),
-            signed_vote(2, root(0), 0, root(9), 9),
+            attestation(0, root(0), 0, root(9), 9),
+            attestation(1, root(0), 0, root(9), 9),
+            attestation(2, root(0), 0, root(9), 9),
         ];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state.justified_slots.get(9), Some(true));
@@ -1367,9 +1364,9 @@ mod attestation_tests {
     fn duplicate_vote_for_same_validator_is_idempotent() {
         let mut once = populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
         let mut twice = once.clone();
-        let votes = vec![signed_vote(0, root(0xaa), 0, root(0xbb), 1)];
+        let votes = vec![attestation(0, root(0xaa), 0, root(0xbb), 1)];
         once.process_attestations(&votes).unwrap();
-        let votes_twice = vec![votes[0].clone(), votes[0].clone()];
+        let votes_twice = vec![votes[0], votes[0]];
         twice.process_attestations(&votes_twice).unwrap();
         assert_eq!(once.hash_tree_root(), twice.hash_tree_root());
     }
@@ -1761,18 +1758,14 @@ mod slot_processing_tests {
     }
 }
 
-// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
-// rather than `allow` so it retires itself when the fixture moves to
-// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[expect(deprecated)]
 mod state_transition_tests {
     use super::*;
     use proptest::prelude::*;
     use ssz::{decode, encode};
 
-    use crate::block::BlockBody;
+    use crate::block::{BlockBody, BlockSignatures, BlockWithAttestation};
     use crate::validator::ValidatorIndex;
 
     const GENESIS_TIME: u64 = 1_700_000_000;
@@ -1781,10 +1774,10 @@ mod state_transition_tests {
         crate::stf::genesis_state(num_validators, GENESIS_TIME)
     }
 
-    /// Two-phase build: produce a `SignedBlock` for `state` whose body is
-    /// empty and whose `state_root` matches the post-state reached by
-    /// applying the transition on a clone of `state`.
-    fn build_signed_block(state: &State, slot: Slot) -> SignedBlock {
+    /// Two-phase build: produce a `SignedBlockWithAttestation` for `state`
+    /// whose body is empty and whose `state_root` matches the post-state
+    /// reached by applying the transition on a clone of `state`.
+    fn build_signed_block(state: &State, slot: Slot) -> SignedBlockWithAttestation {
         let proposer_index = ValidatorIndex::new(slot.get() % state.config.num_validators);
 
         // Phase 1: compute the post-state with `state_root = zero`.
@@ -1806,16 +1799,19 @@ mod state_transition_tests {
 
         // Phase 2: rewrite the block with the computed state_root.
         block.state_root = state_root;
-        SignedBlock {
-            message: block,
-            signature: types::Bytes4000::default(),
+        SignedBlockWithAttestation {
+            message: BlockWithAttestation {
+                block,
+                proposer_attestation: Attestation::default(),
+            },
+            signature: BlockSignatures::default(),
         }
     }
 
     /// Empty-body chain of `n` consecutive valid signed blocks starting from
     /// `start`. Each block's `state_root` is the post-state root after
     /// applying the prior blocks.
-    fn build_chain(start: &State, n: usize) -> Vec<SignedBlock> {
+    fn build_chain(start: &State, n: usize) -> Vec<SignedBlockWithAttestation> {
         let mut chain = Vec::with_capacity(n);
         let mut walker = start.clone();
         for i in 1..=n {
@@ -1834,7 +1830,7 @@ mod state_transition_tests {
         let mut driven = genesis_state(4);
         let mut hand = driven.clone();
         let sb = build_signed_block(&driven, Slot::new(1));
-        let block = sb.message.clone();
+        let block = sb.message.block.clone();
 
         driven.state_transition(&sb, true).unwrap();
         hand.process_slots(block.slot).unwrap();
@@ -1850,11 +1846,11 @@ mod state_transition_tests {
     fn state_root_mismatch_when_validation_on_and_root_tampered() {
         let mut state = genesis_state(4);
         let mut sb = build_signed_block(&state, Slot::new(1));
-        let want = sb.message.state_root;
+        let want = sb.message.block.state_root;
         // Flip a byte in the declared post-state root.
         let mut tampered = want;
         tampered.0[0] ^= 0xff;
-        sb.message.state_root = tampered;
+        sb.message.block.state_root = tampered;
 
         let err = state.state_transition(&sb, true).unwrap_err();
         assert!(matches!(
@@ -1868,7 +1864,7 @@ mod state_transition_tests {
     fn state_root_validation_off_skips_root_check() {
         let mut state = genesis_state(4);
         let mut sb = build_signed_block(&state, Slot::new(1));
-        sb.message.state_root.0[0] ^= 0xff;
+        sb.message.block.state_root.0[0] ^= 0xff;
         // With validation off the tampered root is ignored.
         state.state_transition(&sb, false).unwrap();
         assert_eq!(state.slot, Slot::new(1));
@@ -1880,7 +1876,7 @@ mod state_transition_tests {
     fn propagates_block_header_error() {
         let mut state = genesis_state(4);
         let mut sb = build_signed_block(&state, Slot::new(1));
-        sb.message.parent_root = Bytes32::new([0xab; 32]);
+        sb.message.block.parent_root = Bytes32::new([0xab; 32]);
         let err = state.state_transition(&sb, true).unwrap_err();
         assert!(matches!(
             err,
@@ -1900,7 +1896,7 @@ mod state_transition_tests {
 
         // Now attempt a block with a corrupted parent_root.
         let mut sb = build_signed_block(&state, Slot::new(2));
-        sb.message.parent_root = Bytes32::new([0xab; 32]);
+        sb.message.block.parent_root = Bytes32::new([0xab; 32]);
         let _ = state.state_transition(&sb, true).unwrap_err();
         assert_eq!(state, snapshot);
     }
@@ -1915,7 +1911,7 @@ mod state_transition_tests {
         let snapshot = state.clone();
 
         let mut sb = build_signed_block(&state, Slot::new(2));
-        sb.message.state_root.0[0] ^= 0xff;
+        sb.message.block.state_root.0[0] ^= 0xff;
         let err = state.state_transition(&sb, true).unwrap_err();
         assert!(matches!(
             err,

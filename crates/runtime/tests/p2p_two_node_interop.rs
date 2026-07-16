@@ -23,7 +23,10 @@ use std::time::Duration;
 
 use lean_wire::BlocksByRootRequest;
 use libp2p::{Multiaddr, PeerId};
-use protocol::{Block, BlockBody, SignedBlock, Slot, ValidatorIndex};
+use protocol::{
+    Attestation, Block, BlockBody, BlockSignatures, BlockWithAttestation,
+    SignedBlockWithAttestation, Slot, ValidatorIndex,
+};
 use runtime::core::Service;
 use runtime::p2p::{DevnetHost, Host, P2pService, PublishError, RpcProvider};
 use storage::{MemoryStore, Store};
@@ -35,15 +38,6 @@ use tempfile::{tempdir, TempDir};
 use tokio::time::{sleep, timeout, Instant};
 use tokio_util::sync::CancellationToken;
 use types::Bytes32;
-// Retained construction site for the deprecated `Bytes4000` placeholder; moves
-// to `Signature` with the container refactor. Scoped to the two items that
-// touch it rather than this crate root, which would also blanket the
-// `p2p_common` submodule declared below — a file with no deprecated usage that
-// three test binaries share. `expect` rather than `allow`: once the site moves
-// to `Signature`, the unfulfilled expectation fails the build instead of
-// lingering as a stale allow.
-#[expect(deprecated)]
-use types::Bytes4000;
 
 /// Overall per-test wall-clock budget.
 const TEST_DEADLINE: Duration = Duration::from_secs(15);
@@ -57,23 +51,25 @@ const PUBLISH_BACKOFF: Duration = Duration::from_millis(50);
 /// Bound on draining the inbound block channel for a target root.
 const GOSSIP_DELIVERY_DEADLINE: Duration = Duration::from_secs(5);
 
-/// Builds a [`SignedBlock`] with a non-default `slot`/`proposer_index`
+/// Builds a [`SignedBlockWithAttestation`] with a non-default `slot`/`proposer_index`
 /// pair so two seeds produce distinct tree roots. Returns the block and
 /// its hash-tree-root keyed by the [`RpcProvider`].
-#[expect(deprecated)]
-fn block_with_seed(slot: u64, proposer: u64) -> (SignedBlock, Bytes32) {
-    let message = Block {
+fn block_with_seed(slot: u64, proposer: u64) -> (SignedBlockWithAttestation, Bytes32) {
+    let block = Block {
         slot: Slot::new(slot),
         proposer_index: ValidatorIndex::new(proposer),
         parent_root: Bytes32::zero(),
         state_root: Bytes32::zero(),
         body: BlockBody::default(),
     };
-    let signed = SignedBlock {
-        message,
-        signature: Bytes4000::default(),
+    let root = Bytes32::new(block.hash_tree_root());
+    let signed = SignedBlockWithAttestation {
+        message: BlockWithAttestation {
+            block,
+            proposer_attestation: Attestation::default(),
+        },
+        signature: BlockSignatures::default(),
     };
-    let root = Bytes32::new(signed.hash_tree_root());
     (signed, root)
 }
 
@@ -81,7 +77,9 @@ fn block_with_seed(slot: u64, proposer: u64) -> (SignedBlock, Bytes32) {
 /// store is pre-seeded with `blocks`. Two providers built this way share
 /// the same genesis, so their `local_status` values match and the Status
 /// handshake accepts on both sides.
-fn chain_provider_with_blocks(blocks: &[(SignedBlock, Bytes32)]) -> Arc<RpcProvider> {
+fn chain_provider_with_blocks(
+    blocks: &[(SignedBlockWithAttestation, Bytes32)],
+) -> Arc<RpcProvider> {
     let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
     for (block, root) in blocks {
         store.save_block(*root, block.clone()).unwrap();
@@ -101,11 +99,11 @@ fn write_bootnodes(dir: &Path, peer_id: PeerId, addr: &Multiaddr) -> PathBuf {
     path
 }
 
-/// Convenience: hash-tree-root of a [`SignedBlock`] as the [`Bytes32`]
+/// Convenience: hash-tree-root of a [`SignedBlockWithAttestation`] as the [`Bytes32`]
 /// the [`RpcProvider`] keys by. Replaces several inline
 /// `Bytes32::new(block.hash_tree_root())` calls.
-fn root_of(block: &SignedBlock) -> Bytes32 {
-    Bytes32::new(block.hash_tree_root())
+fn root_of(block: &SignedBlockWithAttestation) -> Bytes32 {
+    Bytes32::new(block.message.block.hash_tree_root())
 }
 
 /// A started `P2pService` plus the on-disk identity directory and the
