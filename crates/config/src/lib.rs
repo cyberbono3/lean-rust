@@ -45,3 +45,37 @@ pub const INTERVALS_PER_SLOT: u64 = 4;
 /// Not part of [`Config`]: derived from [`DEVNET_CONFIG`] and pinned to a
 /// scalar so callers don't recompute it.
 pub const SECONDS_PER_INTERVAL: u64 = DEVNET_CONFIG.seconds_per_slot / INTERVALS_PER_SLOT;
+
+/// SSZ `List`/`Bitlist` cap `N` — the single source for every
+/// `List<Signature, N>` and `Bitlist<N>` bound across the workspace.
+///
+/// Pinned to the `validator_registry_limit` field of [`DEVNET_CONFIG`]
+/// (`4_096` on devnet0).
+/// The one and only `usize` derivation of the cap: downstream consts
+/// (`protocol`'s `MAX_ATTESTATIONS`, `VALIDATOR_REGISTRY_LIMIT`) alias this by
+/// name rather than re-casting.
+///
+/// The `u64` -> `usize` cast is exact on every supported target (the value is
+/// `4_096`, well within `usize::MAX`); the `#[allow]` silences the generic-cast
+/// lint, not a real truncation.
+#[allow(clippy::cast_possible_truncation)]
+pub const VALIDATOR_REGISTRY_LIMIT: usize = DEVNET_CONFIG.validator_registry_limit as usize;
+
+#[cfg(test)]
+mod tests {
+    use super::{DEVNET_CONFIG, VALIDATOR_REGISTRY_LIMIT};
+
+    #[test]
+    fn validator_registry_limit_usize_const_matches_field() {
+        // Truncation safety of the const's `u64` -> `usize` cast rests on the
+        // compile-time fact that the value (4096) fits the narrowest supported
+        // `usize`, NOT on this test. The `as u64` round-trip below is only
+        // load-bearing on sub-64-bit `usize` targets (which this std crate never
+        // ships to); the real value guard is the `== 4_096` literal assertion.
+        assert_eq!(
+            VALIDATOR_REGISTRY_LIMIT as u64,
+            DEVNET_CONFIG.validator_registry_limit
+        );
+        assert_eq!(VALIDATOR_REGISTRY_LIMIT, 4_096);
+    }
+}

@@ -34,10 +34,11 @@ use crate::vote::{Attestation, ATTESTATION_SSZ_LEN};
 
 /// Maximum attestation count per block.
 ///
-/// Pinned to the devnet0 [`config::DEVNET_CONFIG::validator_registry_limit`]
-/// so the bound matches the validator-set cap that produces the votes.
-#[allow(clippy::cast_possible_truncation)]
-pub const MAX_ATTESTATIONS: usize = config::DEVNET_CONFIG.validator_registry_limit as usize;
+/// Aliases [`config::VALIDATOR_REGISTRY_LIMIT`] — the single-source SSZ list
+/// cap — so the bound matches the validator-set cap that produces the votes.
+/// Also caps [`BlockSignatures`] (one signature per attesting validator plus
+/// the proposer never exceeds the registry size).
+pub const MAX_ATTESTATIONS: usize = config::VALIDATOR_REGISTRY_LIMIT;
 
 /// Fixed SSZ wire size of [`BlockHeader`] in bytes.
 pub const BLOCK_HEADER_SSZ_LEN: usize = BLOCK_HEADER_LEN; // 112
@@ -289,9 +290,9 @@ impl HashTreeRoot for Block {
 /// Mirrors the leanSpec `BlockSignatures = List[Signature, VALIDATOR_REGISTRY_LIMIT]`.
 ///
 /// The spec bound is the validator-registry limit; [`MAX_ATTESTATIONS`] is that
-/// same limit (`config::DEVNET_CONFIG::validator_registry_limit`), so the list
-/// is capped on it — one signature per attesting validator plus the proposer
-/// never exceeds the registry size.
+/// same limit (aliasing the single-source [`config::VALIDATOR_REGISTRY_LIMIT`]),
+/// so the list is capped on it — one signature per attesting validator plus the
+/// proposer never exceeds the registry size.
 ///
 /// A bare fixed-element list: empty encodes to zero bytes, `k` elements to
 /// `k * Signature::LEN`. The offset that bounds these bytes lives in the parent
@@ -501,6 +502,44 @@ mod tests {
         sample_attestation, sample_block, sample_block_header, sample_block_with_attestation,
         sample_signature, sample_signed_block_with_attestation,
     };
+
+    // -- Config-derived caps (single source) --------------------------------
+
+    /// Acceptance test: the `List<Signature, N>` cap and the `Bitlist<N>` cap
+    /// resolve to the same cap value as the config single source.
+    ///
+    /// These are value-equality guards, not structural alias checks: `assert_eq!`
+    /// compares VALUES, so it catches a value divergence but NOT a refactor that
+    /// re-inlines an equal literal in place of the alias (that stays green).
+    /// Clause (b) is a placeholder witness that hard-codes the const into the
+    /// generic slot, documenting that the `Bitlist<N>` cap will consume the same
+    /// source once the aggregation type is authored. The bare-literal ban itself
+    /// is enforced by the acceptance grep (`rg 'validator_registry_limit as
+    /// usize'` resolving to `config` only), not by these asserts.
+    #[test]
+    fn list_and_bitlist_caps_share_one_source() {
+        use types::Bitlist;
+
+        // (a) the List<Signature, N> cap (MAX_ATTESTATIONS bounds BlockSignatures).
+        assert_eq!(MAX_ATTESTATIONS, config::VALIDATOR_REGISTRY_LIMIT);
+
+        // (b) the Bitlist<N> cap resolves to the SAME source, via the existing
+        //     compile-time `limit()` accessor (no new accessor is added).
+        assert_eq!(
+            Bitlist::<{ config::VALIDATOR_REGISTRY_LIMIT }>::new().limit(),
+            MAX_ATTESTATIONS
+        );
+    }
+
+    /// Value guard: the cap consts equal the config single source, which equals
+    /// the canonical `4_096`. Catches a VALUE change to the cap (which would move
+    /// every SSZ `List`/`Bitlist` bound); it does NOT detect a same-value literal
+    /// re-inlined in place of the alias — that is the acceptance grep's job.
+    #[test]
+    fn cap_consts_match_config_single_source() {
+        assert_eq!(MAX_ATTESTATIONS, config::VALIDATOR_REGISTRY_LIMIT);
+        assert_eq!(config::VALIDATOR_REGISTRY_LIMIT, 4_096);
+    }
 
     // -- BlockHeader --------------------------------------------------------
 

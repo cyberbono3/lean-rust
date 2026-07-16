@@ -50,12 +50,13 @@ use crate::vote::Attestation;
 #[allow(clippy::cast_possible_truncation)]
 pub const HISTORICAL_ROOTS_LIMIT: usize = config::DEVNET_CONFIG.historical_roots_limit as usize;
 
-/// Maximum validator-registry size used to bound per-root vote bitlists.
+/// Maximum validator-registry size; bounds the `validators` registry and
+/// per-root vote bitlists.
 ///
-/// Pinned to [`config::DEVNET_CONFIG::validator_registry_limit`] (`4_096` on
-/// devnet0).
-#[allow(clippy::cast_possible_truncation)]
-pub const VALIDATOR_REGISTRY_LIMIT: usize = config::DEVNET_CONFIG.validator_registry_limit as usize;
+/// Aliases [`config::VALIDATOR_REGISTRY_LIMIT`] — the single-source cap
+/// (`4_096` on devnet0). Re-exported from the crate root; consumed by
+/// [`JUSTIFICATIONS_VALIDATORS_LIMIT`] and the `validators` codec/HTR.
+pub const VALIDATOR_REGISTRY_LIMIT: usize = config::VALIDATOR_REGISTRY_LIMIT;
 
 /// Bound on the flattened validator-vote bitlist:
 /// [`HISTORICAL_ROOTS_LIMIT`] × [`VALIDATOR_REGISTRY_LIMIT`].
