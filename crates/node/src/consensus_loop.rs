@@ -16,7 +16,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
-use protocol::{SignedBlock, SignedVote, Slot, ValidatorIndex};
+use protocol::{SignedAttestation, SignedBlock, Slot, ValidatorIndex};
 use runtime::chain::Service as ChainService;
 use runtime::core::Service;
 use runtime::duties::{
@@ -434,7 +434,7 @@ impl Runner {
     ///
     /// # Errors
     /// The p2p host is not running, or the publish fails.
-    async fn publish_vote(&self, vote: &SignedVote) -> anyhow::Result<()> {
+    async fn publish_vote(&self, vote: &SignedAttestation) -> anyhow::Result<()> {
         let host = self
             .p2p
             .host()

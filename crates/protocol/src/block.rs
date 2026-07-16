@@ -9,7 +9,7 @@
 //! Wire shapes:
 //! - [`BlockHeader`] — 5 fixed-size fields, 112-byte SSZ payload.
 //! - [`BlockBody`] — single variable-length field (`attestations:
-//!   List[SignedVote, MAX_ATTESTATIONS]`). Variable-length SSZ container.
+//!   List[SignedAttestation, MAX_ATTESTATIONS]`). Variable-length SSZ container.
 //! - [`Block`] — 4 fixed fields plus a variable-length `body`. Variable-length
 //!   SSZ container with one offset.
 //! - [`SignedBlock`] — variable-length `message: Block` plus the fixed
@@ -33,7 +33,7 @@ use crate::internal::{
 };
 use crate::slot::Slot;
 use crate::validator::ValidatorIndex;
-use crate::vote::SignedVote;
+use crate::vote::SignedAttestation;
 
 /// Maximum attestation count per block.
 ///
@@ -145,7 +145,7 @@ impl HashTreeRoot for BlockHeader {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BlockBody {
     /// Bounded list of vote attestations included in this block.
-    pub attestations: Vec<SignedVote>,
+    pub attestations: Vec<SignedAttestation>,
 }
 
 impl Encode for BlockBody {
@@ -154,7 +154,8 @@ impl Encode for BlockBody {
     }
 
     fn ssz_bytes_len(&self) -> usize {
-        BYTES_PER_LENGTH_OFFSET + self.attestations.len() * <SignedVote as Encode>::ssz_fixed_len()
+        BYTES_PER_LENGTH_OFFSET
+            + self.attestations.len() * <SignedAttestation as Encode>::ssz_fixed_len()
     }
 
     fn ssz_append(&self, buf: &mut Vec<u8>) {
@@ -181,7 +182,8 @@ impl Decode for BlockBody {
         if offset != BYTES_PER_LENGTH_OFFSET {
             return Err(DecodeError::OffsetIntoFixedPortion(offset));
         }
-        let attestations = decode_fixed_element_list::<SignedVote>(&bytes[c..], MAX_ATTESTATIONS)?;
+        let attestations =
+            decode_fixed_element_list::<SignedAttestation>(&bytes[c..], MAX_ATTESTATIONS)?;
         Ok(Self { attestations })
     }
 }
@@ -363,7 +365,7 @@ mod tests {
     use ssz::{decode, encode, SszError};
 
     use crate::test_fixtures::{
-        sample_block, sample_block_header, sample_signed_block, sample_signed_vote,
+        sample_block, sample_block_header, sample_signed_attestation, sample_signed_block,
     };
 
     // -- BlockHeader --------------------------------------------------------
@@ -436,15 +438,15 @@ mod tests {
     fn block_body_round_trip_nonempty() {
         let body = BlockBody {
             attestations: vec![
-                sample_signed_vote(1),
-                sample_signed_vote(2),
-                sample_signed_vote(3),
+                sample_signed_attestation(1),
+                sample_signed_attestation(2),
+                sample_signed_attestation(3),
             ],
         };
         let bytes = encode(&body);
-        // Layout: 4-byte offset (=4), then concatenated SignedVote bytes.
+        // Layout: 4-byte offset (=4), then concatenated SignedAttestation bytes.
         assert_eq!(&bytes[..4], &[0x04, 0x00, 0x00, 0x00]);
-        let elem_len = <SignedVote as Encode>::ssz_fixed_len();
+        let elem_len = <SignedAttestation as Encode>::ssz_fixed_len();
         assert_eq!(bytes.len(), 4 + 3 * elem_len);
         let back: BlockBody = decode(&bytes).unwrap();
         assert_eq!(back, body);
@@ -460,14 +462,14 @@ mod tests {
     fn block_body_decode_rejects_invalid_offset() {
         // Offset != 4 → OffsetIntoFixedPortion.
         let mut bytes = vec![0x05_u8, 0x00, 0x00, 0x00];
-        bytes.resize(4 + <SignedVote as Encode>::ssz_fixed_len(), 0);
+        bytes.resize(4 + <SignedAttestation as Encode>::ssz_fixed_len(), 0);
         let err = decode::<BlockBody>(&bytes).unwrap_err();
         assert!(matches!(err, SszError::Decode { .. }));
     }
 
     #[test]
     fn block_body_decode_rejects_size_not_divisible_by_element() {
-        // Offset = 4, then 1 byte of element data (not 4136).
+        // Offset = 4, then 1 byte of element data (not 3252).
         let bytes = vec![0x04_u8, 0x00, 0x00, 0x00, 0xaa];
         let err = decode::<BlockBody>(&bytes).unwrap_err();
         assert!(matches!(err, SszError::Decode { .. }));
@@ -476,10 +478,10 @@ mod tests {
     #[test]
     fn block_body_hash_tree_root_changes_with_element() {
         let body_a = BlockBody {
-            attestations: vec![sample_signed_vote(1)],
+            attestations: vec![sample_signed_attestation(1)],
         };
         let body_b = BlockBody {
-            attestations: vec![sample_signed_vote(2)],
+            attestations: vec![sample_signed_attestation(2)],
         };
         assert_ne!(body_a.hash_tree_root(), body_b.hash_tree_root());
     }
@@ -487,10 +489,10 @@ mod tests {
     #[test]
     fn block_body_hash_tree_root_changes_with_length() {
         let body_one = BlockBody {
-            attestations: vec![sample_signed_vote(1)],
+            attestations: vec![sample_signed_attestation(1)],
         };
         let body_two = BlockBody {
-            attestations: vec![sample_signed_vote(1), sample_signed_vote(1)],
+            attestations: vec![sample_signed_attestation(1), sample_signed_attestation(1)],
         };
         // Different lengths → mix_in_length differs → roots differ.
         assert_ne!(body_one.hash_tree_root(), body_two.hash_tree_root());
@@ -535,7 +537,7 @@ mod tests {
     fn block_hash_tree_root_responds_to_body_change() {
         let mut b = sample_block();
         let baseline = b.hash_tree_root();
-        b.body.attestations.push(sample_signed_vote(99));
+        b.body.attestations.push(sample_signed_attestation(99));
         assert_ne!(b.hash_tree_root(), baseline);
     }
 
@@ -609,7 +611,7 @@ mod tests {
 
         #[test]
         fn block_body_ssz_round_trips(n in 0_usize..=8) {
-            let attestations = (0..n).map(|i| sample_signed_vote(i as u64)).collect();
+            let attestations = (0..n).map(|i| sample_signed_attestation(i as u64)).collect();
             let body = BlockBody { attestations };
             let back: BlockBody = decode(&encode(&body)).unwrap();
             prop_assert_eq!(back, body);
@@ -617,7 +619,7 @@ mod tests {
 
         #[test]
         fn block_ssz_round_trips(slot in any::<u64>(), n in 0_usize..=4) {
-            let attestations = (0..n).map(|i| sample_signed_vote(i as u64)).collect();
+            let attestations = (0..n).map(|i| sample_signed_attestation(i as u64)).collect();
             let b = Block {
                 slot: Slot::new(slot),
                 body: BlockBody { attestations },
@@ -629,7 +631,7 @@ mod tests {
 
         #[test]
         fn signed_block_ssz_round_trips(slot in any::<u64>(), n in 0_usize..=4) {
-            let attestations = (0..n).map(|i| sample_signed_vote(i as u64)).collect();
+            let attestations = (0..n).map(|i| sample_signed_attestation(i as u64)).collect();
             let sb = SignedBlock {
                 message: Block {
                     slot: Slot::new(slot),

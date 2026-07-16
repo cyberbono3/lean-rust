@@ -10,9 +10,10 @@
 //!   the round-robin [`is_proposer`] helper.
 //! - [`Checkpoint`] — `(root, slot)` container with SSZ codec and Merkle
 //!   hash-tree-root.
-//! - [`Vote`] / [`SignedVote`] — unsigned validator vote and the wire-shape
-//!   container that pairs it with the validator id and the post-quantum
-//!   signature placeholder.
+//! - [`AttestationData`] / [`Attestation`] / [`SignedAttestation`] — the
+//!   unsigned attestation body, the body bound to its attesting validator,
+//!   and the wire-shape container that pairs an attestation with its
+//!   post-quantum signature.
 //! - [`Block`] / [`BlockBody`] / [`BlockHeader`] / [`SignedBlock`] —
 //!   variable-length block containers with manual SSZ codecs and Merkle
 //!   hash-tree-roots.
@@ -74,4 +75,4 @@ pub use state::{
     STATE_FIXED_PART_LEN, VALIDATOR_REGISTRY_LIMIT,
 };
 pub use validator::{is_proposer, ValidatorIndex};
-pub use vote::{SignedVote, Vote};
+pub use vote::{Attestation, AttestationData, SignedAttestation};

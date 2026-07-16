@@ -7,20 +7,14 @@
 //! this is intentional, and these fixtures are kept private to forkchoice
 //! `cfg(test)` builds.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced. `expect` rather than `allow`: once this file's last site
-// moves to `Signature`, the unfulfilled expectation fails the build instead of
-// lingering as a stale allow.
-#![expect(deprecated)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use protocol::{
-    Block, BlockBody, BlockHeader, Checkpoint, ProtocolConfig, SignedVote, Slot, State,
-    ValidatorIndex, Vote,
+    Attestation, AttestationData, Block, BlockBody, BlockHeader, Checkpoint, ProtocolConfig,
+    SignedAttestation, Slot, State, ValidatorIndex,
 };
 use ssz::HashTreeRoot;
-use types::{Bytes32, Bytes4000};
+use types::{Bytes32, Signature};
 
 use crate::store::Store;
 use crate::time::Time;
@@ -161,7 +155,7 @@ pub(crate) fn linear_chain(
     (store, roots, states)
 }
 
-/// Builds a [`SignedVote`] from explicit `(validator, head, target, source,
+/// Builds a [`SignedAttestation`] from explicit `(validator, head, target, source,
 /// slot)` parts. `signature` is zero-filled — forkchoice never inspects it.
 pub(crate) fn signed_vote(
     validator: ValidatorIndex,
@@ -169,20 +163,22 @@ pub(crate) fn signed_vote(
     target: Checkpoint,
     source: Checkpoint,
     slot: Slot,
-) -> SignedVote {
-    SignedVote {
-        validator_id: validator,
-        message: Vote {
-            slot,
-            head,
-            target,
-            source,
+) -> SignedAttestation {
+    SignedAttestation {
+        message: Attestation {
+            validator_id: validator,
+            data: AttestationData {
+                slot,
+                head,
+                target,
+                source,
+            },
         },
-        signature: Bytes4000::new([0; 4000]),
+        signature: Signature::zero(),
     }
 }
 
-/// Convenience: build a `SignedVote` whose `head`, `target`, and `source`
+/// Convenience: build a `SignedAttestation` whose `head`, `target`, and `source`
 /// all point at the same `(root, slot)`. Used by tests that don't care
 /// about FFG distinctions.
 pub(crate) fn signed_vote_at(
@@ -191,7 +187,7 @@ pub(crate) fn signed_vote_at(
     head_slot: Slot,
     vote_slot: Slot,
     source: Checkpoint,
-) -> SignedVote {
+) -> SignedAttestation {
     let head = Checkpoint::new(head_root, head_slot);
     signed_vote(validator, head, head, source, vote_slot)
 }

@@ -13,8 +13,9 @@ domain layer stays infrastructure-free.
 - [`ValidatorIndex`] / [`is_proposer`] — registry-index newtype + the
   round-robin proposer rule (`slot % num_validators`).
 - [`Checkpoint`] — `(root, slot)` container with SSZ codec + hash-tree-root.
-- [`Vote`] / [`SignedVote`] — unsigned validator vote and its wire-shape
-  container (validator id + PQ-signature placeholder).
+- [`AttestationData`] / [`Attestation`] / [`SignedAttestation`] — the unsigned
+  attestation body, the body bound to its attesting validator, and the
+  wire-shape container that pairs an attestation with its PQ signature.
 - [`Block`] / [`BlockBody`] / [`BlockHeader`] / [`SignedBlock`] /
   [`MAX_ATTESTATIONS`] — block containers + attestation cap.
 - [`State`] + [`ProtocolConfig`] and the bound constants
@@ -38,8 +39,9 @@ domain layer stays infrastructure-free.
 [`ValidatorIndex`]: ./src/validator.rs
 [`is_proposer`]: ./src/validator.rs
 [`Checkpoint`]: ./src/checkpoint.rs
-[`Vote`]: ./src/vote.rs
-[`SignedVote`]: ./src/vote.rs
+[`AttestationData`]: ./src/vote.rs
+[`Attestation`]: ./src/vote.rs
+[`SignedAttestation`]: ./src/vote.rs
 [`Block`]: ./src/block.rs
 [`BlockBody`]: ./src/block.rs
 [`BlockHeader`]: ./src/block.rs

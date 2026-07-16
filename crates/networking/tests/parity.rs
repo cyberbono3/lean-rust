@@ -28,8 +28,11 @@ use lean_wire::{
     decode_req_resp, decode_req_resp_wire, encode_req_resp, encode_req_resp_wire,
     read_req_resp_frame, write_req_resp_frame, NetworkingError, Status,
 };
-use protocol::{Block, BlockBody, BlockHeader, Checkpoint, SignedBlock, SignedVote, State, Vote};
-use ssz::{decode, encode, Decode, Encode};
+use protocol::{
+    AttestationData, Block, BlockBody, BlockHeader, Checkpoint, SignedAttestation, SignedBlock,
+    State,
+};
+use ssz::{decode, encode, Decode, Encode, HashTreeRoot};
 
 // =============================================================================
 // per-fixture entries
@@ -41,8 +44,8 @@ const FIXTURES: &[(&str, &[u8])] = &[
         include_bytes!("data/wire-parity/empty.blockbody.ssz"),
     ),
     (
-        "two-votes.blockbody",
-        include_bytes!("data/wire-parity/two-votes.blockbody.ssz"),
+        "two-attestations.blockbody",
+        include_bytes!("data/synthetic/two-attestations.blockbody.ssz"),
     ),
     (
         "genesis-4val.state",
@@ -69,12 +72,12 @@ const FIXTURES: &[(&str, &[u8])] = &[
         include_bytes!("data/wire-parity/slot1-empty.signedblock.ssz"),
     ),
     (
-        "slot7-vote.vote",
-        include_bytes!("data/wire-parity/slot7-vote.vote.ssz"),
+        "slot7.attestationdata",
+        include_bytes!("data/wire-parity/slot7.attestationdata.ssz"),
     ),
     (
-        "validator3-vote.signedvote",
-        include_bytes!("data/wire-parity/validator3-vote.signedvote.ssz"),
+        "validator3.signedattestation",
+        include_bytes!("data/synthetic/validator3.signedattestation.ssz"),
     ),
 ];
 
@@ -136,8 +139,11 @@ fn empty_blockbody_round_trip() {
 }
 
 #[test]
-fn two_votes_blockbody_round_trip() {
-    assert_round_trip::<BlockBody>("two-votes.blockbody", fixture("two-votes.blockbody"));
+fn two_attestations_blockbody_round_trip() {
+    assert_round_trip::<BlockBody>(
+        "two-attestations.blockbody",
+        fixture("two-attestations.blockbody"),
+    );
 }
 
 #[test]
@@ -180,15 +186,50 @@ fn signed_block_round_trip() {
 }
 
 #[test]
-fn vote_round_trip() {
-    assert_round_trip::<Vote>("slot7-vote.vote", fixture("slot7-vote.vote"));
+fn attestationdata_round_trip() {
+    assert_round_trip::<AttestationData>("slot7.attestationdata", fixture("slot7.attestationdata"));
 }
 
 #[test]
-fn signedvote_round_trip() {
-    assert_round_trip::<SignedVote>(
-        "validator3-vote.signedvote",
-        fixture("validator3-vote.signedvote"),
+fn signedattestation_round_trip() {
+    assert_round_trip::<SignedAttestation>(
+        "validator3.signedattestation",
+        fixture("validator3.signedattestation"),
+    );
+}
+
+/// Locks the hash-tree-roots of the `synthetic/` vectors to the values recorded
+/// in `tests/data/PROVENANCE.md`.
+///
+/// These roots are self-generated, so they cannot prove the merkleization shape
+/// is *correct* — only this workspace produced them, and a cross-client anchor
+/// for the devnet-1 attestation containers does not exist until a live peer
+/// supplies one. What they do is make the shape *fixed*: an accidental change to
+/// field order, merkleization width, or padding fails here loudly instead of
+/// passing silently and splitting consensus. Without this, the roots in
+/// PROVENANCE are prose that nothing checks.
+///
+/// If this test fails, do not update the constants to match. Establish which
+/// side is wrong first — a changed root means the wire shape moved.
+#[test]
+fn synthetic_vector_roots_are_pinned() {
+    const SIGNED_ATTESTATION_ROOT: &str =
+        "f698770b0bf6ae48b597bee138698b4829b5452d762f4ba9b2db56a32c18fbeb";
+    const BLOCKBODY_ROOT: &str = "f083211414094ef6acf38b23fb46085225ae0aad4fad9c3933f6bf907f7eabf0";
+
+    let signed: SignedAttestation =
+        decode(fixture("validator3.signedattestation")).expect("decode signedattestation");
+    assert_eq!(
+        hex::encode(signed.hash_tree_root()),
+        SIGNED_ATTESTATION_ROOT,
+        "SignedAttestation root moved — the wire shape changed, or PROVENANCE is stale",
+    );
+
+    let body: BlockBody = decode(fixture("two-attestations.blockbody")).expect("decode blockbody");
+    assert_eq!(
+        hex::encode(body.hash_tree_root()),
+        BLOCKBODY_ROOT,
+        "BlockBody root moved — the wire shape changed, or PROVENANCE is stale",
     );
 }
 
@@ -252,7 +293,7 @@ fn read_frame_rejects_length_over_cap() {
 #[test]
 fn short_eof_mid_frame_surfaces_io_error() {
     let mut stream = Vec::new();
-    write_req_resp_frame(&mut stream, fixture("slot7-vote.vote")).unwrap();
+    write_req_resp_frame(&mut stream, fixture("slot7.attestationdata")).unwrap();
     let truncated_len = stream.len() - 4;
     stream.truncate(truncated_len);
     let mut cursor = Cursor::new(stream);

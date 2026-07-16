@@ -39,7 +39,7 @@ use crate::internal::{
 };
 use crate::slot::Slot;
 use crate::validator::is_proposer;
-use crate::vote::SignedVote;
+use crate::vote::SignedAttestation;
 
 /// Maximum number of historical block roots retained in the state.
 ///
@@ -649,7 +649,7 @@ impl State {
     ///   working bitmap rebuild.
     pub fn process_attestations(
         &mut self,
-        attestations: &[SignedVote],
+        attestations: &[SignedAttestation],
     ) -> Result<(), StateTransitionError> {
         let num_validators = self.config.num_validators;
         let just_len = self.justified_slots.len();
@@ -668,8 +668,8 @@ impl State {
         })?;
 
         for signed in attestations {
-            let vote = &signed.message;
-            let validator_id = signed.validator_id;
+            let vote = &signed.message.data;
+            let validator_id = signed.message.validator_id;
             let source_slot = vote.source.slot;
             let target_slot = vote.target.slot;
 
@@ -1122,19 +1122,15 @@ mod justifications_tests {
     }
 }
 
-// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
-// rather than `allow` so it retires itself when the fixture moves to
-// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[expect(deprecated)]
 mod attestation_tests {
     use super::*;
 
     use crate::block::BlockHeader;
     use crate::checkpoint::Checkpoint;
     use crate::validator::ValidatorIndex;
-    use crate::vote::{SignedVote, Vote};
+    use crate::vote::{Attestation, AttestationData, SignedAttestation};
 
     /// Builds a state with `num_validators` validators, populated history of
     /// `historical_roots`, and `justified_slots` matching the
@@ -1171,16 +1167,18 @@ mod attestation_tests {
         source_slot: u64,
         target_root: Bytes32,
         target_slot: u64,
-    ) -> SignedVote {
-        SignedVote {
-            validator_id: ValidatorIndex::new(validator_id),
-            message: Vote {
-                slot: Slot::new(target_slot),
-                head: Checkpoint::new(target_root, Slot::new(target_slot)),
-                target: Checkpoint::new(target_root, Slot::new(target_slot)),
-                source: Checkpoint::new(source_root, Slot::new(source_slot)),
+    ) -> SignedAttestation {
+        SignedAttestation {
+            message: Attestation {
+                validator_id: ValidatorIndex::new(validator_id),
+                data: AttestationData {
+                    slot: Slot::new(target_slot),
+                    head: Checkpoint::new(target_root, Slot::new(target_slot)),
+                    target: Checkpoint::new(target_root, Slot::new(target_slot)),
+                    source: Checkpoint::new(source_root, Slot::new(source_slot)),
+                },
             },
-            signature: types::Bytes4000::default(),
+            signature: types::Signature::zero(),
         }
     }
 
