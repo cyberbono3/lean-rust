@@ -17,11 +17,10 @@
 //! ```
 
 use ssz::HashTreeRoot;
-use types::{Bitlist, Bytes32};
+use types::Bytes32;
 
 use crate::{
-    block::BlockBody, checkpoint::Checkpoint, slot::Slot, state::ProtocolConfig, state::State,
-    validator::ValidatorIndex, validator::Validators, BlockHeader,
+    block::BlockBody, state::ProtocolConfig, state::State, validator::Validators, BlockHeader,
 };
 
 pub use crate::error::StateTransitionError;
@@ -43,6 +42,10 @@ pub use crate::error::StateTransitionError;
 /// ```
 #[must_use]
 pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
+    // Every field but `config` and the header `body_root` is the zero/default
+    // value; struct-update keeps this in sync as `State` grows fields. Note
+    // `body_root` must stay explicit — the empty `BlockBody` root is non-zero,
+    // and the genesis anchor invariant depends on it.
     let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
 
     State {
@@ -50,21 +53,11 @@ pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
             num_validators,
             genesis_time,
         },
-        slot: Slot::ZERO,
         latest_block_header: BlockHeader {
-            slot: Slot::ZERO,
-            proposer_index: ValidatorIndex::new(0),
-            parent_root: Bytes32::zero(),
-            state_root: Bytes32::zero(),
             body_root,
+            ..BlockHeader::default()
         },
-        latest_justified: Checkpoint::default(),
-        latest_finalized: Checkpoint::default(),
-        historical_block_hashes: Vec::new(),
-        justified_slots: Bitlist::new(),
-        validators: Vec::new(),
-        justifications_roots: Vec::new(),
-        justifications_validators: Bitlist::new(),
+        ..State::default()
     }
 }
 
@@ -105,7 +98,8 @@ pub fn genesis_state_with_validators(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::validator::Validator;
+    use crate::slot::Slot;
+    use crate::validator::{Validator, ValidatorIndex};
     use types::PublicKey;
 
     fn validator(seed: u8) -> Validator {
