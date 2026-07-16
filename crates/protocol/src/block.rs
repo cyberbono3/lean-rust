@@ -1,39 +1,36 @@
-//! Block containers — [`BlockHeader`], [`BlockBody`], [`Block`], and
-//! [`SignedBlock`].
+//! Block containers — [`BlockHeader`], [`BlockBody`], [`Block`],
+//! [`BlockSignatures`], [`BlockWithAttestation`], and
+//! [`SignedBlockWithAttestation`].
 //!
-//! Mirrors leanSpec/docs/client/containers.md. The signature placeholder is
-//! a 4000-byte vector reserved for the eventual XMSS post-quantum scheme;
-//! the documented wire format is authoritative for cross-client
-//! compatibility on devnet0.
+//! Mirrors the leanSpec consensus-spec block containers. The block signature is
+//! a variable-length list of 3116-byte XMSS post-quantum signatures.
 //!
 //! Wire shapes:
 //! - [`BlockHeader`] — 5 fixed-size fields, 112-byte SSZ payload.
 //! - [`BlockBody`] — single variable-length field (`attestations:
-//!   List[SignedAttestation, MAX_ATTESTATIONS]`). Variable-length SSZ container.
+//!   List[Attestation, MAX_ATTESTATIONS]`). Variable-length SSZ container.
 //! - [`Block`] — 4 fixed fields plus a variable-length `body`. Variable-length
 //!   SSZ container with one offset.
-//! - [`SignedBlock`] — variable-length `message: Block` plus the fixed
-//!   4000-byte signature. Variable-length SSZ container with one offset.
+//! - [`BlockSignatures`] — `List[Signature, MAX_ATTESTATIONS]`, a bare
+//!   fixed-element list (no self-offset).
+//! - [`BlockWithAttestation`] — variable-length `block` plus the fixed
+//!   `proposer_attestation` sibling.
+//! - [`SignedBlockWithAttestation`] — variable-length `message` plus
+//!   variable-length `signature`; two-offset SSZ container.
 
 use ssz::merkleize::merkleize;
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
-use types::Bytes32;
-// Retained construction sites for the deprecated `Bytes4000` placeholder; move
-// to `Signature` with the container refactor. Scoped to the items that name it
-// — the `SignedBlock` field, the decode leg, and the test module — so unrelated
-// deprecations in the rest of this file are still surfaced. `expect` rather than
-// `allow`: once the sites move, the unfulfilled expectation fails the build.
-#[expect(deprecated)]
-use types::Bytes4000;
+use types::{Bytes32, Signature};
 
 use crate::internal::{
-    decode_fixed_element_list, encode_fixed_element_list, ensure_len, list_hash_tree_root,
-    read_byte_array, read_fixed, read_offset, write_offset, BLOCK_HEADER_LEN, BYTES32_LEN,
-    BYTES4000_LEN, BYTES_PER_LENGTH_OFFSET, SLOT_LEN, VALIDATOR_INDEX_LEN,
+    decode_byte_vector_list, decode_fixed_element_list, encode_byte_vector_list,
+    encode_fixed_element_list, ensure_len, list_hash_tree_root, read_byte_array, read_fixed,
+    read_offset, write_offset, BLOCK_HEADER_LEN, BYTES32_LEN, BYTES_PER_LENGTH_OFFSET,
+    SIGNATURE_LEN, SLOT_LEN, VALIDATOR_INDEX_LEN,
 };
 use crate::slot::Slot;
 use crate::validator::ValidatorIndex;
-use crate::vote::SignedAttestation;
+use crate::vote::{Attestation, ATTESTATION_SSZ_LEN};
 
 /// Maximum attestation count per block.
 ///
@@ -50,9 +47,13 @@ pub const BLOCK_HEADER_SSZ_LEN: usize = BLOCK_HEADER_LEN; // 112
 const BLOCK_FIXED_PART_LEN: usize =
     SLOT_LEN + VALIDATOR_INDEX_LEN + 2 * BYTES32_LEN + BYTES_PER_LENGTH_OFFSET; // 84
 
-/// Length of the fixed portion of a [`SignedBlock`] (4-byte offset for the
-/// variable-length `message` plus the fixed 4000-byte signature).
-const SIGNED_BLOCK_FIXED_PART_LEN: usize = BYTES_PER_LENGTH_OFFSET + BYTES4000_LEN; // 4004
+/// Length of the fixed portion of a [`BlockWithAttestation`] (4-byte offset for
+/// the variable-length `block` plus the fixed inline `proposer_attestation`).
+const BLOCK_WITH_ATTESTATION_FIXED_PART_LEN: usize = BYTES_PER_LENGTH_OFFSET + ATTESTATION_SSZ_LEN; // 140
+
+/// Length of the fixed portion of a [`SignedBlockWithAttestation`] — two
+/// offsets, one each for the variable-length `message` and `signature`.
+const SIGNED_BLOCK_WITH_ATTESTATION_FIXED_PART_LEN: usize = 2 * BYTES_PER_LENGTH_OFFSET; // 8
 
 // =====================================================================
 // BlockHeader
@@ -145,7 +146,7 @@ impl HashTreeRoot for BlockHeader {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BlockBody {
     /// Bounded list of vote attestations included in this block.
-    pub attestations: Vec<SignedAttestation>,
+    pub attestations: Vec<Attestation>,
 }
 
 impl Encode for BlockBody {
@@ -154,8 +155,7 @@ impl Encode for BlockBody {
     }
 
     fn ssz_bytes_len(&self) -> usize {
-        BYTES_PER_LENGTH_OFFSET
-            + self.attestations.len() * <SignedAttestation as Encode>::ssz_fixed_len()
+        BYTES_PER_LENGTH_OFFSET + self.attestations.len() * <Attestation as Encode>::ssz_fixed_len()
     }
 
     fn ssz_append(&self, buf: &mut Vec<u8>) {
@@ -182,8 +182,7 @@ impl Decode for BlockBody {
         if offset != BYTES_PER_LENGTH_OFFSET {
             return Err(DecodeError::OffsetIntoFixedPortion(offset));
         }
-        let attestations =
-            decode_fixed_element_list::<SignedAttestation>(&bytes[c..], MAX_ATTESTATIONS)?;
+        let attestations = decode_fixed_element_list::<Attestation>(&bytes[c..], MAX_ATTESTATIONS)?;
         Ok(Self { attestations })
     }
 }
@@ -284,69 +283,199 @@ impl HashTreeRoot for Block {
 }
 
 // =====================================================================
-// SignedBlock
+// BlockSignatures
 // =====================================================================
 
-/// Mirrors leanSpec/docs/client/containers.md `SignedBlock`.
+/// Mirrors the leanSpec `BlockSignatures = List[Signature, VALIDATOR_REGISTRY_LIMIT]`.
 ///
-/// Variable-length envelope pairing a [`Block`] with the 4000-byte
-/// post-quantum-signature placeholder.
-// `allow` rather than `expect`, unlike the other sites in this file: the derives
-// below expand to code naming the field's type, and a lint *expectation* does
-// not propagate into derive expansion (a field- or struct-level `expect` is
-// reported fulfilled while the expanded `Clone`/`Default`/`PartialEq` impls
-// still warn). `allow` does propagate. Scoped to this struct, and retires with
-// the field when it moves to `Signature`.
-#[allow(deprecated)]
+/// A bare fixed-element list: empty encodes to zero bytes, `k` elements to
+/// `k * Signature::LEN`. The offset that bounds these bytes lives in the parent
+/// [`SignedBlockWithAttestation`], not here. Holds inert signature *bytes* only —
+/// verification is a `runtime`-layer concern.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SignedBlock {
-    /// The unsigned [`Block`] being attested to.
-    pub message: Block,
-    /// 4000-byte XMSS post-quantum-signature placeholder.
-    pub signature: Bytes4000,
+pub struct BlockSignatures(Vec<Signature>);
+
+impl core::ops::Deref for BlockSignatures {
+    type Target = [Signature];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
-impl Encode for SignedBlock {
+impl FromIterator<Signature> for BlockSignatures {
+    fn from_iter<I: IntoIterator<Item = Signature>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl Encode for BlockSignatures {
     fn is_ssz_fixed_len() -> bool {
         false
     }
 
     fn ssz_bytes_len(&self) -> usize {
-        SIGNED_BLOCK_FIXED_PART_LEN + self.message.ssz_bytes_len()
+        self.0.len() * SIGNATURE_LEN
     }
 
     fn ssz_append(&self, buf: &mut Vec<u8>) {
-        write_offset(buf, SIGNED_BLOCK_FIXED_PART_LEN);
-        buf.extend_from_slice(self.signature.as_slice());
-        self.message.ssz_append(buf);
+        encode_byte_vector_list(&self.0, buf);
     }
 }
 
-impl Decode for SignedBlock {
+impl Decode for BlockSignatures {
     fn is_ssz_fixed_len() -> bool {
         false
     }
 
-    #[expect(deprecated)]
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() < SIGNED_BLOCK_FIXED_PART_LEN {
+        decode_byte_vector_list::<SIGNATURE_LEN>(bytes, MAX_ATTESTATIONS).map(Self)
+    }
+}
+
+impl HashTreeRoot for BlockSignatures {
+    fn hash_tree_root(&self) -> [u8; 32] {
+        // `Signature: HashTreeRoot` via the ssz `ByteVector<N>` impl.
+        list_hash_tree_root(&self.0, MAX_ATTESTATIONS)
+    }
+}
+
+// =====================================================================
+// BlockWithAttestation
+// =====================================================================
+
+/// Mirrors the leanSpec `BlockWithAttestation`.
+///
+/// Field order `block` then `proposer_attestation`. NOTE the SSZ layout: `block`
+/// is variable (offset in slot 0) and `proposer_attestation` is fixed (inline in
+/// slot 1), so on the wire the proposer bytes PRECEDE the block payload. The
+/// hash-tree-root uses FIELD order (`block` first) — do not confuse the two.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BlockWithAttestation {
+    /// The unsigned block.
+    pub block: Block,
+    /// The proposer's own attestation — a sibling of `block`, not inside the body.
+    pub proposer_attestation: Attestation,
+}
+
+impl Encode for BlockWithAttestation {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        BLOCK_WITH_ATTESTATION_FIXED_PART_LEN + self.block.ssz_bytes_len()
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        write_offset(buf, BLOCK_WITH_ATTESTATION_FIXED_PART_LEN); // block offset = 140
+        self.proposer_attestation.ssz_append(buf); // fixed 136 inline
+        self.block.ssz_append(buf); // payload at 140
+    }
+}
+
+impl Decode for BlockWithAttestation {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        if bytes.len() < BLOCK_WITH_ATTESTATION_FIXED_PART_LEN {
             return Err(DecodeError::InvalidByteLength {
                 len: bytes.len(),
-                expected: SIGNED_BLOCK_FIXED_PART_LEN,
+                expected: BLOCK_WITH_ATTESTATION_FIXED_PART_LEN,
             });
         }
         let mut c = 0;
         let offset = read_offset(bytes, &mut c)?;
-        if offset != SIGNED_BLOCK_FIXED_PART_LEN {
+        if offset != BLOCK_WITH_ATTESTATION_FIXED_PART_LEN {
             return Err(DecodeError::OffsetIntoFixedPortion(offset));
         }
-        let signature = Bytes4000::new(read_byte_array::<BYTES4000_LEN>(bytes, &mut c));
-        let message = Block::from_ssz_bytes(&bytes[offset..])?;
+        let proposer_attestation = read_fixed::<Attestation>(bytes, &mut c)?; // consumes [4..140]
+        let block = Block::from_ssz_bytes(&bytes[offset..])?;
+        Ok(Self {
+            block,
+            proposer_attestation,
+        })
+    }
+}
+
+impl HashTreeRoot for BlockWithAttestation {
+    fn hash_tree_root(&self) -> [u8; 32] {
+        // 2 fields → width 2. Field order: block then proposer_attestation.
+        merkleize(&[
+            self.block.hash_tree_root(),
+            self.proposer_attestation.hash_tree_root(),
+        ])
+    }
+}
+
+// =====================================================================
+// SignedBlockWithAttestation
+// =====================================================================
+
+/// Mirrors the leanSpec `SignedBlockWithAttestation`.
+///
+/// Both fields are variable-length → the fixed part is two offsets. The
+/// signature offset that a bare [`BlockSignatures`] omits lives HERE.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SignedBlockWithAttestation {
+    /// The unsigned [`BlockWithAttestation`] being signed.
+    pub message: BlockWithAttestation,
+    /// The block signatures (one per body attestation plus the proposer's).
+    pub signature: BlockSignatures,
+}
+
+impl Encode for SignedBlockWithAttestation {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        SIGNED_BLOCK_WITH_ATTESTATION_FIXED_PART_LEN
+            + self.message.ssz_bytes_len()
+            + self.signature.ssz_bytes_len()
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        let message_offset = SIGNED_BLOCK_WITH_ATTESTATION_FIXED_PART_LEN; // 8
+        let signature_offset = message_offset + self.message.ssz_bytes_len();
+        write_offset(buf, message_offset);
+        write_offset(buf, signature_offset);
+        self.message.ssz_append(buf);
+        self.signature.ssz_append(buf);
+    }
+}
+
+impl Decode for SignedBlockWithAttestation {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        if bytes.len() < SIGNED_BLOCK_WITH_ATTESTATION_FIXED_PART_LEN {
+            return Err(DecodeError::InvalidByteLength {
+                len: bytes.len(),
+                expected: SIGNED_BLOCK_WITH_ATTESTATION_FIXED_PART_LEN,
+            });
+        }
+        let mut c = 0;
+        let message_offset = read_offset(bytes, &mut c)?;
+        let signature_offset = read_offset(bytes, &mut c)?;
+        if message_offset != SIGNED_BLOCK_WITH_ATTESTATION_FIXED_PART_LEN {
+            return Err(DecodeError::OffsetIntoFixedPortion(message_offset));
+        }
+        if signature_offset < message_offset || signature_offset > bytes.len() {
+            return Err(DecodeError::OffsetOutOfBounds(signature_offset));
+        }
+        let message =
+            BlockWithAttestation::from_ssz_bytes(&bytes[message_offset..signature_offset])?;
+        let signature = BlockSignatures::from_ssz_bytes(&bytes[signature_offset..])?;
         Ok(Self { message, signature })
     }
 }
 
-impl HashTreeRoot for SignedBlock {
+impl HashTreeRoot for SignedBlockWithAttestation {
     fn hash_tree_root(&self) -> [u8; 32] {
         // 2 fields → width 2 → single hash_pair via merkleize.
         merkleize(&[
@@ -358,14 +487,14 @@ impl HashTreeRoot for SignedBlock {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[expect(deprecated)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
     use ssz::{decode, encode, SszError};
 
     use crate::test_fixtures::{
-        sample_block, sample_block_header, sample_signed_attestation, sample_signed_block,
+        sample_attestation, sample_block, sample_block_header, sample_block_with_attestation,
+        sample_signature, sample_signed_block_with_attestation,
     };
 
     // -- BlockHeader --------------------------------------------------------
@@ -435,18 +564,29 @@ mod tests {
     }
 
     #[test]
-    fn block_body_round_trip_nonempty() {
+    fn block_body_holds_plain_attestations() {
+        // Type-level: the element is `Attestation` (validator_id + data), which
+        // has no `.signature` field — the signatures live in `BlockSignatures`.
+        let body = BlockBody {
+            attestations: vec![sample_attestation(1), sample_attestation(2)],
+        };
+        assert_eq!(body.attestations.len(), 2);
+    }
+
+    #[test]
+    fn block_body_round_trip_nonempty_stride_136() {
         let body = BlockBody {
             attestations: vec![
-                sample_signed_attestation(1),
-                sample_signed_attestation(2),
-                sample_signed_attestation(3),
+                sample_attestation(1),
+                sample_attestation(2),
+                sample_attestation(3),
             ],
         };
         let bytes = encode(&body);
-        // Layout: 4-byte offset (=4), then concatenated SignedAttestation bytes.
+        // Layout: 4-byte offset (=4), then concatenated Attestation bytes.
         assert_eq!(&bytes[..4], &[0x04, 0x00, 0x00, 0x00]);
-        let elem_len = <SignedAttestation as Encode>::ssz_fixed_len();
+        let elem_len = <Attestation as Encode>::ssz_fixed_len();
+        assert_eq!(elem_len, 136);
         assert_eq!(bytes.len(), 4 + 3 * elem_len);
         let back: BlockBody = decode(&bytes).unwrap();
         assert_eq!(back, body);
@@ -462,14 +602,14 @@ mod tests {
     fn block_body_decode_rejects_invalid_offset() {
         // Offset != 4 → OffsetIntoFixedPortion.
         let mut bytes = vec![0x05_u8, 0x00, 0x00, 0x00];
-        bytes.resize(4 + <SignedAttestation as Encode>::ssz_fixed_len(), 0);
+        bytes.resize(4 + <Attestation as Encode>::ssz_fixed_len(), 0);
         let err = decode::<BlockBody>(&bytes).unwrap_err();
         assert!(matches!(err, SszError::Decode { .. }));
     }
 
     #[test]
     fn block_body_decode_rejects_size_not_divisible_by_element() {
-        // Offset = 4, then 1 byte of element data (not 3252).
+        // Offset = 4, then 1 byte of element data (not a whole 136-byte element).
         let bytes = vec![0x04_u8, 0x00, 0x00, 0x00, 0xaa];
         let err = decode::<BlockBody>(&bytes).unwrap_err();
         assert!(matches!(err, SszError::Decode { .. }));
@@ -478,10 +618,10 @@ mod tests {
     #[test]
     fn block_body_hash_tree_root_changes_with_element() {
         let body_a = BlockBody {
-            attestations: vec![sample_signed_attestation(1)],
+            attestations: vec![sample_attestation(1)],
         };
         let body_b = BlockBody {
-            attestations: vec![sample_signed_attestation(2)],
+            attestations: vec![sample_attestation(2)],
         };
         assert_ne!(body_a.hash_tree_root(), body_b.hash_tree_root());
     }
@@ -489,10 +629,10 @@ mod tests {
     #[test]
     fn block_body_hash_tree_root_changes_with_length() {
         let body_one = BlockBody {
-            attestations: vec![sample_signed_attestation(1)],
+            attestations: vec![sample_attestation(1)],
         };
         let body_two = BlockBody {
-            attestations: vec![sample_signed_attestation(1), sample_signed_attestation(1)],
+            attestations: vec![sample_attestation(1), sample_attestation(1)],
         };
         // Different lengths → mix_in_length differs → roots differ.
         assert_ne!(body_one.hash_tree_root(), body_two.hash_tree_root());
@@ -537,54 +677,158 @@ mod tests {
     fn block_hash_tree_root_responds_to_body_change() {
         let mut b = sample_block();
         let baseline = b.hash_tree_root();
-        b.body.attestations.push(sample_signed_attestation(99));
+        b.body.attestations.push(sample_attestation(99));
         assert_ne!(b.hash_tree_root(), baseline);
     }
 
-    // -- SignedBlock --------------------------------------------------------
+    // -- BlockSignatures ----------------------------------------------------
 
     #[test]
-    fn signed_block_round_trip() {
-        let sb = sample_signed_block();
-        let bytes = encode(&sb);
-        // Offset must be 4004 (LE).
-        assert_eq!(&bytes[..4], &4004_u32.to_le_bytes());
-        // Signature occupies bytes 4..4004.
-        assert!(bytes[4..4004].iter().all(|&b| b == 0xcd));
-        let back: SignedBlock = decode(&bytes).unwrap();
-        assert_eq!(back, sb);
+    fn block_signatures_default_is_empty_zero_bytes() {
+        let bs = BlockSignatures::default();
+        assert!(bs.is_empty());
+        assert_eq!(encode(&bs), Vec::<u8>::new());
+        assert_eq!(decode::<BlockSignatures>(&[]).unwrap(), bs);
     }
 
     #[test]
-    fn signed_block_signature_is_bytes4000_not_bytes32() {
-        // Compile-time + runtime sanity that the field type is 4000 bytes.
-        let sb = sample_signed_block();
-        assert_eq!(sb.signature.as_slice().len(), 4000);
+    fn block_signatures_stride_is_signature_len() {
+        let bs: BlockSignatures = [sample_signature(1), sample_signature(2)]
+            .into_iter()
+            .collect();
+        let bytes = encode(&bs);
+        // Bare fixed-element list: no self-offset, k * 3116 bytes.
+        assert_eq!(bytes.len(), 2 * Signature::LEN);
+        assert_eq!(decode::<BlockSignatures>(&bytes).unwrap(), bs);
     }
 
     #[test]
-    fn signed_block_decode_rejects_short_input() {
-        let err = decode::<SignedBlock>(&[0_u8; SIGNED_BLOCK_FIXED_PART_LEN - 1]).unwrap_err();
+    fn block_signatures_decode_rejects_over_cap() {
+        let bytes = vec![0_u8; (MAX_ATTESTATIONS + 1) * Signature::LEN];
+        assert!(matches!(
+            decode::<BlockSignatures>(&bytes),
+            Err(SszError::Decode { .. })
+        ));
+    }
+
+    #[test]
+    fn block_signatures_hash_tree_root_changes_with_len_and_element() {
+        let one: BlockSignatures = [sample_signature(1)].into_iter().collect();
+        let two: BlockSignatures = [sample_signature(1), sample_signature(1)]
+            .into_iter()
+            .collect();
+        let other: BlockSignatures = [sample_signature(2)].into_iter().collect();
+        assert_ne!(one.hash_tree_root(), two.hash_tree_root());
+        assert_ne!(one.hash_tree_root(), other.hash_tree_root());
+    }
+
+    // -- BlockWithAttestation -----------------------------------------------
+
+    #[test]
+    fn block_with_attestation_encode_layout_block_then_proposer() {
+        let bwa = sample_block_with_attestation();
+        let bytes = encode(&bwa);
+        // slot 0: 4-byte offset for `block` = 140.
+        assert_eq!(&bytes[..4], &140_u32.to_le_bytes());
+        // slot 1: `proposer_attestation` inline at [4..140].
+        assert_eq!(&bytes[4..140], encode(&bwa.proposer_attestation).as_slice());
+        // block payload at offset 140.
+        assert_eq!(&bytes[140..], encode(&bwa.block).as_slice());
+        assert_eq!(decode::<BlockWithAttestation>(&bytes).unwrap(), bwa);
+    }
+
+    #[test]
+    fn block_with_attestation_hash_tree_root_is_two_field_merkle_order_matters() {
+        let bwa = sample_block_with_attestation();
+        assert_eq!(
+            bwa.hash_tree_root(),
+            merkleize(&[
+                bwa.block.hash_tree_root(),
+                bwa.proposer_attestation.hash_tree_root(),
+            ]),
+        );
+        // Swapping the two field roots changes the result → order is load-bearing.
+        let swapped = merkleize(&[
+            bwa.proposer_attestation.hash_tree_root(),
+            bwa.block.hash_tree_root(),
+        ]);
+        assert_ne!(bwa.hash_tree_root(), swapped);
+    }
+
+    #[test]
+    fn block_with_attestation_hash_tree_root_responds_to_proposer_change() {
+        let baseline = sample_block_with_attestation().hash_tree_root();
+        let mut bwa = sample_block_with_attestation();
+        bwa.proposer_attestation = sample_attestation(123);
+        // Proposer is a sibling, not swallowed by the body.
+        assert_ne!(bwa.hash_tree_root(), baseline);
+    }
+
+    #[test]
+    fn block_with_attestation_decode_rejects_short_input() {
+        let err =
+            decode::<BlockWithAttestation>(&[0_u8; BLOCK_WITH_ATTESTATION_FIXED_PART_LEN - 1])
+                .unwrap_err();
         assert!(matches!(err, SszError::Decode { .. }));
     }
 
+    // -- SignedBlockWithAttestation -----------------------------------------
+
     #[test]
-    fn signed_block_decode_rejects_invalid_offset() {
-        let mut bytes = vec![0_u8; SIGNED_BLOCK_FIXED_PART_LEN + BLOCK_FIXED_PART_LEN + 4];
-        // Offset = 4003 instead of 4004.
-        bytes[..4].copy_from_slice(&4003_u32.to_le_bytes());
-        let err = decode::<SignedBlock>(&bytes).unwrap_err();
-        assert!(matches!(err, SszError::Decode { .. }));
+    fn signed_block_with_attestation_two_offset_layout() {
+        let sbwa = sample_signed_block_with_attestation();
+        let bytes = encode(&sbwa);
+        assert_eq!(&bytes[0..4], &8_u32.to_le_bytes()); // message offset
+        let msg_len = sbwa.message.ssz_bytes_len();
+        assert_eq!(
+            &bytes[4..8],
+            &u32::try_from(8 + msg_len).unwrap().to_le_bytes(), // signature offset
+        );
+        assert_eq!(decode::<SignedBlockWithAttestation>(&bytes).unwrap(), sbwa);
     }
 
     #[test]
-    fn signed_block_hash_tree_root_responds_to_signature_change() {
-        let baseline = sample_signed_block().hash_tree_root();
-        let mut sb = sample_signed_block();
-        let mut sig = [0xcd_u8; 4000];
-        sig[0] = 0x00;
-        sb.signature = Bytes4000::new(sig);
-        assert_ne!(sb.hash_tree_root(), baseline);
+    fn signed_block_with_attestation_empty_signature_two_offset_header() {
+        let mut sbwa = sample_signed_block_with_attestation();
+        sbwa.signature = BlockSignatures::default();
+        let bytes = encode(&sbwa);
+        assert_eq!(&bytes[0..4], &8_u32.to_le_bytes());
+        // Empty signature payload → signature offset == total length.
+        assert_eq!(
+            &bytes[4..8],
+            &u32::try_from(bytes.len()).unwrap().to_le_bytes(),
+        );
+        assert_eq!(decode::<SignedBlockWithAttestation>(&bytes).unwrap(), sbwa);
+    }
+
+    #[test]
+    fn signed_block_with_attestation_hash_tree_root_is_two_field_merkle() {
+        let sbwa = sample_signed_block_with_attestation();
+        assert_eq!(
+            sbwa.hash_tree_root(),
+            merkleize(&[
+                sbwa.message.hash_tree_root(),
+                sbwa.signature.hash_tree_root(),
+            ]),
+        );
+        // Mutating the signature list alone changes the root.
+        let mut m = sbwa.clone();
+        m.signature = [sample_signature(9)].into_iter().collect();
+        assert_ne!(m.hash_tree_root(), sbwa.hash_tree_root());
+    }
+
+    #[test]
+    fn signed_block_with_attestation_decode_rejects_short_and_bad_offset() {
+        assert!(matches!(
+            decode::<SignedBlockWithAttestation>(&[0_u8; 7]),
+            Err(SszError::Decode { .. })
+        ));
+        let mut bytes = encode(&sample_signed_block_with_attestation());
+        bytes[0..4].copy_from_slice(&7_u32.to_le_bytes()); // message offset != 8
+        assert!(matches!(
+            decode::<SignedBlockWithAttestation>(&bytes),
+            Err(SszError::Decode { .. })
+        ));
     }
 
     // -- property tests ----------------------------------------------------
@@ -611,7 +855,7 @@ mod tests {
 
         #[test]
         fn block_body_ssz_round_trips(n in 0_usize..=8) {
-            let attestations = (0..n).map(|i| sample_signed_attestation(i as u64)).collect();
+            let attestations = (0..n).map(|i| sample_attestation(i as u64)).collect();
             let body = BlockBody { attestations };
             let back: BlockBody = decode(&encode(&body)).unwrap();
             prop_assert_eq!(back, body);
@@ -619,7 +863,7 @@ mod tests {
 
         #[test]
         fn block_ssz_round_trips(slot in any::<u64>(), n in 0_usize..=4) {
-            let attestations = (0..n).map(|i| sample_signed_attestation(i as u64)).collect();
+            let attestations = (0..n).map(|i| sample_attestation(i as u64)).collect();
             let b = Block {
                 slot: Slot::new(slot),
                 body: BlockBody { attestations },
@@ -630,18 +874,24 @@ mod tests {
         }
 
         #[test]
-        fn signed_block_ssz_round_trips(slot in any::<u64>(), n in 0_usize..=4) {
-            let attestations = (0..n).map(|i| sample_signed_attestation(i as u64)).collect();
-            let sb = SignedBlock {
-                message: Block {
-                    slot: Slot::new(slot),
-                    body: BlockBody { attestations },
-                    ..Default::default()
+        fn signed_block_with_attestation_ssz_round_trips(slot in any::<u64>(), n in 0_usize..=4) {
+            let attestations = (0..n).map(|i| sample_attestation(i as u64)).collect();
+            let signature: BlockSignatures = (0..=n)
+                .map(|i| sample_signature(u8::try_from(i).unwrap()))
+                .collect();
+            let sbwa = SignedBlockWithAttestation {
+                message: BlockWithAttestation {
+                    block: Block {
+                        slot: Slot::new(slot),
+                        body: BlockBody { attestations },
+                        ..Default::default()
+                    },
+                    proposer_attestation: sample_attestation(slot),
                 },
-                signature: Bytes4000::new([0x77; 4000]),
+                signature,
             };
-            let back: SignedBlock = decode(&encode(&sb)).unwrap();
-            prop_assert_eq!(back, sb);
+            let back: SignedBlockWithAttestation = decode(&encode(&sbwa)).unwrap();
+            prop_assert_eq!(back, sbwa);
         }
     }
 }

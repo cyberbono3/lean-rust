@@ -34,7 +34,6 @@ independent root anchor — worth doing, tracked separately.
 | `slot12-justified.checkpoint.ssz`    | `Checkpoint`      |
 | `slot1.blockheader.ssz`              | `BlockHeader`     |
 | `slot1-empty.block.ssz`              | `Block`           |
-| `slot1-empty.signedblock.ssz`        | `SignedBlock`     |
 | `slot7.attestationdata.ssz`          | `AttestationData` |
 
 `slot7.attestationdata.ssz` was renamed from `slot7-vote.vote.ssz`; its bytes are unchanged.
@@ -50,10 +49,16 @@ These vectors witness codec self-consistency and the snappy + length-prefixed fr
 a realistic multi-KB attestation payload. They are **not** cross-implementation parity evidence
 and must not be read as such.
 
-| Fixture                            | Container           | Size | HashTreeRoot                                                       |
-| ---------------------------------- | ------------------- | ---- | ------------------------------------------------------------------ |
-| `validator3.signedattestation.ssz` | `SignedAttestation` | 3252 | `f698770b0bf6ae48b597bee138698b4829b5452d762f4ba9b2db56a32c18fbeb` |
-| `two-attestations.blockbody.ssz`   | `BlockBody`         | 6508 | `f083211414094ef6acf38b23fb46085225ae0aad4fad9c3933f6bf907f7eabf0` |
+| Fixture                            | Container                    | Size | HashTreeRoot                                                       |
+| ---------------------------------- | ---------------------------- | ---- | ------------------------------------------------------------------ |
+| `validator3.signedattestation.ssz` | `SignedAttestation`          | 3252 | `f698770b0bf6ae48b597bee138698b4829b5452d762f4ba9b2db56a32c18fbeb` |
+| `two-attestations.blockbody.ssz`   | `BlockBody`                  |  276 | `0a786852dc25250a5f62918d10bc7a2d19d448cd4b696f015d2ca3ad8942fe10` |
+| `slot1-empty.signedblock.ssz`      | `SignedBlockWithAttestation` |  236 | `6210c7d3a20a8d046283fdbd2257543c3ee100f29342fa4c48d9095d19dfbf50` |
+
+The block-envelope refactor moves `slot1-empty.signedblock.ssz` here (from `wire-parity/`) as a
+self-generated devnet-1 vector, and re-shapes `two-attestations.blockbody.ssz`: the block body
+now holds plain `Attestation` elements (2 × 136 + 4 offset = 276 bytes), with per-vote signatures
+carried by the block-signature list on `SignedBlockWithAttestation` rather than inside the body.
 
 They exist because the devnet-1 attestation wire has no published upstream corpus yet. The
 devnet-0 `SignedVote` blobs they replace (4136 and 8276 bytes) could not be re-encoded into the

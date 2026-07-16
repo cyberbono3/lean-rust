@@ -26,7 +26,7 @@
 
 use lean_wire::NetworkingError;
 use libp2p::gossipsub;
-use protocol::{SignedAttestation, SignedBlock};
+use protocol::{SignedAttestation, SignedBlockWithAttestation};
 use ssz::Decode;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -70,9 +70,9 @@ impl<T> GossipReceiver<T> {
     }
 }
 
-/// Inbound channel for [`SignedBlock`] payloads received on
+/// Inbound channel for [`SignedBlockWithAttestation`] payloads received on
 /// [`lean_wire::BLOCK_TOPIC_V1`].
-pub type BlockReceiver = GossipReceiver<SignedBlock>;
+pub type BlockReceiver = GossipReceiver<SignedBlockWithAttestation>;
 
 /// Inbound channel for [`SignedAttestation`] payloads received on
 /// [`lean_wire::VOTE_TOPIC_V1`].
@@ -94,7 +94,7 @@ pub type VoteReceiver = GossipReceiver<SignedAttestation>;
 pub(crate) fn route_gossipsub_message(
     message_id: &gossipsub::MessageId,
     msg: &gossipsub::Message,
-    block_tx: &mpsc::Sender<SignedBlock>,
+    block_tx: &mpsc::Sender<SignedBlockWithAttestation>,
     vote_tx: &mpsc::Sender<SignedAttestation>,
 ) {
     // Drain the cache exactly once per message regardless of topic —
@@ -105,7 +105,7 @@ pub(crate) fn route_gossipsub_message(
     let topic_str = msg.topic.as_str();
     match topic_str {
         lean_wire::BLOCK_TOPIC_V1 => {
-            forward::<SignedBlock>(&msg.data, cached.as_deref(), block_tx, "block");
+            forward::<SignedBlockWithAttestation>(&msg.data, cached.as_deref(), block_tx, "block");
         }
         lean_wire::VOTE_TOPIC_V1 => {
             forward::<SignedAttestation>(&msg.data, cached.as_deref(), vote_tx, "vote");
@@ -164,10 +164,10 @@ mod tests {
 
     #[tokio::test]
     async fn routes_valid_block_to_block_receiver() {
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
+        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
         let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
-        let block = SignedBlock::default();
+        let block = SignedBlockWithAttestation::default();
         let payload = lean_wire::encode_gossip(&block);
         route_gossipsub_message(
             &dummy_id(),
@@ -183,7 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn routes_valid_vote_to_vote_receiver() {
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
+        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
         let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
         let vote = SignedAttestation::default();
@@ -205,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_topic_is_ignored() {
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
+        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
         let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
         route_gossipsub_message(
@@ -221,11 +221,11 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_block_payload_drops_silently() {
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
+        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
         let (vote_tx, _vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
         // Valid snappy frame, but the decompressed bytes are too short
-        // to be a SignedBlock — decode_gossip returns NetworkingError::Ssz.
+        // to be a SignedBlockWithAttestation — decode_gossip returns NetworkingError::Ssz.
         let payload = lean_wire::encode_gossip_data(&[0_u8; 4]);
         route_gossipsub_message(
             &dummy_id(),
@@ -249,10 +249,10 @@ mod tests {
         //    possible because the cache supplied the SSZ bytes.
         use crate::p2p::host::behaviour::gossipsub_message_id;
 
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlock>(8);
+        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
         let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
 
-        let block = SignedBlock::default();
+        let block = SignedBlockWithAttestation::default();
         let payload = lean_wire::encode_gossip(&block);
         let mut msg = synth_message(lean_wire::BLOCK_TOPIC_V1, payload);
         let id = gossipsub_message_id(&msg);

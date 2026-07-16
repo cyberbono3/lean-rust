@@ -4,12 +4,6 @@
 //! sample containers. Each helper returns a deterministic, populated value
 //! suitable for round-trip and hash-tree-root assertions.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced. `expect` rather than `allow`: once this file's last site
-// moves to `Signature`, the unfulfilled expectation fails the build instead of
-// lingering as a stale allow.
-#![expect(deprecated)]
 #![allow(dead_code)]
 // `assert_ssz_round_trip` reports a decode failure by panicking, which is the
 // only way a test helper can fail. Narrower than the blanket allow a `mod tests`
@@ -18,9 +12,12 @@
 #![allow(clippy::panic)]
 
 use ssz::{decode, encode, Decode, Encode};
-use types::{Bytes32, Bytes4000, Signature};
+use types::{Bytes32, Signature};
 
-use crate::block::{Block, BlockBody, BlockHeader, SignedBlock};
+use crate::block::{
+    Block, BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation,
+    SignedBlockWithAttestation,
+};
 use crate::checkpoint::Checkpoint;
 use crate::slot::Slot;
 use crate::validator::ValidatorIndex;
@@ -59,6 +56,20 @@ pub(crate) fn sample_signature(seed: u8) -> Signature {
     Signature::new([seed; Signature::LEN])
 }
 
+/// Deterministic [`Attestation`] keyed off `seed`.
+pub(crate) fn sample_attestation(seed: u64) -> Attestation {
+    let byte = u8::try_from(seed & 0xff).unwrap_or(0);
+    Attestation {
+        validator_id: ValidatorIndex::new(seed),
+        data: AttestationData {
+            slot: Slot::new(seed),
+            head: Checkpoint::new(Bytes32::new([byte; 32]), Slot::new(seed)),
+            target: Checkpoint::default(),
+            source: Checkpoint::default(),
+        },
+    }
+}
+
 /// Deterministic [`SignedAttestation`] keyed off `seed`.
 pub(crate) fn sample_signed_attestation(seed: u64) -> SignedAttestation {
     let byte = u8::try_from(seed & 0xff).unwrap_or(0);
@@ -87,7 +98,7 @@ pub(crate) fn sample_block_header() -> BlockHeader {
     }
 }
 
-/// Canonical [`Block`] with two attestations.
+/// Canonical [`Block`] with two plain attestations.
 pub(crate) fn sample_block() -> Block {
     Block {
         slot: Slot::new(7),
@@ -95,18 +106,30 @@ pub(crate) fn sample_block() -> Block {
         parent_root: Bytes32::new([0x11; 32]),
         state_root: Bytes32::new([0x22; 32]),
         body: BlockBody {
-            attestations: vec![sample_signed_attestation(1), sample_signed_attestation(2)],
+            attestations: vec![sample_attestation(1), sample_attestation(2)],
         },
     }
 }
 
-/// Canonical [`SignedBlock`] wrapping [`sample_block`] with a 0xcd signature.
-///
-/// Still on the [`Bytes4000`] placeholder — the block envelope moves to
-/// [`Signature`] with the block container refactor, not here.
-pub(crate) fn sample_signed_block() -> SignedBlock {
-    SignedBlock {
-        message: sample_block(),
-        signature: Bytes4000::new([0xcd; 4000]),
+/// Canonical [`BlockWithAttestation`] — [`sample_block`] plus a proposer
+/// attestation sibling.
+pub(crate) fn sample_block_with_attestation() -> BlockWithAttestation {
+    BlockWithAttestation {
+        block: sample_block(),
+        proposer_attestation: sample_attestation(2),
+    }
+}
+
+/// Deterministic [`BlockSignatures`] with `n` signatures (seeds `0..n`).
+pub(crate) fn sample_block_signatures(n: u8) -> BlockSignatures {
+    (0..n).map(sample_signature).collect()
+}
+
+/// Canonical [`SignedBlockWithAttestation`] wrapping
+/// [`sample_block_with_attestation`] with three signatures.
+pub(crate) fn sample_signed_block_with_attestation() -> SignedBlockWithAttestation {
+    SignedBlockWithAttestation {
+        message: sample_block_with_attestation(),
+        signature: sample_block_signatures(3),
     }
 }

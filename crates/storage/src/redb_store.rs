@@ -14,14 +14,14 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use protocol::{Checkpoint, SignedBlock, State};
+use protocol::{Checkpoint, SignedBlockWithAttestation, State};
 use redb::{Database, TableDefinition};
 use types::Bytes32;
 
 use crate::error::StorageError;
 use crate::store::{HeadInfo, Store};
 
-/// `root -> SSZ(SignedBlock)`.
+/// `root -> SSZ(SignedBlockWithAttestation)`.
 const BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 /// `root -> SSZ(State)`.
 const STATES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("states");
@@ -151,7 +151,11 @@ fn decode_head(bytes: &[u8]) -> Result<HeadInfo, StorageError> {
 }
 
 impl Store for RedbStore {
-    fn save_block(&self, root: Bytes32, block: SignedBlock) -> Result<(), StorageError> {
+    fn save_block(
+        &self,
+        root: Bytes32,
+        block: SignedBlockWithAttestation,
+    ) -> Result<(), StorageError> {
         self.put(BLOCKS, root.0.as_slice(), &ssz::encode(&block))
     }
 
@@ -169,7 +173,7 @@ impl Store for RedbStore {
     fn save_accepted(
         &self,
         block_root: Bytes32,
-        block: SignedBlock,
+        block: SignedBlockWithAttestation,
         state: State,
         head: HeadInfo,
     ) -> Result<(), StorageError> {
@@ -206,7 +210,10 @@ impl Store for RedbStore {
         self.contains(STATES, root.0.as_slice())
     }
 
-    fn load_block(&self, root: &Bytes32) -> Result<Option<SignedBlock>, StorageError> {
+    fn load_block(
+        &self,
+        root: &Bytes32,
+    ) -> Result<Option<SignedBlockWithAttestation>, StorageError> {
         match self.get(BLOCKS, root.0.as_slice())? {
             Some(bytes) => Ok(Some(ssz::decode(&bytes).map_err(backend)?)),
             None => Ok(None),

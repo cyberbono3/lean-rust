@@ -5,7 +5,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
-use protocol::{Block, Checkpoint, SignedBlock, Slot, State};
+use protocol::{
+    Attestation, Block, BlockSignatures, BlockWithAttestation, Checkpoint,
+    SignedBlockWithAttestation, Slot, State,
+};
 use runtime::api::{HttpService, MetricsService, Recorder};
 use runtime::chain::{ChainMetrics, Service as ChainService};
 use runtime::core::{Node, NodeConfig};
@@ -13,13 +16,19 @@ use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
 use storage::{HeadInfo, MemoryStore, RedbStore, Store};
 use types::Bytes32;
-// Retained construction sites for the deprecated `Bytes4000` placeholder; move
-// to `Signature` with the container refactor. Scoped to the import, the one
-// production site (`new_devnet`), and the test module, so unrelated deprecations
-// in the rest of this file are still surfaced. `expect` rather than `allow`:
-// once the sites move, the unfulfilled expectation fails the build.
-#[expect(deprecated)]
-use types::Bytes4000;
+
+/// Wraps an unsigned [`Block`] into a [`SignedBlockWithAttestation`] with a
+/// default proposer attestation and an empty signature list. Anchor/genesis and
+/// devnet-produced blocks carry these placeholders until sign-path wiring lands.
+fn signed_block_envelope(block: Block) -> SignedBlockWithAttestation {
+    SignedBlockWithAttestation {
+        message: BlockWithAttestation {
+            block,
+            proposer_attestation: Attestation::default(),
+        },
+        signature: BlockSignatures::default(),
+    }
+}
 
 use crate::consensus_loop::ConsensusLoop;
 
@@ -80,7 +89,6 @@ pub struct Config {
 ///
 /// Returns an error if the engine rejects the genesis anchor, p2p host
 /// construction fails, or the consensus loop cannot load its validators.
-#[expect(deprecated)]
 pub fn new_devnet(config: Config) -> Result<Node> {
     let Config {
         node,
@@ -122,10 +130,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     } else {
         let anchor_slot = genesis_block.slot;
         let anchor_state = genesis_state.clone();
-        let signed_anchor = SignedBlock {
-            message: genesis_block.clone(),
-            signature: Bytes4000::default(),
-        };
+        let signed_anchor = signed_block_envelope(genesis_block.clone());
         let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
         let anchor_root = engine.head();
         let finalized = engine.latest_finalized();
@@ -294,7 +299,7 @@ fn resume_anchor(store: &dyn Store) -> Result<Option<(Bytes32, State, Block)>> {
     ) else {
         return Ok(None);
     };
-    Ok(Some((head_root, state, block.message)))
+    Ok(Some((head_root, state, block.message.block)))
 }
 
 fn persist_anchor(
@@ -302,7 +307,7 @@ fn persist_anchor(
     anchor_root: Bytes32,
     anchor_slot: Slot,
     finalized: Checkpoint,
-    signed_anchor: SignedBlock,
+    signed_anchor: SignedBlockWithAttestation,
     anchor_state: State,
 ) -> Result<()> {
     store
@@ -324,7 +329,6 @@ fn persist_anchor(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[expect(deprecated)]
 mod tests {
     use super::*;
     use runtime::duties::GenesisTimeUnix;
@@ -422,10 +426,7 @@ mod tests {
         let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
         let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
         let anchor_slot = genesis_block.slot;
-        let signed_anchor = SignedBlock {
-            message: genesis_block.clone(),
-            signature: Bytes4000::default(),
-        };
+        let signed_anchor = signed_block_envelope(genesis_block.clone());
         let engine =
             runtime::chain::engine::Engine::from_anchor(genesis_state.clone(), genesis_block)
                 .unwrap();
@@ -543,10 +544,7 @@ mod tests {
             runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
         let root = engine.head();
         let finalized = engine.latest_finalized();
-        let signed = SignedBlock {
-            message: block,
-            signature: Bytes4000::default(),
-        };
+        let signed = signed_block_envelope(block);
 
         persist_anchor(&store, root, slot, finalized, signed.clone(), state).unwrap();
 
@@ -574,10 +572,7 @@ mod tests {
         let root = engine.head();
         let slot = block.slot;
         let finalized = engine.latest_finalized();
-        let signed = SignedBlock {
-            message: block.clone(),
-            signature: Bytes4000::default(),
-        };
+        let signed = signed_block_envelope(block.clone());
 
         // (2) Head + block + state present → Some((root, state, block)) at head.
         let full = MemoryStore::default();
@@ -621,10 +616,7 @@ mod tests {
             let engine =
                 runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
             let root = engine.head();
-            let signed = SignedBlock {
-                message: block.clone(),
-                signature: Bytes4000::default(),
-            };
+            let signed = signed_block_envelope(block.clone());
             persist_anchor(
                 &store,
                 root,
@@ -674,10 +666,7 @@ mod tests {
         let store: Arc<dyn Store> = Arc::new(RedbStore::new(db_path).unwrap());
         let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
         let anchor_slot = genesis_block.slot;
-        let signed_anchor = SignedBlock {
-            message: genesis_block.clone(),
-            signature: Bytes4000::default(),
-        };
+        let signed_anchor = signed_block_envelope(genesis_block.clone());
         let engine =
             runtime::chain::engine::Engine::from_anchor(genesis_state.clone(), genesis_block)
                 .unwrap();

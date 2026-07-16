@@ -8,7 +8,7 @@
 //!
 //! Multiple frames may be concatenated on a single stream — the
 //! `BlocksByRoot` response shape is a sequence of one such frame per
-//! `SignedBlock` chunk.
+//! `SignedBlockWithAttestation` chunk.
 //! [`read_req_resp_frame`] therefore must consume exactly the bytes that
 //! belong to one frame, leaving the cursor positioned at the start of the
 //! next.

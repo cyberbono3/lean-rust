@@ -1,11 +1,5 @@
 //! Integration tests for `Service::import_block`.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced. `expect` rather than `allow`: once this file's last site
-// moves to `Signature`, the unfulfilled expectation fails the build instead of
-// lingering as a stale allow.
-#![expect(deprecated)]
 #![allow(
     missing_docs,
     clippy::expect_used,
@@ -17,7 +11,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use protocol::{Block, BlockBody, SignedBlock, Slot, ValidatorIndex};
+use protocol::{
+    Attestation, Block, BlockBody, BlockSignatures, BlockWithAttestation,
+    SignedBlockWithAttestation, Slot, ValidatorIndex,
+};
 use runtime::chain::engine::test_fixtures::{
     engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS,
 };
@@ -25,7 +22,7 @@ use runtime::chain::engine::{BlockImportResult, Engine};
 use runtime::chain::Service;
 use ssz::HashTreeRoot;
 use storage::{HeadInfo, MemoryStore, StorageError, Store};
-use types::{Bytes32, Bytes4000};
+use types::Bytes32;
 
 /// `Store` decorator that counts each `save_*` invocation.
 ///
@@ -51,7 +48,11 @@ impl CountingStore {
 }
 
 impl Store for CountingStore {
-    fn save_block(&self, root: Bytes32, block: SignedBlock) -> Result<(), StorageError> {
+    fn save_block(
+        &self,
+        root: Bytes32,
+        block: SignedBlockWithAttestation,
+    ) -> Result<(), StorageError> {
         self.save_block_calls.fetch_add(1, Ordering::SeqCst);
         self.inner.save_block(root, block)
     }
@@ -69,7 +70,10 @@ impl Store for CountingStore {
     fn has_state(&self, root: &Bytes32) -> Result<bool, StorageError> {
         self.inner.has_state(root)
     }
-    fn load_block(&self, root: &Bytes32) -> Result<Option<SignedBlock>, StorageError> {
+    fn load_block(
+        &self,
+        root: &Bytes32,
+    ) -> Result<Option<SignedBlockWithAttestation>, StorageError> {
         self.inner.load_block(root)
     }
     fn load_state(&self, root: &Bytes32) -> Result<Option<protocol::State>, StorageError> {
@@ -83,10 +87,10 @@ impl Store for CountingStore {
 /// Produces a slot-1 block on a fresh producer engine; the returned
 /// `(signed_block, block_root)` pair is suitable for replaying through a
 /// separate importer engine.
-fn slot_1_block() -> (SignedBlock, Bytes32) {
+fn slot_1_block() -> (SignedBlockWithAttestation, Bytes32) {
     let producer = engine_at_genesis(ENGINE_VALIDATORS);
     let signed = produce_signed_block(&producer, Slot::ONE, ValidatorIndex::new(1));
-    let root: Bytes32 = signed.message.hash_tree_root().into();
+    let root: Bytes32 = signed.message.block.hash_tree_root().into();
     (signed, root)
 }
 
@@ -118,7 +122,7 @@ async fn accepted_block_persists_to_storage() {
     // Block, state, and head all persisted.
     assert!(store.has_block(&root).unwrap());
     let saved_block = store.load_block(&root).unwrap().unwrap();
-    assert_eq!(saved_block.message.slot, Slot::ONE);
+    assert_eq!(saved_block.message.block.slot, Slot::ONE);
 
     let saved_state = store.load_state(&root).unwrap().unwrap();
     let saved_state_root: Bytes32 = saved_state.hash_tree_root().into();
@@ -153,15 +157,18 @@ async fn missing_parent_surfaces_outcome_without_persist() {
     let (service, store, _engine) = fresh_service();
 
     let bogus_parent = Bytes32::new([0xaa; 32]);
-    let orphan = SignedBlock {
-        message: Block {
-            slot: Slot::ONE,
-            proposer_index: ValidatorIndex::new(1),
-            parent_root: bogus_parent,
-            state_root: Bytes32::zero(),
-            body: BlockBody::default(),
+    let orphan = SignedBlockWithAttestation {
+        message: BlockWithAttestation {
+            block: Block {
+                slot: Slot::ONE,
+                proposer_index: ValidatorIndex::new(1),
+                parent_root: bogus_parent,
+                state_root: Bytes32::zero(),
+                body: BlockBody::default(),
+            },
+            proposer_attestation: Attestation::default(),
         },
-        signature: Bytes4000::new([0; 4000]),
+        signature: BlockSignatures::default(),
     };
     let outcome = service.import_block(orphan).await.unwrap();
     assert!(matches!(

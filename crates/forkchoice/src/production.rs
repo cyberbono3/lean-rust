@@ -110,7 +110,7 @@ impl Store {
 
         let (attestations, post_state) =
             self.converge_attestations(head_root, slot, validator, &head_state)?;
-        self.finalize_produced_block(head_root, slot, validator, attestations, post_state)
+        self.finalize_produced_block(head_root, slot, validator, &attestations, post_state)
     }
 
     /// Convergent attestation gathering: rebuild the candidate's post-state
@@ -148,7 +148,7 @@ impl Store {
         head_root: Bytes32,
         slot: Slot,
         validator: ValidatorIndex,
-        attestations: Vec<SignedAttestation>,
+        attestations: &[SignedAttestation],
         post_state: State,
     ) -> Result<ProducedBlock, ForkchoiceError> {
         let post_state_root: Bytes32 = post_state.hash_tree_root().into();
@@ -157,7 +157,7 @@ impl Store {
             proposer_index: validator,
             parent_root: head_root,
             state_root: post_state_root,
-            body: BlockBody { attestations },
+            body: body_from(attestations),
         };
         let root: Bytes32 = block.hash_tree_root().into();
         self.track_block(block.clone(), post_state.clone())?;
@@ -237,6 +237,15 @@ impl Store {
     }
 }
 
+/// Builds a [`BlockBody`] of plain attestations from pooled signed votes. The
+/// per-vote signature placeholders are dropped here; the block-signature list is
+/// a later (sign-path) concern.
+fn body_from(votes: &[SignedAttestation]) -> BlockBody {
+    BlockBody {
+        attestations: votes.iter().map(|sv| sv.message).collect(),
+    }
+}
+
 /// Builds a candidate block + post-state for `(slot, validator)` over
 /// `votes`. The candidate's `state_root` is left as `Bytes32::zero()`;
 /// [`Store::produce_block`] commits the real value once the convergence
@@ -253,9 +262,7 @@ fn build_candidate_block(
         proposer_index: validator,
         parent_root: head_root,
         state_root: Bytes32::zero(),
-        body: BlockBody {
-            attestations: votes.to_vec(),
-        },
+        body: body_from(votes),
     };
 
     let mut next = advance_state_to_slot(head_state.clone(), slot)?;
@@ -381,7 +388,7 @@ mod tests {
     }
 
     fn dummy_signed_vote() -> SignedAttestation {
-        use protocol::{Attestation, AttestationData};
+        use protocol::Attestation;
         SignedAttestation {
             message: Attestation {
                 validator_id: ValidatorIndex::new(0),
@@ -392,7 +399,7 @@ mod tests {
                     source: Checkpoint::default(),
                 },
             },
-            signature: types::Signature::zero(),
+            signature: types::Signature::new([0; types::Signature::LEN]),
         }
     }
 
