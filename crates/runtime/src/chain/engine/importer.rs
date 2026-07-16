@@ -113,7 +113,10 @@ impl Engine {
     /// pending-vote pool when newer than the existing entry.
     ///
     /// Returns a structured outcome — see [`AttestationImportResult`].
-    pub fn import_attestation(&self, signed_attestation: SignedAttestation) -> AttestationImportResult {
+    pub fn import_attestation(
+        &self,
+        signed_attestation: SignedAttestation,
+    ) -> AttestationImportResult {
         let validator_id = signed_attestation.message.validator_id;
         let mut store = self.lock();
 

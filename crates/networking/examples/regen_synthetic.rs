@@ -8,7 +8,6 @@
 //! Run: `cargo run -p lean-wire --example regen_synthetic`.
 
 use std::error::Error;
-use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -17,17 +16,6 @@ use protocol::{
 };
 use ssz::{encode, HashTreeRoot};
 use types::{Bytes32, Signature};
-
-/// Lower-hex encoding for the PROVENANCE root column — paste-ready and
-/// diffable across regenerations.
-fn hex_lower(bytes: &[u8; 32]) -> String {
-    bytes.iter().fold(String::with_capacity(64), |mut s, b| {
-        // Writing to a `String` is infallible; the `Result` is discarded rather
-        // than unwrapped to keep the crate's no-unwrap policy intact.
-        let _ = write!(s, "{b:02x}");
-        s
-    })
-}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let signed = SignedAttestation {
@@ -54,15 +42,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::write(dir.join("validator3.signedattestation.ssz"), &signed_bytes)?;
     fs::write(dir.join("two-attestations.blockbody.ssz"), &body_bytes)?;
 
+    // `hex::encode` produces the same lower-hex the PROVENANCE table records; it
+    // is already a dev-dependency and used by tests/parity.rs.
     println!(
         "validator3.signedattestation.ssz  {} bytes  root {}",
         signed_bytes.len(),
-        hex_lower(&signed.hash_tree_root()),
+        hex::encode(signed.hash_tree_root()),
     );
     println!(
         "two-attestations.blockbody.ssz    {} bytes  root {}",
         body_bytes.len(),
-        hex_lower(&body.hash_tree_root()),
+        hex::encode(body.hash_tree_root()),
     );
     Ok(())
 }

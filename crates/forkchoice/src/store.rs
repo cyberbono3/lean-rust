@@ -21,7 +21,7 @@
 //! so the maps grow by ≈3.2 KB per validator. Vote-pool churn happens
 //! through [`Store::process_attestation`] and the phase hooks.
 
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
 use config::INTERVALS_PER_SLOT;
@@ -712,8 +712,13 @@ fn evict_if_older(
     validator: ValidatorIndex,
     newer_than: Slot,
 ) -> bool {
-    matches!(map.get(&validator), Some(prev) if prev.message.data.slot < newer_than)
-        && map.remove(&validator).is_some()
+    match map.entry(validator) {
+        Entry::Occupied(e) if e.get().message.data.slot < newer_than => {
+            e.remove();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Extracts the per-validator `head` checkpoint from a vote map. Shared by
