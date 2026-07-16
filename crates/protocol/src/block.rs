@@ -506,16 +506,16 @@ mod tests {
     // -- Config-derived caps (single source) --------------------------------
 
     /// Acceptance test: the `List<Signature, N>` cap and the `Bitlist<N>` cap
-    /// resolve to the identical single source.
+    /// resolve to the same cap value as the config single source.
     ///
-    /// Both clauses are structurally tautological (each side derives from the
-    /// same const) — they are STRUCTURE guards, not value guards: clause (a)
-    /// fails if `MAX_ATTESTATIONS` stops aliasing the config const, clause (b)
-    /// (a placeholder witness that hard-codes the const into the generic slot)
-    /// documents that the `Bitlist<N>` cap will consume the same source once the
-    /// aggregation type is authored. The VALUE guarantee is carried by
-    /// `no_bare_registry_literal_in_cap_consts` (asserts `== 4_096`) + the frozen
-    /// state-root regression vector, not by this test.
+    /// These are value-equality guards, not structural alias checks: `assert_eq!`
+    /// compares VALUES, so it catches a value divergence but NOT a refactor that
+    /// re-inlines an equal literal in place of the alias (that stays green).
+    /// Clause (b) is a placeholder witness that hard-codes the const into the
+    /// generic slot, documenting that the `Bitlist<N>` cap will consume the same
+    /// source once the aggregation type is authored. The bare-literal ban itself
+    /// is enforced by the acceptance grep (`rg 'validator_registry_limit as
+    /// usize'` resolving to `config` only), not by these asserts.
     #[test]
     fn list_and_bitlist_caps_share_one_source() {
         use types::Bitlist;
@@ -531,10 +531,12 @@ mod tests {
         );
     }
 
-    /// Source-of-truth guard: re-inlining `4096`/`1 << 12` on a cap const breaks
-    /// this assertion (invariant check, not a text grep).
+    /// Value guard: the cap consts equal the config single source, which equals
+    /// the canonical `4_096`. Catches a VALUE change to the cap (which would move
+    /// every SSZ `List`/`Bitlist` bound); it does NOT detect a same-value literal
+    /// re-inlined in place of the alias — that is the acceptance grep's job.
     #[test]
-    fn no_bare_registry_literal_in_cap_consts() {
+    fn cap_consts_match_config_single_source() {
         assert_eq!(MAX_ATTESTATIONS, config::VALIDATOR_REGISTRY_LIMIT);
         assert_eq!(config::VALIDATOR_REGISTRY_LIMIT, 4_096);
     }

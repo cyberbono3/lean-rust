@@ -49,7 +49,8 @@ pub const SECONDS_PER_INTERVAL: u64 = DEVNET_CONFIG.seconds_per_slot / INTERVALS
 /// SSZ `List`/`Bitlist` cap `N` — the single source for every
 /// `List<Signature, N>` and `Bitlist<N>` bound across the workspace.
 ///
-/// Pinned to [`DEVNET_CONFIG`]`.validator_registry_limit` (`4_096` on devnet0).
+/// Pinned to the `validator_registry_limit` field of [`DEVNET_CONFIG`]
+/// (`4_096` on devnet0).
 /// The one and only `usize` derivation of the cap: downstream consts
 /// (`protocol`'s `MAX_ATTESTATIONS`, `VALIDATOR_REGISTRY_LIMIT`) alias this by
 /// name rather than re-casting.
