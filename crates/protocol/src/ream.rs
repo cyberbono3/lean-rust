@@ -5,7 +5,7 @@
 //! from the *same* `genesis.ssz`, produced by the
 //! `eth-beacon-genesis:pk910-leanchain` generator. That file uses a
 //! **compact** state layout — `config`, the two checkpoints, and four
-//! variable-field offsets — rather than the native 9-field [`State`] SSZ
+//! variable-field offsets — rather than the native ten-field [`State`] SSZ
 //! container defined in [`crate::state`]. This module isolates the
 //! decoder for that interop shape so the canonical container code does
 //! not carry it.
@@ -23,12 +23,12 @@
 //!
 //! Beyond decoding the compact genesis, cross-client interop also requires
 //! the *native* [`State`] hash-tree-root (defined in [`crate::state`]) to
-//! commit to the same nine-field shape the ream client uses, so both
+//! commit to the same ten-field shape the ream client uses, so both
 //! clients compute identical state roots over the wire. The `tests` module
-//! below pins that shape: perturbing any of the eight
-//! config / checkpoint / list / bitlist fields changes the root. The
-//! remaining `slot` / `latest_block_header` fields are covered by a sibling
-//! check in `state.rs`.
+//! below pins that shape: perturbing any of the nine
+//! config / checkpoint / list / bitlist / registry fields changes the root.
+//! The remaining `slot` / `latest_block_header` fields are covered by a
+//! sibling check in `state.rs`.
 
 use ssz::{Decode, DecodeError, HashTreeRoot};
 use types::Bitlist;
@@ -40,8 +40,17 @@ use crate::internal::{
 };
 use crate::state::{
     ProtocolConfig, State, HISTORICAL_ROOTS_LIMIT, JUSTIFICATIONS_VALIDATORS_LIMIT,
-    PROTOCOL_CONFIG_SSZ_LEN, STATE_VARIABLE_FIELD_COUNT,
+    PROTOCOL_CONFIG_SSZ_LEN,
 };
+
+/// Variable-field count of the *external* compact ream "leanchain" state:
+/// `historical_block_hashes`, `justified_slots`, `justifications_roots`, and
+/// `justifications_validators`.
+///
+/// Deliberately DECOUPLED from the native [`crate::state::STATE_VARIABLE_FIELD_COUNT`]:
+/// the compact interop format carries no `validators` registry, so a native
+/// layout change must not shift this external decoder's offset count.
+const REAM_STATE_VARIABLE_FIELD_COUNT: usize = 4;
 
 /// Byte length of the fixed portion of the compact ream "leanchain"
 /// state: the `config` container, both checkpoints, and the four
@@ -49,7 +58,7 @@ use crate::state::{
 const REAM_LEAN_STATE_FIXED_PART_LEN: usize = PROTOCOL_CONFIG_SSZ_LEN
     + CHECKPOINT_LEN
     + CHECKPOINT_LEN
-    + STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 112
+    + REAM_STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 112
 
 impl State {
     /// Decodes the compact ream "leanchain" genesis state emitted by the
@@ -57,7 +66,7 @@ impl State {
     /// canonical slot-0 anchor [`State`].
     ///
     /// The on-disk shape is the compact interop layout (not the native
-    /// 9-field [`State`] SSZ): a [`ProtocolConfig`] container, the
+    /// ten-field [`State`] SSZ): a [`ProtocolConfig`] container, the
     /// `latest_justified` / `latest_finalized` checkpoints, and four
     /// SSZ offsets pointing at the `historical_block_hashes`,
     /// `justified_slots`, `justifications_roots`, and
@@ -96,7 +105,7 @@ impl State {
         let latest_finalized = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_LEN])?;
         c += CHECKPOINT_LEN;
 
-        let mut offsets = [0_usize; STATE_VARIABLE_FIELD_COUNT];
+        let mut offsets = [0_usize; REAM_STATE_VARIABLE_FIELD_COUNT];
         for offset in &mut offsets {
             *offset = read_offset(bytes, &mut c)?;
         }
@@ -109,14 +118,14 @@ impl State {
                 return Err(DecodeError::OffsetsAreDecreasing(pair[1]));
             }
         }
-        let last_offset = offsets[STATE_VARIABLE_FIELD_COUNT - 1];
+        let last_offset = offsets[REAM_STATE_VARIABLE_FIELD_COUNT - 1];
         if last_offset > bytes.len() {
             return Err(DecodeError::OffsetOutOfBounds(last_offset));
         }
 
         let tail_slice = |idx: usize| -> &[u8] {
             let start = offsets[idx];
-            let end = if idx + 1 < STATE_VARIABLE_FIELD_COUNT {
+            let end = if idx + 1 < REAM_STATE_VARIABLE_FIELD_COUNT {
                 offsets[idx + 1]
             } else {
                 bytes.len()
@@ -233,7 +242,7 @@ mod tests {
     use types::Bytes32;
 
     /// Non-trivial baseline state — every field perturbed by the test below
-    /// is set to a non-default value — mirroring the nine-field shape the
+    /// is set to a non-default value — mirroring the ten-field shape the
     /// ream client produces.
     fn sample_state() -> State {
         let mut justified_slots: Bitlist<HISTORICAL_ROOTS_LIMIT> = Bitlist::new();
@@ -257,19 +266,19 @@ mod tests {
             latest_finalized: Checkpoint::new(Bytes32::new([0x55; 32]), Slot::new(0)),
             historical_block_hashes: vec![Bytes32::new([0xaa; 32]), Bytes32::new([0xbb; 32])],
             justified_slots,
+            validators: Vec::new(),
             justifications_roots: vec![Bytes32::new([0xcc; 32]), Bytes32::new([0xdd; 32])],
             justifications_validators,
         }
     }
 
     /// Cross-client HTR-shape compatibility: the native [`State`]
-    /// hash-tree-root must commit to all nine fields of the shape the ream
-    /// client uses, so the two clients agree on state roots. Perturbing any
-    /// of the eight config / checkpoint / list / bitlist fields must change
-    /// the root (the `slot` / `latest_block_header` pair is covered in
-    /// `state.rs`).
+    /// hash-tree-root must commit to all ten fields of the devnet-1 shape, so
+    /// the two clients agree on state roots. Perturbing any of the nine
+    /// config / checkpoint / list / bitlist / registry fields must change the
+    /// root (the `slot` / `latest_block_header` pair is covered in `state.rs`).
     #[test]
-    fn native_state_htr_commits_to_ream_nine_field_shape() {
+    fn native_state_htr_commits_to_ream_ten_field_shape() {
         let baseline = sample_state().hash_tree_root();
 
         let mut s = sample_state();
@@ -302,6 +311,10 @@ mod tests {
 
         let mut s = sample_state();
         s.justifications_validators.set(11, true).unwrap();
+        assert_ne!(s.hash_tree_root(), baseline);
+
+        let mut s = sample_state();
+        s.validators.push(crate::validator::Validator::default());
         assert_ne!(s.hash_tree_root(), baseline);
     }
 }

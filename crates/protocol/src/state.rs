@@ -1,6 +1,6 @@
 //! Consensus [`State`] container plus its inner [`ProtocolConfig`].
 //!
-//! The native lean-rust state SSZ container declares 9 fields in order:
+//! The native lean-rust state SSZ container declares 10 fields in order:
 //!
 //! 1. `config: ProtocolConfig` — fixed (16-byte container).
 //! 2. `slot: Slot` — fixed 8 bytes.
@@ -10,16 +10,17 @@
 //! 6. `historical_block_hashes: List[Bytes32, HISTORICAL_ROOTS_LIMIT]` —
 //!    variable.
 //! 7. `justified_slots: Bitlist[HISTORICAL_ROOTS_LIMIT]` — variable.
-//! 8. `justifications_roots: List[Bytes32, HISTORICAL_ROOTS_LIMIT]` —
+//! 8. `validators: List[Validator, VALIDATOR_REGISTRY_LIMIT]` — variable.
+//! 9. `justifications_roots: List[Bytes32, HISTORICAL_ROOTS_LIMIT]` —
 //!    variable.
-//! 9. `justifications_validators: Bitlist[JUSTIFICATIONS_VALIDATORS_LIMIT]`
-//!    — variable.
+//! 10. `justifications_validators: Bitlist[JUSTIFICATIONS_VALIDATORS_LIMIT]`
+//!     — variable.
 //!
-//! Field bounds are pinned to the [`config::DEVNET_CONFIG`] caps. The four
+//! Field bounds are pinned to the [`config::DEVNET_CONFIG`] caps. The five
 //! variable-length fields each contribute a 4-byte offset to the fixed
-//! portion ([`STATE_FIXED_PART_LEN`] = 232 bytes).
+//! portion ([`STATE_FIXED_PART_LEN`] = 236 bytes).
 //!
-//! The hash-tree-root commits to all nine fields in this order; the
+//! The hash-tree-root commits to all ten fields in this order; the
 //! cross-client compatibility of that shape (and the genesis-interop
 //! decoder for the compact form) lives in [`crate::ream`].
 
@@ -33,12 +34,13 @@ use crate::block::{Block, BlockHeader, SignedBlockWithAttestation};
 use crate::checkpoint::Checkpoint;
 use crate::error::{AttSlotKind, StateTransitionError};
 use crate::internal::{
-    bitlist_hash_tree_root, decode_bytes32_list, encode_bytes32_list, ensure_len,
-    list_hash_tree_root, read_fixed, read_offset, u64_chunk, write_offset, BLOCK_HEADER_LEN,
-    BYTES32_LEN, BYTES_PER_LENGTH_OFFSET, CHECKPOINT_LEN, SLOT_LEN, U64_LEN,
+    bitlist_hash_tree_root, decode_bytes32_list, decode_fixed_element_list, encode_bytes32_list,
+    encode_fixed_element_list, ensure_len, list_hash_tree_root, read_fixed, read_offset, u64_chunk,
+    write_offset, BLOCK_HEADER_LEN, BYTES32_LEN, BYTES_PER_LENGTH_OFFSET, CHECKPOINT_LEN, SLOT_LEN,
+    U64_LEN, VALIDATOR_SSZ_LEN,
 };
 use crate::slot::Slot;
-use crate::validator::is_proposer;
+use crate::validator::{is_proposer, Validator, Validators};
 use crate::vote::Attestation;
 
 /// Maximum number of historical block roots retained in the state.
@@ -65,16 +67,16 @@ pub const JUSTIFICATIONS_VALIDATORS_LIMIT: usize =
 // `pub(crate)` so the sibling [`crate::ream`] module can reuse them; both
 // are also consumed by `STATE_FIXED_PART_LEN` below.
 pub(crate) const PROTOCOL_CONFIG_SSZ_LEN: usize = 2 * U64_LEN; // 16
-pub(crate) const STATE_VARIABLE_FIELD_COUNT: usize = 4;
+pub(crate) const STATE_VARIABLE_FIELD_COUNT: usize = 5;
 
-/// Length of the fixed portion of a [`State`] (5 fixed fields plus 4 offsets
+/// Length of the fixed portion of a [`State`] (5 fixed fields plus 5 offsets
 /// for the variable-length tails).
 pub const STATE_FIXED_PART_LEN: usize = PROTOCOL_CONFIG_SSZ_LEN
     + SLOT_LEN
     + BLOCK_HEADER_LEN
     + CHECKPOINT_LEN
     + CHECKPOINT_LEN
-    + STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 232
+    + STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 236
 
 // =====================================================================
 // ProtocolConfig (the inner `config` field of State)
@@ -145,7 +147,7 @@ impl HashTreeRoot for ProtocolConfig {
 
 /// Consensus state container.
 ///
-/// Variable-length SSZ container: the four list/bitlist tails follow the
+/// Variable-length SSZ container: the five list/bitlist tails follow the
 /// fixed portion in declaration order, each addressed by a 4-byte offset
 /// stored inline at its declaration position.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -164,6 +166,8 @@ pub struct State {
     pub historical_block_hashes: Vec<Bytes32>,
     /// Bounded bitlist marking which historical slots are justified.
     pub justified_slots: Bitlist<HISTORICAL_ROOTS_LIMIT>,
+    /// Bounded validator registry (`List[Validator, VALIDATOR_REGISTRY_LIMIT]`).
+    pub validators: Validators,
     /// Bounded list of roots whose per-validator vote bitlist is tracked.
     pub justifications_roots: Vec<Bytes32>,
     /// Flattened per-validator vote bitlist for [`Self::justifications_roots`].
@@ -171,12 +175,15 @@ pub struct State {
 }
 
 impl State {
-    /// Returns the four variable-length tail payloads encoded into their wire
+    /// Returns the five variable-length tail payloads encoded into their wire
     /// bytes, in declaration order.
     fn variable_tail_payloads(&self) -> [Vec<u8>; STATE_VARIABLE_FIELD_COUNT] {
         let mut historical_buf =
             Vec::with_capacity(self.historical_block_hashes.len() * BYTES32_LEN);
         encode_bytes32_list(&self.historical_block_hashes, &mut historical_buf);
+
+        let mut validators_buf = Vec::with_capacity(self.validators.len() * VALIDATOR_SSZ_LEN);
+        encode_fixed_element_list(&self.validators, &mut validators_buf);
 
         let mut roots_buf = Vec::with_capacity(self.justifications_roots.len() * BYTES32_LEN);
         encode_bytes32_list(&self.justifications_roots, &mut roots_buf);
@@ -184,6 +191,7 @@ impl State {
         [
             historical_buf,
             self.justified_slots.as_bytes(),
+            validators_buf,
             roots_buf,
             self.justifications_validators.as_bytes(),
         ]
@@ -279,9 +287,11 @@ impl Decode for State {
         let historical_block_hashes = decode_bytes32_list(tail_slice(0), HISTORICAL_ROOTS_LIMIT)?;
         let justified_slots = Bitlist::<HISTORICAL_ROOTS_LIMIT>::from_bytes(tail_slice(1))
             .map_err(|err| DecodeError::BytesInvalid(format!("justified_slots: {err}")))?;
-        let justifications_roots = decode_bytes32_list(tail_slice(2), HISTORICAL_ROOTS_LIMIT)?;
+        let validators =
+            decode_fixed_element_list::<Validator>(tail_slice(2), VALIDATOR_REGISTRY_LIMIT)?;
+        let justifications_roots = decode_bytes32_list(tail_slice(3), HISTORICAL_ROOTS_LIMIT)?;
         let justifications_validators = Bitlist::<JUSTIFICATIONS_VALIDATORS_LIMIT>::from_bytes(
-            tail_slice(3),
+            tail_slice(4),
         )
         .map_err(|err| DecodeError::BytesInvalid(format!("justifications_validators: {err}")))?;
 
@@ -293,6 +303,7 @@ impl Decode for State {
             latest_finalized,
             historical_block_hashes,
             justified_slots,
+            validators,
             justifications_roots,
             justifications_validators,
         })
@@ -301,7 +312,7 @@ impl Decode for State {
 
 impl HashTreeRoot for State {
     fn hash_tree_root(&self) -> [u8; 32] {
-        // Native lean state root: 9 fields → merkleize width 16.
+        // Native lean state root: 10 fields → merkleize width 16.
         merkleize(&[
             self.config.hash_tree_root(),
             self.slot.hash_tree_root(),
@@ -310,6 +321,7 @@ impl HashTreeRoot for State {
             self.latest_finalized.hash_tree_root(),
             list_hash_tree_root(&self.historical_block_hashes, HISTORICAL_ROOTS_LIMIT),
             bitlist_hash_tree_root(&self.justified_slots),
+            list_hash_tree_root(&self.validators, VALIDATOR_REGISTRY_LIMIT),
             list_hash_tree_root(&self.justifications_roots, HISTORICAL_ROOTS_LIMIT),
             bitlist_hash_tree_root(&self.justifications_validators),
         ])
@@ -798,7 +810,10 @@ mod tests {
     use ssz::{decode, encode, SszError};
     use types::Bytes32;
 
-    use crate::test_fixtures::sample_block_header;
+    use crate::test_fixtures::{
+        assert_htr_eq, assert_ssz_round_trip, regen_vector, sample_block_header, sample_validator,
+        sample_validators,
+    };
 
     fn sample_state() -> State {
         let mut justified_slots: Bitlist<HISTORICAL_ROOTS_LIMIT> = Bitlist::new();
@@ -822,6 +837,7 @@ mod tests {
             latest_finalized: Checkpoint::new(Bytes32::new([0x55; 32]), Slot::new(0)),
             historical_block_hashes: vec![Bytes32::new([0xaa; 32]), Bytes32::new([0xbb; 32])],
             justified_slots,
+            validators: sample_validators(2),
             justifications_roots: vec![Bytes32::new([0xcc; 32]), Bytes32::new([0xdd; 32])],
             justifications_validators,
         }
@@ -830,8 +846,9 @@ mod tests {
     // -- Constants ----------------------------------------------------------
 
     #[test]
-    fn fixed_part_is_two_thirty_two_bytes() {
-        assert_eq!(STATE_FIXED_PART_LEN, 232);
+    fn fixed_part_is_two_thirty_six_bytes() {
+        assert_eq!(STATE_FIXED_PART_LEN, 236);
+        assert_eq!(STATE_VARIABLE_FIELD_COUNT, 5);
     }
 
     #[test]
@@ -888,8 +905,10 @@ mod tests {
     fn state_default_round_trip() {
         let s = State::default();
         let bytes = encode(&s);
-        // Empty Bitlist encodes to a single delimiter byte (0x01); two
-        // empty Vec<Bytes32> tails are zero-length. Total = 232 + 0 + 1 + 0 + 1.
+        // Each empty Bitlist encodes to a single delimiter byte (0x01); the
+        // empty Vec<Bytes32> and empty validators tails are zero-length.
+        // Total = 236 + 0 (historical) + 1 (justified_slots) + 0 (validators)
+        // + 0 (roots) + 1 (justifications_validators).
         assert_eq!(bytes.len(), STATE_FIXED_PART_LEN + 2);
         let back: State = decode(&bytes).unwrap();
         assert_eq!(back, s);
@@ -907,7 +926,7 @@ mod tests {
     fn state_first_offset_equals_fixed_part_len() {
         let s = sample_state();
         let bytes = encode(&s);
-        let off_pos = STATE_FIXED_PART_LEN - 16;
+        let off_pos = STATE_FIXED_PART_LEN - 20;
         let off0 = u32::from_le_bytes([
             bytes[off_pos],
             bytes[off_pos + 1],
@@ -927,7 +946,7 @@ mod tests {
     fn state_decode_rejects_invalid_first_offset() {
         let s = State::default();
         let mut bytes = encode(&s);
-        let off_pos = STATE_FIXED_PART_LEN - 16;
+        let off_pos = STATE_FIXED_PART_LEN - 20;
         bytes[off_pos..off_pos + 4].copy_from_slice(
             &u32::try_from(STATE_FIXED_PART_LEN - 1)
                 .unwrap()
@@ -941,8 +960,8 @@ mod tests {
     fn state_decode_rejects_decreasing_offsets() {
         let s = sample_state();
         let mut bytes = encode(&s);
-        let off0_pos = STATE_FIXED_PART_LEN - 16;
-        let off1_pos = STATE_FIXED_PART_LEN - 12;
+        let off0_pos = STATE_FIXED_PART_LEN - 20;
+        let off1_pos = STATE_FIXED_PART_LEN - 16;
         let off0 = u32::from_le_bytes([
             bytes[off0_pos],
             bytes[off0_pos + 1],
@@ -966,7 +985,7 @@ mod tests {
 
     // -- State HashTreeRoot ------------------------------------------------
     //
-    // The all-nine-fields responsiveness check that documents cross-client
+    // The all-ten-fields responsiveness check that documents cross-client
     // (ream) HTR-shape compatibility lives in `crate::ream`'s tests; the
     // check below covers the remaining `slot` / `latest_block_header` fields.
 
@@ -987,6 +1006,54 @@ mod tests {
     fn state_hash_tree_root_is_deterministic() {
         let s = sample_state();
         assert_eq!(s.hash_tree_root(), s.hash_tree_root());
+    }
+
+    // -- Validator registry ------------------------------------------------
+
+    #[test]
+    fn state_with_validators_round_trips() {
+        let mut s = sample_state();
+        s.validators = sample_validators(3);
+        assert_ssz_round_trip(&s);
+    }
+
+    #[test]
+    fn state_root_changes_when_validators_change() {
+        let baseline = sample_state();
+        let mut extended = sample_state();
+        extended.validators.push(sample_validator(9));
+        assert_ne!(extended.hash_tree_root(), baseline.hash_tree_root());
+    }
+
+    #[test]
+    fn state_root_regression_vector() {
+        // Frozen native State root after the validator-registry field insert.
+        // Regenerate by printing test_fixtures::regen_vector(&sample_state());
+        // the pre-registry root no longer matches (the devnet-1 State-root break).
+        const STATE_ROOT: [u8; 32] = [
+            0x73, 0xef, 0x3f, 0xca, 0x88, 0x1a, 0xff, 0xd3, 0xce, 0x02, 0x48, 0x04, 0x2c, 0x18,
+            0xd1, 0x57, 0xfd, 0x7d, 0x65, 0x77, 0xd6, 0x61, 0xc2, 0xb3, 0xd3, 0x17, 0xdc, 0xe1,
+            0x54, 0x4e, 0x72, 0xf2,
+        ];
+        let state = sample_state();
+        assert_htr_eq(&state, STATE_ROOT);
+
+        // The SA2 vector contract: the frozen bytes decode back to the same
+        // value, so the (bytes, root) pair is self-consistent.
+        let (bytes, root) = regen_vector(&state);
+        assert_eq!(root, STATE_ROOT);
+        let back: State = decode(&bytes).unwrap();
+        assert_eq!(back, state);
+    }
+
+    #[test]
+    fn decode_rejects_over_cap_registry() {
+        // A validators tail encoding one element past the registry cap is
+        // rejected by the shared fixed-element-list codec (single-source cap).
+        let over_cap = vec![0_u8; (VALIDATOR_REGISTRY_LIMIT + 1) * VALIDATOR_SSZ_LEN];
+        let err = decode_fixed_element_list::<Validator>(&over_cap, VALIDATOR_REGISTRY_LIMIT)
+            .unwrap_err();
+        assert!(matches!(err, DecodeError::BytesInvalid(_)));
     }
 
     // -- property tests ----------------------------------------------------
@@ -1156,6 +1223,7 @@ mod attestation_tests {
             latest_finalized: Checkpoint::new(Bytes32::zero(), latest_finalized_slot),
             historical_block_hashes: historical_roots,
             justified_slots,
+            validators: Vec::new(),
             justifications_roots: Vec::new(),
             justifications_validators: Bitlist::new(),
         }

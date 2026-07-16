@@ -324,11 +324,11 @@ mod tests {
         assert_eq!(block.state_root, loaded.hash_tree_root().into());
         assert_eq!(
             hex::encode(loaded.hash_tree_root()),
-            "8d30f4011dddd48e95d246ba5438c131864e1c8184b30844687a30728fc2461e"
+            "70ea466fb4da8f44f62612d7394bbe5f8c8e9afdd6488fbebd0ce44fa096be37"
         );
         assert_eq!(
             hex::encode(block.hash_tree_root()),
-            "b9efc3aae32f6c0c56731a5c758d102e1b6fddb14f2e6abf8d4b054730dd6a78"
+            "c3906f614cec0cbd6488b15c09e9d3b55d6e7ac4f085de34658ecfb4d896626a"
         );
     }
 

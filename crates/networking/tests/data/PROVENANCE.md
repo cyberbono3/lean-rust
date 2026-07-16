@@ -29,7 +29,6 @@ independent root anchor — worth doing, tracked separately.
 | Fixture                              | Container         |
 | ------------------------------------ | ----------------- |
 | `empty.blockbody.ssz`                | `BlockBody`       |
-| `genesis-4val.state.ssz`             | `State`           |
 | `genesis-anchor.checkpoint.ssz`      | `Checkpoint`      |
 | `slot12-justified.checkpoint.ssz`    | `Checkpoint`      |
 | `slot1.blockheader.ssz`              | `BlockHeader`     |
@@ -54,11 +53,19 @@ and must not be read as such.
 | `validator3.signedattestation.ssz` | `SignedAttestation`          | 3252 | `f698770b0bf6ae48b597bee138698b4829b5452d762f4ba9b2db56a32c18fbeb` |
 | `two-attestations.blockbody.ssz`   | `BlockBody`                  |  276 | `0a786852dc25250a5f62918d10bc7a2d19d448cd4b696f015d2ca3ad8942fe10` |
 | `slot1-empty.signedblock.ssz`      | `SignedBlockWithAttestation` |  236 | `6210c7d3a20a8d046283fdbd2257543c3ee100f29342fa4c48d9095d19dfbf50` |
+| `genesis-4val.state.ssz`           | `State`                      |  478 | `663a7142e12afccbb2bc78fc83c72bef1df8617bfaabd38a900486d0520bb05f` |
 
 The block-envelope refactor moves `slot1-empty.signedblock.ssz` here (from `wire-parity/`) as a
 self-generated devnet-1 vector, and re-shapes `two-attestations.blockbody.ssz`: the block body
 now holds plain `Attestation` elements (2 × 136 + 4 offset = 276 bytes), with per-vote signatures
 carried by the block-signature list on `SignedBlockWithAttestation` rather than inside the body.
+
+The validator-registry field addition moves `genesis-4val.state.ssz` here (from `wire-parity/`) for
+the same reason: adding `validators: List[Validator, N]` to `State` changed the native SSZ format
+(fixed part 232 → 236, a fifth variable-field offset), so the old verbatim reference blob no longer
+decodes. There is no devnet-1 cross-client `State` blob to copy yet, so it is regenerated here as a
+genesis 4-validator state with a populated registry (4 × 60-byte `Validator` = 240-byte tail). It
+moves back under `wire-parity/` when a live devnet-1 peer supplies real bytes.
 
 They exist because the devnet-1 attestation wire has no published upstream corpus yet. The
 devnet-0 `SignedVote` blobs they replace (4136 and 8276 bytes) could not be re-encoded into the

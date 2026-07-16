@@ -36,6 +36,12 @@ pub(crate) const SLOT_LEN: usize = U64_LEN;
 /// Wire size (bytes) of a `ValidatorIndex` SSZ field (alias for [`U64_LEN`]).
 pub(crate) const VALIDATOR_INDEX_LEN: usize = U64_LEN;
 
+/// Wire size (bytes) of a [`types::PublicKey`] SSZ field (`ByteVector<52>`).
+pub(crate) const PUBLIC_KEY_LEN: usize = 52;
+
+/// Wire size (bytes) of a `Validator` SSZ field (`PublicKey + ValidatorIndex`).
+pub(crate) const VALIDATOR_SSZ_LEN: usize = PUBLIC_KEY_LEN + VALIDATOR_INDEX_LEN;
+
 /// Wire size (bytes) of a `Checkpoint` SSZ field (`Bytes32 + Slot`).
 pub(crate) const CHECKPOINT_LEN: usize = BYTES32_LEN + SLOT_LEN;
 

@@ -11,8 +11,8 @@
 // `.unwrap_or(0)` style below remains enforced.
 #![allow(clippy::panic)]
 
-use ssz::{decode, encode, Decode, Encode};
-use types::{Bytes32, Signature};
+use ssz::{decode, encode, Decode, Encode, HashTreeRoot};
+use types::{Bytes32, PublicKey, Signature};
 
 use crate::block::{
     Block, BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation,
@@ -20,7 +20,7 @@ use crate::block::{
 };
 use crate::checkpoint::Checkpoint;
 use crate::slot::Slot;
-use crate::validator::ValidatorIndex;
+use crate::validator::{Validator, ValidatorIndex, Validators};
 use crate::vote::{Attestation, AttestationData, SignedAttestation};
 
 /// Asserts that `value` survives an SSZ encode/decode round-trip unchanged, and
@@ -48,12 +48,44 @@ where
     }
 }
 
+/// Asserts that `value.hash_tree_root()` equals `expected`.
+///
+/// The one frozen-root helper for this crate's wire containers — call it
+/// instead of open-coding the `hash_tree_root` equality in each vector test.
+///
+/// # Panics
+/// Panics if the root does not match `expected`.
+pub(crate) fn assert_htr_eq<T: HashTreeRoot>(value: &T, expected: [u8; 32]) {
+    assert_eq!(value.hash_tree_root(), expected, "hash-tree-root mismatch",);
+}
+
+/// Emits the `(ssz_bytes, root)` pair used to freeze a wire vector.
+///
+/// Print the pair after a wire break and paste it into the frozen constant the
+/// regression test asserts — never hand-derive a root.
+pub(crate) fn regen_vector<T: Encode + HashTreeRoot>(value: &T) -> (Vec<u8>, [u8; 32]) {
+    (encode(value), value.hash_tree_root())
+}
+
 /// Deterministic [`Signature`] filled with `seed`.
 ///
 /// The one construction site for signature test values — call this rather than
 /// open-coding the byte array, so the container width lives in one place.
 pub(crate) fn sample_signature(seed: u8) -> Signature {
     Signature::new([seed; Signature::LEN])
+}
+
+/// Deterministic [`Validator`] keyed off `seed`.
+pub(crate) fn sample_validator(seed: u8) -> Validator {
+    Validator {
+        pubkey: PublicKey::new([seed; PublicKey::LEN]),
+        index: ValidatorIndex::new(u64::from(seed)),
+    }
+}
+
+/// Deterministic [`Validators`] registry with `n` entries (seeds `0..n`).
+pub(crate) fn sample_validators(n: u8) -> Validators {
+    (0..n).map(sample_validator).collect()
 }
 
 /// Deterministic [`Attestation`] keyed off `seed`.

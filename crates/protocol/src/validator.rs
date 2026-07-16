@@ -1,8 +1,15 @@
 //! [`ValidatorIndex`] — `u64` newtype identifying a validator within the
-//! registry — plus the round-robin proposer selection helper [`is_proposer`].
+//! registry — the [`Validator`] registry entry, the [`Validators`] registry
+//! alias, and the round-robin proposer selection helper [`is_proposer`].
+
+use ssz::merkleize::merkleize;
+use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
 
 use crate::error::ProtocolError;
-use crate::internal::impl_u64_ssz_newtype;
+use crate::internal::{
+    ensure_len, impl_u64_ssz_newtype, read_byte_array, PUBLIC_KEY_LEN, VALIDATOR_INDEX_LEN,
+    VALIDATOR_SSZ_LEN,
+};
 use crate::slot::Slot;
 
 /// Validator-registry index (`u64` newtype).
@@ -64,6 +71,75 @@ pub fn is_proposer(
     Ok(slot.get() % num_validators == validator_index.get())
 }
 
+/// Per-validator registry entry: post-quantum one-time-signature public key
+/// plus the validator's registry index.
+///
+/// Fixed-size SSZ container — `pubkey` (52 bytes) then `index` (8 bytes LE), in
+/// that order. The field order is committed by the hash-tree-root, so it must
+/// match the consensus spec (`pubkey` before `index`). No serde derives —
+/// domain purity.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Validator {
+    /// XMSS one-time-signature public key (`Bytes52`).
+    pub pubkey: types::PublicKey,
+    /// Index of this validator within the registry.
+    pub index: ValidatorIndex,
+}
+
+/// Bounded validator registry (`List[Validator, VALIDATOR_REGISTRY_LIMIT]`).
+///
+/// A naming alias, not a bounded newtype: the cap is enforced at the SSZ codec
+/// and hash-tree-root sites via `VALIDATOR_REGISTRY_LIMIT`. Exists so downstream
+/// code can name `&Validators`.
+pub type Validators = Vec<Validator>;
+
+impl Encode for Validator {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        VALIDATOR_SSZ_LEN
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        VALIDATOR_SSZ_LEN
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
+        // pubkey FIRST (field order is committed by the root), then the LE index.
+        buf.extend_from_slice(self.pubkey.as_slice());
+        self.index.ssz_append(buf);
+    }
+}
+
+impl Decode for Validator {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        VALIDATOR_SSZ_LEN
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        ensure_len(bytes, VALIDATOR_SSZ_LEN)?;
+        // Length verified above; both reads are in-bounds.
+        let mut cursor = 0_usize;
+        let pubkey =
+            types::PublicKey::new(read_byte_array::<{ PUBLIC_KEY_LEN }>(bytes, &mut cursor));
+        let index = ValidatorIndex::from_ssz_bytes(&bytes[cursor..cursor + VALIDATOR_INDEX_LEN])?;
+        Ok(Self { pubkey, index })
+    }
+}
+
+impl HashTreeRoot for Validator {
+    fn hash_tree_root(&self) -> [u8; 32] {
+        // Container with exactly 2 fields → merkleize at width 2.
+        merkleize(&[self.pubkey.hash_tree_root(), self.index.hash_tree_root()])
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -114,6 +190,79 @@ mod tests {
         let root = ValidatorIndex::new(0xdead_beef).hash_tree_root();
         assert_eq!(&root[..8], &0xdead_beef_u64.to_le_bytes());
         assert!(root[8..].iter().all(|&b| b == 0));
+    }
+
+    // -- Validator container -------------------------------------------------
+
+    #[test]
+    fn validator_field_order_is_pubkey_then_index() {
+        assert_eq!(VALIDATOR_SSZ_LEN, 60);
+        let mut pubkey_bytes = [0_u8; PUBLIC_KEY_LEN];
+        for (i, b) in pubkey_bytes.iter_mut().enumerate() {
+            *b = u8::try_from(i).unwrap();
+        }
+        let v = Validator {
+            pubkey: types::PublicKey::new(pubkey_bytes),
+            index: ValidatorIndex::new(0x1122_3344_5566_7788),
+        };
+        let bytes = encode(&v);
+        assert_eq!(bytes.len(), VALIDATOR_SSZ_LEN);
+        // pubkey FIRST, then the 8-byte LE index.
+        assert_eq!(&bytes[..PUBLIC_KEY_LEN], &pubkey_bytes);
+        assert_eq!(
+            &bytes[PUBLIC_KEY_LEN..],
+            &0x1122_3344_5566_7788_u64.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn validator_ssz_round_trip_boundary_values() {
+        for (pk, idx) in [
+            ([0x00_u8; PUBLIC_KEY_LEN], ValidatorIndex::new(0)),
+            ([0xff_u8; PUBLIC_KEY_LEN], ValidatorIndex::new(u64::MAX)),
+        ] {
+            let v = Validator {
+                pubkey: types::PublicKey::new(pk),
+                index: idx,
+            };
+            let bytes = encode(&v);
+            assert_eq!(bytes.len(), 60);
+            let back: Validator = decode(&bytes).unwrap();
+            assert_eq!(back, v);
+        }
+    }
+
+    #[test]
+    fn validator_decode_rejects_wrong_length() {
+        assert!(decode::<Validator>(&[0_u8; VALIDATOR_SSZ_LEN - 1]).is_err());
+        assert!(decode::<Validator>(&[0_u8; VALIDATOR_SSZ_LEN + 1]).is_err());
+    }
+
+    #[test]
+    fn validator_default_index_is_zero() {
+        let v = Validator::default();
+        assert_eq!(v.index, ValidatorIndex::default());
+        assert_eq!(v.pubkey, types::PublicKey::new([0_u8; PUBLIC_KEY_LEN]));
+    }
+
+    #[test]
+    fn validator_htr_two_leaf_shape_and_field_sensitivity() {
+        let base = Validator {
+            pubkey: types::PublicKey::new([0x11; PUBLIC_KEY_LEN]),
+            index: ValidatorIndex::new(7),
+        };
+        assert_eq!(
+            base.hash_tree_root(),
+            merkleize(&[base.pubkey.hash_tree_root(), base.index.hash_tree_root()])
+        );
+
+        let mut pubkey_changed = base.clone();
+        pubkey_changed.pubkey = types::PublicKey::new([0x22; PUBLIC_KEY_LEN]);
+        assert_ne!(pubkey_changed.hash_tree_root(), base.hash_tree_root());
+
+        let mut index_changed = base.clone();
+        index_changed.index = ValidatorIndex::new(8);
+        assert_ne!(index_changed.hash_tree_root(), base.hash_tree_root());
     }
 
     // -- is_proposer ---------------------------------------------------------
@@ -173,6 +322,21 @@ mod tests {
                 }
             }
             prop_assert_eq!(winners, 1);
+        }
+
+        #[test]
+        fn validator_ssz_round_trips(
+            pubkey_bytes in proptest::collection::vec(any::<u8>(), PUBLIC_KEY_LEN),
+            index in any::<u64>(),
+        ) {
+            let mut pk = [0_u8; PUBLIC_KEY_LEN];
+            pk.copy_from_slice(&pubkey_bytes);
+            let v = Validator {
+                pubkey: types::PublicKey::new(pk),
+                index: ValidatorIndex::new(index),
+            };
+            let back: Validator = decode(&encode(&v)).unwrap();
+            prop_assert_eq!(back, v);
         }
     }
 }

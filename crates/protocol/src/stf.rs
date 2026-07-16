@@ -21,7 +21,7 @@ use types::{Bitlist, Bytes32};
 
 use crate::{
     block::BlockBody, checkpoint::Checkpoint, slot::Slot, state::ProtocolConfig, state::State,
-    validator::ValidatorIndex, BlockHeader,
+    validator::ValidatorIndex, validator::Validators, BlockHeader,
 };
 
 pub use crate::error::StateTransitionError;
@@ -62,7 +62,69 @@ pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
         latest_finalized: Checkpoint::default(),
         historical_block_hashes: Vec::new(),
         justified_slots: Bitlist::new(),
+        validators: Vec::new(),
         justifications_roots: Vec::new(),
         justifications_validators: Bitlist::new(),
+    }
+}
+
+/// Builds the slot-0 consensus [`State`] with a pre-populated validator
+/// registry.
+///
+/// Delegates to [`genesis_state`] for the empty-registry shape, then installs
+/// `validators`. Keeps [`genesis_state`]'s signature stable for existing
+/// callers; genesis keygen (a later part) supplies the real `Bytes52` pubkeys.
+///
+/// # Preconditions
+/// `validators.len()` is expected to equal `num_validators`. This constructor
+/// does not enforce that coupling — the registry and `config.num_validators`
+/// are wired together by the genesis keygen part. A caller supplying a
+/// mismatched registry produces a `State` whose `process_attestations`
+/// validator bound (`config.num_validators`) disagrees with the registry size.
+///
+/// # Example
+/// ```
+/// use protocol::stf::{genesis_state, genesis_state_with_validators};
+/// let s = genesis_state_with_validators(4, 1_700_000_000, Vec::new());
+/// assert_eq!(s, genesis_state(4, 1_700_000_000));
+/// ```
+#[must_use]
+pub fn genesis_state_with_validators(
+    num_validators: u64,
+    genesis_time: u64,
+    validators: Validators,
+) -> State {
+    let mut state = genesis_state(num_validators, genesis_time);
+    state.validators = validators;
+    state
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::validator::Validator;
+    use types::PublicKey;
+
+    fn validator(seed: u8) -> Validator {
+        Validator {
+            pubkey: PublicKey::new([seed; PublicKey::LEN]),
+            index: ValidatorIndex::new(u64::from(seed)),
+        }
+    }
+
+    #[test]
+    fn genesis_state_registry_is_empty() {
+        assert!(genesis_state(4, 1_700_000_000).validators.is_empty());
+    }
+
+    #[test]
+    fn genesis_state_populates_registry_in_order() {
+        let validators = vec![validator(0), validator(1)];
+        let state = genesis_state_with_validators(4, 1_700_000_000, validators.clone());
+        assert_eq!(state.validators, validators);
+        // Only the registry differs from the empty-registry genesis state.
+        assert_eq!(state.slot, Slot::ZERO);
+        assert_eq!(state.config.num_validators, 4);
     }
 }

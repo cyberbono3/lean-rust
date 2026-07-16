@@ -49,7 +49,7 @@ const FIXTURES: &[(&str, &[u8])] = &[
     ),
     (
         "genesis-4val.state",
-        include_bytes!("data/wire-parity/genesis-4val.state.ssz"),
+        include_bytes!("data/synthetic/genesis-4val.state.ssz"),
     ),
     (
         "genesis-anchor.checkpoint",
@@ -218,6 +218,8 @@ fn synthetic_vector_roots_are_pinned() {
     const BLOCKBODY_ROOT: &str = "0a786852dc25250a5f62918d10bc7a2d19d448cd4b696f015d2ca3ad8942fe10";
     const SIGNED_BLOCK_ROOT: &str =
         "6210c7d3a20a8d046283fdbd2257543c3ee100f29342fa4c48d9095d19dfbf50";
+    const GENESIS_STATE_ROOT: &str =
+        "663a7142e12afccbb2bc78fc83c72bef1df8617bfaabd38a900486d0520bb05f";
 
     let signed: SignedAttestation =
         decode(fixture("validator3.signedattestation")).expect("decode signedattestation");
@@ -240,6 +242,13 @@ fn synthetic_vector_roots_are_pinned() {
         hex::encode(signed_block.hash_tree_root()),
         SIGNED_BLOCK_ROOT,
         "SignedBlockWithAttestation root moved — the wire shape changed, or PROVENANCE is stale",
+    );
+
+    let state: State = decode(fixture("genesis-4val.state")).expect("decode state");
+    assert_eq!(
+        hex::encode(state.hash_tree_root()),
+        GENESIS_STATE_ROOT,
+        "State root moved — the wire shape changed, or PROVENANCE is stale",
     );
 }
 
