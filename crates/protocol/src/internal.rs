@@ -23,12 +23,9 @@ pub(crate) const U64_LEN: usize = 8;
 /// Wire size (bytes) of a [`types::Bytes32`] SSZ field.
 pub(crate) const BYTES32_LEN: usize = 32;
 
-/// Wire size (bytes) of a [`types::Bytes4000`] SSZ field — signature
-/// placeholder used by `SignedVote` / `SignedBlock`.
-///
-/// Superseded by [`types::Signature`], whose width is [`types::Signature::LEN`];
-/// retires with its last decode consumer when the containers move over.
-pub(crate) const BYTES4000_LEN: usize = 4000;
+/// Wire size (bytes) of a [`types::Signature`] SSZ field. Single-sourced from
+/// the newtype so the attestation/block container consts never hard-code 3116.
+pub(crate) const SIGNATURE_LEN: usize = types::Signature::LEN;
 
 /// Wire size (bytes) of a `Slot` SSZ field (alias for [`U64_LEN`]).
 pub(crate) const SLOT_LEN: usize = U64_LEN;
@@ -161,36 +158,64 @@ pub(crate) fn decode_fixed_element_list<T: Decode>(
     Ok(items)
 }
 
-/// Encodes a `List[Bytes32, _]` as a flat concatenation of 32-byte elements.
-pub(crate) fn encode_bytes32_list(items: &[Bytes32], buf: &mut Vec<u8>) {
+/// Encodes `List[ByteVector<N>, _]` as a flat concatenation of `N`-byte
+/// elements.
+///
+/// A fixed-width byte-vector list is a bare concatenation in SSZ — no length
+/// prefix, no per-element offset; the enclosing container supplies the offset
+/// that bounds these bytes. `ByteVector<N>` (e.g. [`Bytes32`], [`types::Signature`])
+/// implements only [`HashTreeRoot`], not [`ssz::Encode`], so this cannot route
+/// through [`encode_fixed_element_list`].
+pub(crate) fn encode_byte_vector_list<const N: usize>(
+    items: &[types::ByteVector<N>],
+    buf: &mut Vec<u8>,
+) {
     for item in items {
         buf.extend_from_slice(item.as_slice());
     }
 }
 
-/// Decodes a `List[Bytes32, max]` from a flat concatenation. Rejects inputs
-/// whose length is not a multiple of 32 or whose element count exceeds `max`.
-pub(crate) fn decode_bytes32_list(bytes: &[u8], max: usize) -> Result<Vec<Bytes32>, DecodeError> {
-    if bytes.len() % BYTES32_LEN != 0 {
+/// Decodes `List[ByteVector<N>, max]` from a flat concatenation. Rejects inputs
+/// whose length is not a multiple of `N` or whose element count exceeds `max`.
+pub(crate) fn decode_byte_vector_list<const N: usize>(
+    bytes: &[u8],
+    max: usize,
+) -> Result<Vec<types::ByteVector<N>>, DecodeError> {
+    if N == 0 {
+        return Err(DecodeError::ZeroLengthItem);
+    }
+    if bytes.len() % N != 0 {
         return Err(DecodeError::BytesInvalid(format!(
-            "Bytes32 list bytes ({}) not divisible by 32",
+            "byte-vector list bytes ({}) not divisible by element size ({N})",
             bytes.len(),
         )));
     }
-    let count = bytes.len() / BYTES32_LEN;
+    let count = bytes.len() / N;
     if count > max {
         return Err(DecodeError::BytesInvalid(format!(
-            "Bytes32 list length ({count}) exceeds max ({max})",
+            "byte-vector list length ({count}) exceeds max ({max})",
         )));
     }
+    let mut cursor = 0;
     let mut items = Vec::with_capacity(count);
-    for i in 0..count {
-        let start = i * BYTES32_LEN;
-        let mut arr = [0_u8; BYTES32_LEN];
-        arr.copy_from_slice(&bytes[start..start + BYTES32_LEN]);
-        items.push(Bytes32::new(arr));
+    for _ in 0..count {
+        items.push(types::ByteVector::new(read_byte_array::<N>(
+            bytes,
+            &mut cursor,
+        )));
     }
     Ok(items)
+}
+
+/// Encodes a `List[Bytes32, _]`. Thin wrapper over [`encode_byte_vector_list`]
+/// (`Bytes32 = ByteVector<32>`) kept for call-site readability.
+pub(crate) fn encode_bytes32_list(items: &[Bytes32], buf: &mut Vec<u8>) {
+    encode_byte_vector_list::<BYTES32_LEN>(items, buf);
+}
+
+/// Decodes a `List[Bytes32, max]`. Thin wrapper over [`decode_byte_vector_list`].
+pub(crate) fn decode_bytes32_list(bytes: &[u8], max: usize) -> Result<Vec<Bytes32>, DecodeError> {
+    decode_byte_vector_list::<BYTES32_LEN>(bytes, max)
 }
 
 /// SSZ hash-tree-root of `List[T, max]` where `T: HashTreeRoot`:

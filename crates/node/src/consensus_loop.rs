@@ -16,7 +16,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use parking_lot::Mutex;
-use protocol::{SignedBlock, SignedVote, Slot, ValidatorIndex};
+use protocol::{SignedAttestation, SignedBlockWithAttestation, Slot, ValidatorIndex};
 use runtime::chain::Service as ChainService;
 use runtime::core::Service;
 use runtime::duties::{
@@ -403,7 +403,7 @@ impl Runner {
     /// a flood cannot extend a single tick unboundedly.
     async fn drain_gossip(&mut self) {
         while let Ok(block) = self.block_rx.try_recv() {
-            let slot = block.message.slot.get();
+            let slot = block.message.block.slot.get();
             if let Err(err) = self.chain.import_block(block).await {
                 warn!(%err, slot, "gossip block import failed; continuing");
             }
@@ -419,7 +419,7 @@ impl Runner {
     ///
     /// # Errors
     /// The p2p host is not running, or the publish fails.
-    async fn publish_block(&self, block: &SignedBlock) -> anyhow::Result<()> {
+    async fn publish_block(&self, block: &SignedBlockWithAttestation) -> anyhow::Result<()> {
         let host = self
             .p2p
             .host()
@@ -434,7 +434,7 @@ impl Runner {
     ///
     /// # Errors
     /// The p2p host is not running, or the publish fails.
-    async fn publish_vote(&self, vote: &SignedVote) -> anyhow::Result<()> {
+    async fn publish_vote(&self, vote: &SignedAttestation) -> anyhow::Result<()> {
         let host = self
             .p2p
             .host()

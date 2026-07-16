@@ -23,7 +23,7 @@ use futures::StreamExt;
 use lean_wire::{BlocksByRootRequest, BlocksByRootResponse, Status};
 use libp2p::{gossipsub, request_response, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
 use parking_lot::Mutex;
-use protocol::{SignedBlock, SignedVote};
+use protocol::{SignedAttestation, SignedBlockWithAttestation};
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
@@ -66,11 +66,11 @@ pub struct P2pService {
     /// [`Service::start`] so request handlers can call it without
     /// touching `&self`.
     provider: Arc<RpcProvider>,
-    /// One-shot inbound channel for decoded `SignedBlock` payloads.
+    /// One-shot inbound channel for decoded `SignedBlockWithAttestation` payloads.
     /// Populated by [`Service::start`]; consumed once via
     /// [`Self::take_block_receiver`].
     block_rx: Mutex<Option<BlockReceiver>>,
-    /// One-shot inbound channel for decoded `SignedVote` payloads.
+    /// One-shot inbound channel for decoded `SignedAttestation` payloads.
     /// Populated by [`Service::start`]; consumed once via
     /// [`Self::take_vote_receiver`].
     vote_rx: Mutex<Option<VoteReceiver>>,
@@ -325,8 +325,9 @@ impl Service for P2pService {
         dial_bootnodes(&mut swarm, &bootnodes);
 
         let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
-        let (block_tx, block_rx) = mpsc::channel::<SignedBlock>(GOSSIP_CHANNEL_CAPACITY);
-        let (vote_tx, vote_rx) = mpsc::channel::<SignedVote>(GOSSIP_CHANNEL_CAPACITY);
+        let (block_tx, block_rx) =
+            mpsc::channel::<SignedBlockWithAttestation>(GOSSIP_CHANNEL_CAPACITY);
+        let (vote_tx, vote_rx) = mpsc::channel::<SignedAttestation>(GOSSIP_CHANNEL_CAPACITY);
         let host = Host::new(self.peer_id, commands_tx);
         let cancel = CancellationToken::new();
         let join = tokio::spawn(swarm_task(
@@ -513,8 +514,8 @@ async fn swarm_task(
     mut swarm: Swarm<DevnetBehaviour>,
     mut commands: mpsc::Receiver<HostCommand>,
     cancel: CancellationToken,
-    block_tx: mpsc::Sender<SignedBlock>,
-    vote_tx: mpsc::Sender<SignedVote>,
+    block_tx: mpsc::Sender<SignedBlockWithAttestation>,
+    vote_tx: mpsc::Sender<SignedAttestation>,
     provider: Arc<RpcProvider>,
     registry: Arc<PeerRegistry>,
 ) {
@@ -592,8 +593,8 @@ async fn swarm_task(
 fn handle_swarm_event(
     event: SwarmEvent<DevnetBehaviourEvent>,
     swarm: &mut Swarm<DevnetBehaviour>,
-    block_tx: &mpsc::Sender<SignedBlock>,
-    vote_tx: &mpsc::Sender<SignedVote>,
+    block_tx: &mpsc::Sender<SignedBlockWithAttestation>,
+    vote_tx: &mpsc::Sender<SignedAttestation>,
     outbound: &mut OutboundTable,
     provider: &RpcProvider,
     registry: &PeerRegistry,

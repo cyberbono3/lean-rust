@@ -24,3 +24,6 @@ static_assertions = { workspace = true }
 serde             = { workspace = true, features = ["derive"] }
 serde_json        = "1"
 hex               = { workspace = true }
+# Enables the SA2 shared SSZ test helpers (round-trip + golden-vector regen)
+# for the wire-parity tests. Dev-dependency only — never a production enable.
+ssz               = { path = "../ssz", features = ["test-support"] }

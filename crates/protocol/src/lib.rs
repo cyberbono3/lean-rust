@@ -10,10 +10,12 @@
 //!   the round-robin [`is_proposer`] helper.
 //! - [`Checkpoint`] — `(root, slot)` container with SSZ codec and Merkle
 //!   hash-tree-root.
-//! - [`Vote`] / [`SignedVote`] — unsigned validator vote and the wire-shape
-//!   container that pairs it with the validator id and the post-quantum
-//!   signature placeholder.
-//! - [`Block`] / [`BlockBody`] / [`BlockHeader`] / [`SignedBlock`] —
+//! - [`AttestationData`] / [`Attestation`] / [`SignedAttestation`] — the
+//!   unsigned vote body, a validator's attestation (its id plus the body), and
+//!   the wire-shape container pairing an attestation with its post-quantum
+//!   signature.
+//! - [`Block`] / [`BlockBody`] / [`BlockHeader`] / [`BlockSignatures`] /
+//!   [`BlockWithAttestation`] / [`SignedBlockWithAttestation`] —
 //!   variable-length block containers with manual SSZ codecs and Merkle
 //!   hash-tree-roots.
 //! - [`State`] / [`ProtocolConfig`] — variable-length consensus state
@@ -65,7 +67,10 @@ pub mod stf;
 pub mod validator;
 pub mod vote;
 
-pub use block::{Block, BlockBody, BlockHeader, SignedBlock, MAX_ATTESTATIONS};
+pub use block::{
+    Block, BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation,
+    SignedBlockWithAttestation, MAX_ATTESTATIONS,
+};
 pub use checkpoint::Checkpoint;
 pub use error::{AttSlotKind, ProtocolError, StateTransitionError};
 pub use slot::Slot;
@@ -74,4 +79,4 @@ pub use state::{
     STATE_FIXED_PART_LEN, VALIDATOR_REGISTRY_LIMIT,
 };
 pub use validator::{is_proposer, ValidatorIndex};
-pub use vote::{SignedVote, Vote};
+pub use vote::{Attestation, AttestationData, SignedAttestation};

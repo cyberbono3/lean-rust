@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use forkchoice::ForkchoiceError;
-use protocol::{SignedBlock, Slot, ValidatorIndex};
+use protocol::{SignedBlockWithAttestation, Slot, ValidatorIndex};
 use runtime::chain::engine::test_fixtures::{
     engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS,
 };
@@ -39,15 +39,15 @@ async fn produce_block_persists_and_moves_head() {
         .produce_block(Slot::ONE, ValidatorIndex::new(1))
         .await
         .unwrap();
-    assert_eq!(signed.message.slot, Slot::ONE);
+    assert_eq!(signed.message.block.slot, Slot::ONE);
 
-    let root: Bytes32 = signed.message.hash_tree_root().into();
-    assert_eq!(signed.message.parent_root, pre.head_root);
+    let root: Bytes32 = signed.message.block.hash_tree_root().into();
+    assert_eq!(signed.message.block.parent_root, pre.head_root);
 
     // Block + post-state persisted at produced root; head info written from
     // the live engine head after the produced block expands forkchoice.
     let saved_block = store.load_block(&root).unwrap().unwrap();
-    assert_eq!(saved_block.message.slot, Slot::ONE);
+    assert_eq!(saved_block.message.block.slot, Slot::ONE);
     assert!(store.load_state(&root).unwrap().is_some());
     assert!(store.load_head().unwrap().is_some());
 
@@ -85,8 +85,8 @@ async fn produce_attestation_carries_validator_id_and_holds_head() {
         .produce_attestation(Slot::ONE, ValidatorIndex::new(0))
         .await
         .unwrap();
-    assert_eq!(signed.validator_id, ValidatorIndex::new(0));
-    assert_eq!(signed.message.slot, Slot::ONE);
+    assert_eq!(signed.message.validator_id, ValidatorIndex::new(0));
+    assert_eq!(signed.message.data.slot, Slot::ONE);
 
     // Read on demand after the own vote was imported.
     let post = service.snapshot();
@@ -101,15 +101,16 @@ async fn produce_attestation_reimports_early_vote_with_anchor_source() {
     let (service, _store, engine) = fresh_service();
 
     let producer = engine_at_genesis(ENGINE_VALIDATORS);
-    let block_1: SignedBlock = produce_signed_block(&producer, Slot::ONE, ValidatorIndex::new(1));
+    let block_1: SignedBlockWithAttestation =
+        produce_signed_block(&producer, Slot::ONE, ValidatorIndex::new(1));
     let _ = service.import_block(block_1).await.unwrap();
 
     let own = service
         .produce_attestation(Slot::ONE, ValidatorIndex::new(0))
         .await
         .unwrap();
-    assert_eq!(own.validator_id, ValidatorIndex::new(0));
-    assert_eq!(own.message.slot, Slot::ONE);
+    assert_eq!(own.message.validator_id, ValidatorIndex::new(0));
+    assert_eq!(own.message.data.slot, Slot::ONE);
 
     let (in_pending, in_known) = engine.with_store(|s| {
         (

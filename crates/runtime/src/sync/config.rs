@@ -45,7 +45,7 @@ pub struct Config {
     /// Caps the number of peer-walk tasks running concurrently. Without
     /// this bound a flap-storming or buggy peer-event source spawns one
     /// walk per event, each holding a `Vec::with_capacity(max_sync_depth)`
-    /// of `SignedBlock` plus port `Arc` clones, all serializing through
+    /// of `SignedBlockWithAttestation` plus port `Arc` clones, all serializing through
     /// the engine mutex — a memory/contention amplifier. The watch loop
     /// acquires a permit before spawning, so excess events backpressure
     /// instead of fanning out.

@@ -20,7 +20,7 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use lean_wire::{BlocksByRootRequest, Status};
 use parking_lot::Mutex;
-use protocol::SignedBlock;
+use protocol::SignedBlockWithAttestation;
 use ssz::HashTreeRoot;
 use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
@@ -375,7 +375,7 @@ impl PeerWorker {
         peer: &PeerId,
         start_root: Bytes32,
         cancel: &CancellationToken,
-    ) -> Result<Vec<SignedBlock>, SyncError> {
+    ) -> Result<Vec<SignedBlockWithAttestation>, SyncError> {
         // Wire the concrete chain + p2p pair behind the `WalkSource` seam,
         // then run the shared, source-agnostic traversal. The progression
         // logic (depth cap, stop-at-known, parent chaining, timeout and
@@ -399,15 +399,15 @@ impl PeerWorker {
 
 /// Outcome of fetching one hop of a [`walk_back_with`] traversal.
 ///
-/// `Block` carries a full `SignedBlock` (~4 KB, dominated by the signature).
+/// `Block` carries a full `SignedBlockWithAttestation` (~4 KB, dominated by the signature).
 /// The value is transient — produced and consumed one hop at a time, then
-/// moved straight into the collected `Vec<SignedBlock>` — so boxing it would
+/// moved straight into the collected `Vec<SignedBlockWithAttestation>` — so boxing it would
 /// only add an allocation and copy per hop without shrinking any retained
 /// structure; the large-variant lint is not meaningful here.
 #[allow(clippy::large_enum_variant)]
 enum Hop {
     /// A validated block; the walk continues from its `parent_root`.
-    Block(SignedBlock),
+    Block(SignedBlockWithAttestation),
     /// The peer returned an empty response — stop the walk, keep progress.
     Stop,
     /// Abort this peer's walk and discard progress: the request timed out
@@ -445,8 +445,8 @@ async fn walk_back_with<S: WalkSource + ?Sized>(
     request_timeout: Duration,
     start_root: Bytes32,
     cancel: &CancellationToken,
-) -> Result<Vec<SignedBlock>, SyncError> {
-    let mut pending: Vec<SignedBlock> = Vec::with_capacity(max_depth);
+) -> Result<Vec<SignedBlockWithAttestation>, SyncError> {
+    let mut pending: Vec<SignedBlockWithAttestation> = Vec::with_capacity(max_depth);
     let mut next_root = start_root;
 
     for _ in 0..max_depth {
@@ -478,7 +478,7 @@ async fn walk_back_with<S: WalkSource + ?Sized>(
         };
         match hop {
             Hop::Block(block) => {
-                next_root = block.message.parent_root;
+                next_root = block.message.block.parent_root;
                 pending.push(block);
             }
             Hop::Stop => break,
@@ -557,13 +557,13 @@ impl WalkSource for P2pWalkSource<'_> {
 ///   not match the requested root (a malicious/buggy peer trying to
 ///   redirect the walk).
 fn validate_single_root_response(
-    blocks: &[SignedBlock],
+    blocks: &[SignedBlockWithAttestation],
     requested: Bytes32,
-) -> Result<Option<SignedBlock>, &'static str> {
+) -> Result<Option<SignedBlockWithAttestation>, &'static str> {
     match blocks {
         [] => Ok(None),
         [block] => {
-            let returned: Bytes32 = block.message.hash_tree_root().into();
+            let returned: Bytes32 = block.message.block.hash_tree_root().into();
             if returned == requested {
                 Ok(Some(block.clone()))
             } else {
@@ -595,12 +595,16 @@ fn status_exchange(
 /// resolved by the time the engine sees it. Per-block failures are
 /// warn-logged and skipped; cancellation aborts remaining imports.
 #[instrument(level = "debug", name = "sync.import_chain", skip_all)]
-async fn import_chain(chain: &ChainService, blocks: Vec<SignedBlock>, cancel: &CancellationToken) {
+async fn import_chain(
+    chain: &ChainService,
+    blocks: Vec<SignedBlockWithAttestation>,
+    cancel: &CancellationToken,
+) {
     for block in blocks.into_iter().rev() {
         if cancel.is_cancelled() {
             return;
         }
-        let slot = block.message.slot.get();
+        let slot = block.message.block.slot.get();
         if let Err(err) = chain.import_block(block).await {
             warn!(%err, slot, "import_block dropped");
         }
@@ -611,17 +615,15 @@ fn should_sync(local: &Status, peer: &Status) -> bool {
     peer.finalized.slot > local.finalized.slot || peer.head.slot > local.head.slot
 }
 
-// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
-// rather than `allow` so it retires itself when the fixture moves to
-// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-#[expect(deprecated)]
 mod tests {
     use super::*;
-    use protocol::{Block, BlockBody, Checkpoint, Slot, ValidatorIndex};
+    use protocol::{
+        Attestation, Block, BlockBody, BlockSignatures, BlockWithAttestation, Checkpoint, Slot,
+        ValidatorIndex,
+    };
     use std::collections::HashSet;
-    use types::Bytes4000;
 
     fn status(finalized_slot: u64, head_slot: u64) -> Status {
         Status {
@@ -630,24 +632,27 @@ mod tests {
         }
     }
 
-    /// Builds a `SignedBlock` whose `parent_root` is `parent`; distinct
+    /// Builds a `SignedBlockWithAttestation` whose `parent_root` is `parent`; distinct
     /// `slot` values yield distinct `hash_tree_root`s.
-    fn signed_block(slot: u64, parent: Bytes32) -> SignedBlock {
-        let message = Block {
+    fn signed_block(slot: u64, parent: Bytes32) -> SignedBlockWithAttestation {
+        let block = Block {
             slot: Slot::new(slot),
             proposer_index: ValidatorIndex::new(slot),
             parent_root: parent,
             state_root: Bytes32::zero(),
             body: BlockBody::default(),
         };
-        SignedBlock {
-            message,
-            signature: Bytes4000::default(),
+        SignedBlockWithAttestation {
+            message: BlockWithAttestation {
+                block,
+                proposer_attestation: Attestation::default(),
+            },
+            signature: BlockSignatures::default(),
         }
     }
 
-    fn root_of(block: &SignedBlock) -> Bytes32 {
-        block.message.hash_tree_root().into()
+    fn root_of(block: &SignedBlockWithAttestation) -> Bytes32 {
+        block.message.block.hash_tree_root().into()
     }
 
     #[test]
@@ -720,14 +725,14 @@ mod tests {
     /// locally-known roots (for `has_block`), and switches for the storage
     /// error + fetch failure branches.
     struct FakeSource {
-        peer_blocks: HashMap<Bytes32, SignedBlock>,
+        peer_blocks: HashMap<Bytes32, SignedBlockWithAttestation>,
         known: HashSet<Bytes32>,
         has_block_err: bool,
         fetch: Fetch,
     }
 
     impl FakeSource {
-        fn serving(peer_blocks: HashMap<Bytes32, SignedBlock>) -> Self {
+        fn serving(peer_blocks: HashMap<Bytes32, SignedBlockWithAttestation>) -> Self {
             Self {
                 peer_blocks,
                 known: HashSet::new(),
@@ -761,7 +766,12 @@ mod tests {
     /// Builds a linear chain `b1 <- b2 <- ... <- bn` (b1's parent is zero),
     /// returning the blocks oldest-first plus a root->block map for the
     /// peer source.
-    fn chain(len: u64) -> (Vec<SignedBlock>, HashMap<Bytes32, SignedBlock>) {
+    fn chain(
+        len: u64,
+    ) -> (
+        Vec<SignedBlockWithAttestation>,
+        HashMap<Bytes32, SignedBlockWithAttestation>,
+    ) {
         let mut blocks = Vec::new();
         let mut parent = Bytes32::zero();
         let mut map = HashMap::new();
@@ -789,7 +799,7 @@ mod tests {
         .await
         .expect("walk succeeds");
         // Deepest-first: head (slot 3), then slot 2, then slot 1.
-        let slots: Vec<u64> = out.iter().map(|b| b.message.slot.get()).collect();
+        let slots: Vec<u64> = out.iter().map(|b| b.message.block.slot.get()).collect();
         assert_eq!(slots, vec![3, 2, 1]);
     }
 
@@ -809,7 +819,7 @@ mod tests {
         )
         .await
         .expect("walk succeeds");
-        let slots: Vec<u64> = out.iter().map(|b| b.message.slot.get()).collect();
+        let slots: Vec<u64> = out.iter().map(|b| b.message.block.slot.get()).collect();
         assert_eq!(slots, vec![3], "walk halts at the first known ancestor");
     }
 
@@ -828,7 +838,7 @@ mod tests {
         .await
         .expect("walk succeeds");
         assert_eq!(out.len(), 2, "walk stops after max_sync_depth hops");
-        let slots: Vec<u64> = out.iter().map(|b| b.message.slot.get()).collect();
+        let slots: Vec<u64> = out.iter().map(|b| b.message.block.slot.get()).collect();
         assert_eq!(slots, vec![5, 4]);
     }
 

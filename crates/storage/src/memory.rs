@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use parking_lot::RwLock;
-use protocol::{SignedBlock, State};
+use protocol::{SignedBlockWithAttestation, State};
 use types::Bytes32;
 
 use crate::error::StorageError;
@@ -23,7 +23,7 @@ pub struct MemoryStore {
 
 #[derive(Default)]
 struct Inner {
-    blocks: HashMap<Bytes32, SignedBlock>,
+    blocks: HashMap<Bytes32, SignedBlockWithAttestation>,
     states: HashMap<Bytes32, State>,
     head: Option<HeadInfo>,
 }
@@ -45,7 +45,11 @@ impl Default for MemoryStore {
 }
 
 impl Store for MemoryStore {
-    fn save_block(&self, root: Bytes32, block: SignedBlock) -> Result<(), StorageError> {
+    fn save_block(
+        &self,
+        root: Bytes32,
+        block: SignedBlockWithAttestation,
+    ) -> Result<(), StorageError> {
         self.inner.write().blocks.insert(root, block);
         Ok(())
     }
@@ -66,7 +70,7 @@ impl Store for MemoryStore {
     fn save_accepted(
         &self,
         block_root: Bytes32,
-        block: SignedBlock,
+        block: SignedBlockWithAttestation,
         state: State,
         head: HeadInfo,
     ) -> Result<(), StorageError> {
@@ -85,7 +89,10 @@ impl Store for MemoryStore {
         Ok(self.inner.read().states.contains_key(root))
     }
 
-    fn load_block(&self, root: &Bytes32) -> Result<Option<SignedBlock>, StorageError> {
+    fn load_block(
+        &self,
+        root: &Bytes32,
+    ) -> Result<Option<SignedBlockWithAttestation>, StorageError> {
         Ok(self.inner.read().blocks.get(root).cloned())
     }
 

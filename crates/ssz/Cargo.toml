@@ -10,6 +10,13 @@ description   = "SSZ encode/decode + SHA-256 merkleization facade (Tier 1)."
 [lints]
 workspace = true
 
+[features]
+# Shared SSZ test helpers (SA2). Downstream crates opt in via a dev-dependency
+# (`ssz = { path = "../ssz", features = ["test-support"] }`). MUST remain a
+# dev-dependency-only enable workspace-wide so the file-writing `regen_vector`
+# helper never compiles into a production build.
+test-support = []
+
 [dependencies]
 types     = { path = "../types" }
 # `ethereum_ssz` ships its lib as `ssz` (and `ethereum_ssz_derive` as

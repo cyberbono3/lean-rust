@@ -1,11 +1,5 @@
 //! Integration tests for `Service::import_attestation`.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced. `expect` rather than `allow`: once this file's last site
-// moves to `Signature`, the unfulfilled expectation fails the build instead of
-// lingering as a stale allow.
-#![expect(deprecated)]
 #![allow(
     missing_docs,
     clippy::expect_used,
@@ -16,28 +10,30 @@
 
 use std::sync::Arc;
 
-use protocol::{Checkpoint, SignedVote, Slot, ValidatorIndex, Vote};
+use protocol::{Attestation, AttestationData, Checkpoint, SignedAttestation, Slot, ValidatorIndex};
 use runtime::chain::engine::test_fixtures::{engine_at_genesis, ENGINE_VALIDATORS};
 use runtime::chain::engine::AttestationImportResult;
 use runtime::chain::Service;
 use storage::MemoryStore;
-use types::{Bytes32, Bytes4000};
+use types::{Bytes32, Signature};
 
 fn fresh_service() -> Service {
     let engine = engine_at_genesis(ENGINE_VALIDATORS);
     Service::new(engine, Arc::new(MemoryStore::new()))
 }
 
-fn vote(head: Checkpoint, target: Checkpoint, source: Checkpoint) -> SignedVote {
-    SignedVote {
-        validator_id: ValidatorIndex::new(0),
-        message: Vote {
-            slot: Slot::ONE,
-            head,
-            target,
-            source,
+fn vote(head: Checkpoint, target: Checkpoint, source: Checkpoint) -> SignedAttestation {
+    SignedAttestation {
+        message: Attestation {
+            validator_id: ValidatorIndex::new(0),
+            data: AttestationData {
+                slot: Slot::ONE,
+                head,
+                target,
+                source,
+            },
         },
-        signature: Bytes4000::new([0; 4000]),
+        signature: Signature::new([0; Signature::LEN]),
     }
 }
 

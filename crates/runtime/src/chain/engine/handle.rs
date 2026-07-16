@@ -23,17 +23,13 @@ use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
 // `State` is re-exported below via `protocol`; `Arc<State>` flows from the
 // store's post-state map into the captured persist plan as a refcount bump.
 use parking_lot::{Mutex, MutexGuard};
-use protocol::{Block, Checkpoint, SignedBlock, Slot, State, ValidatorIndex};
+use protocol::{
+    Attestation, Block, BlockSignatures, BlockWithAttestation, Checkpoint,
+    SignedBlockWithAttestation, Slot, State, ValidatorIndex,
+};
 use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
 use types::Bytes32;
-// Retained construction site for the deprecated `Bytes4000` placeholder; moves
-// to `Signature` with the container refactor. Scoped to the import and the one
-// function that builds a signature, so unrelated deprecations in the rest of
-// this file are still surfaced. `expect` rather than `allow`: once the site
-// moves, the unfulfilled expectation fails the build.
-#[expect(deprecated)]
-use types::Bytes4000;
 
 use super::error::EngineError;
 use crate::chain::metrics::ChainMetrics;
@@ -230,7 +226,7 @@ impl Engine {
     /// between production and capture (the produce-path counterpart to
     /// [`Self::import_block_capturing`]).
     ///
-    /// Returns the [`SignedBlock`] to gossip plus an optional [`PersistPlan`].
+    /// Returns the [`SignedBlockWithAttestation`] to gossip plus an optional [`PersistPlan`].
     /// The plan is `None` only on the unreachable invariant violation where the
     /// just-produced block's post-state or the head block is absent; the caller
     /// maps that to a storage-layer error.
@@ -238,12 +234,11 @@ impl Engine {
     /// # Errors
     /// Forwards every variant raised by [`Store::produce_block`] via
     /// [`EngineError::Forkchoice`].
-    #[expect(deprecated)]
     pub(crate) fn produce_block_capturing(
         &self,
         slot: Slot,
         validator: ValidatorIndex,
-    ) -> Result<(SignedBlock, Option<PersistPlan>), EngineError> {
+    ) -> Result<(SignedBlockWithAttestation, Option<PersistPlan>), EngineError> {
         let mut store = self.lock();
         let produced = match store.produce_block(slot, validator) {
             Ok(produced) => produced,
@@ -253,9 +248,12 @@ impl Engine {
             }
         };
         log_block_produced(slot, validator, &produced);
-        let signed = SignedBlock {
-            message: produced.block,
-            signature: Bytes4000::new([0; 4000]),
+        let signed = SignedBlockWithAttestation {
+            message: BlockWithAttestation {
+                block: produced.block,
+                proposer_attestation: Attestation::default(),
+            },
+            signature: BlockSignatures::default(),
         };
         let head_root = store.head();
         let plan = capture_persist_plan(&store, produced.root, head_root, signed.clone());
@@ -359,7 +357,7 @@ pub(crate) struct PersistPlan {
     head: Checkpoint,
     finalized: Checkpoint,
     state: Arc<State>,
-    block: SignedBlock,
+    block: SignedBlockWithAttestation,
 }
 
 impl PersistPlan {
@@ -369,7 +367,15 @@ impl PersistPlan {
     /// `HeadInfo` from the two checkpoints. The post-state is the `Arc` captured
     /// under the engine lock; the caller unwraps it (deep-cloning only if still
     /// shared) after the lock has been released.
-    pub(crate) fn into_parts(self) -> (Bytes32, SignedBlock, Arc<State>, Checkpoint, Checkpoint) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Bytes32,
+        SignedBlockWithAttestation,
+        Arc<State>,
+        Checkpoint,
+        Checkpoint,
+    ) {
         (
             self.block_root,
             self.block,
@@ -416,7 +422,7 @@ pub(super) fn capture_persist_plan(
     store: &Store,
     block_root: Bytes32,
     head_root: Bytes32,
-    block: SignedBlock,
+    block: SignedBlockWithAttestation,
 ) -> Option<PersistPlan> {
     let state = store.state(&block_root).cloned()?;
     let head_slot = store.block(&head_root).map(|b| b.slot)?;

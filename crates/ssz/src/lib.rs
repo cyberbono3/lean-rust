@@ -39,6 +39,11 @@ pub mod error;
 pub mod lists;
 pub mod merkleize;
 
+/// Shared SSZ test helpers (SA2). Gated behind the `test-support` feature so
+/// downstream crates opt in via a dev-dependency; never in a production build.
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
 pub use crate::decode::decode;
 pub use crate::encode::encode;
 pub use crate::error::{DecodeErrorAdapter, SszError};

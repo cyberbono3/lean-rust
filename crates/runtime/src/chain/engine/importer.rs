@@ -18,7 +18,7 @@
 use std::time::Instant;
 
 use forkchoice::Store;
-use protocol::{SignedBlock, SignedVote, State};
+use protocol::{SignedAttestation, SignedBlockWithAttestation, State};
 use ssz::HashTreeRoot;
 use types::Bytes32;
 
@@ -34,7 +34,7 @@ impl Engine {
     ///
     /// Returns a structured outcome — see [`BlockImportResult`] for the four
     /// variants and their semantics. Engine never panics on this path.
-    pub fn import_block(&self, signed_block: SignedBlock) -> BlockImportResult {
+    pub fn import_block(&self, signed_block: SignedBlockWithAttestation) -> BlockImportResult {
         // Plan-free import entry point: a thin wrapper over
         // [`Self::import_block_capturing`] that discards the persist plan, so
         // the two paths cannot drift. Production uses the capturing variant
@@ -58,10 +58,10 @@ impl Engine {
     /// caller maps that to a storage-layer error.
     pub(crate) fn import_block_capturing(
         &self,
-        signed_block: SignedBlock,
+        signed_block: SignedBlockWithAttestation,
     ) -> (BlockImportResult, Option<PersistPlan>) {
-        let block_root: Bytes32 = signed_block.message.hash_tree_root().into();
-        let parent_root = signed_block.message.parent_root;
+        let block_root: Bytes32 = signed_block.message.block.hash_tree_root().into();
+        let parent_root = signed_block.message.block.parent_root;
         let mut store = self.lock();
 
         if store.has_block(&block_root) {
@@ -113,8 +113,8 @@ impl Engine {
     /// pending-vote pool when newer than the existing entry.
     ///
     /// Returns a structured outcome — see [`AttestationImportResult`].
-    pub fn import_attestation(&self, signed_vote: SignedVote) -> AttestationImportResult {
-        let validator_id = signed_vote.validator_id;
+    pub fn import_attestation(&self, signed_vote: SignedAttestation) -> AttestationImportResult {
+        let validator_id = signed_vote.message.validator_id;
         let mut store = self.lock();
 
         let changed = match store.process_attestation(signed_vote, false) {
@@ -154,7 +154,7 @@ impl Engine {
 /// after `track_block` has already mutated the store).
 fn transition_and_track(
     store: &mut Store,
-    signed_block: SignedBlock,
+    signed_block: SignedBlockWithAttestation,
     mut post_state: State,
     metrics: &ChainMetrics,
 ) -> Result<Bytes32, EngineError> {
@@ -163,7 +163,7 @@ fn transition_and_track(
     let stf_elapsed = stf_start.elapsed();
 
     let post_state_root: Bytes32 = post_state.hash_tree_root().into();
-    store.track_block(signed_block.message, post_state)?;
+    store.track_block(signed_block.message.block, post_state)?;
 
     let fc_start = Instant::now();
     store.accept_new_votes()?;
@@ -181,17 +181,15 @@ fn transition_and_track(
     Ok(post_state_root)
 }
 
-// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
-// rather than `allow` so it retires itself when the fixture moves to
-// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[expect(deprecated)]
 mod tests {
     use super::*;
     use forkchoice::ForkchoiceError;
-    use protocol::{Block, BlockBody, Checkpoint, Slot, ValidatorIndex, Vote};
-    use types::Bytes4000;
+    use protocol::{
+        Attestation, AttestationData, Block, BlockBody, BlockSignatures, BlockWithAttestation,
+        Checkpoint, Slot, ValidatorIndex,
+    };
 
     use super::super::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
 
@@ -218,19 +216,22 @@ mod tests {
         }
     }
 
-    /// Builds a [`SignedBlock`] whose `parent_root` is `parent` and whose
+    /// Builds a [`SignedBlockWithAttestation`] whose `parent_root` is `parent` and whose
     /// remaining fields are zero-filled. The signature payload is zero —
     /// engine never inspects it on the missing-parent / duplicate paths.
-    fn orphan_signed_block(parent: Bytes32) -> SignedBlock {
-        SignedBlock {
-            message: Block {
-                slot: Slot::new(1),
-                proposer_index: ValidatorIndex::new(1),
-                parent_root: parent,
-                state_root: Bytes32::zero(),
-                body: BlockBody::default(),
+    fn orphan_signed_block(parent: Bytes32) -> SignedBlockWithAttestation {
+        SignedBlockWithAttestation {
+            message: BlockWithAttestation {
+                block: Block {
+                    slot: Slot::new(1),
+                    proposer_index: ValidatorIndex::new(1),
+                    parent_root: parent,
+                    state_root: Bytes32::zero(),
+                    body: BlockBody::default(),
+                },
+                proposer_attestation: Attestation::default(),
             },
-            signature: Bytes4000::new([0; 4000]),
+            signature: BlockSignatures::default(),
         }
     }
 
@@ -241,7 +242,7 @@ mod tests {
         // Producer (engine_a) builds + tracks slot-1 block.
         let engine_a = engine_at_genesis(ENGINE_VALIDATORS);
         let signed = produce_signed_block(&engine_a, Slot::new(1), ValidatorIndex::new(1));
-        let block_root: Bytes32 = signed.message.hash_tree_root().into();
+        let block_root: Bytes32 = signed.message.block.hash_tree_root().into();
 
         // Importer (engine_b) is a fresh handle anchored at the same genesis.
         let engine_b = engine_at_genesis(ENGINE_VALIDATORS);
@@ -270,7 +271,7 @@ mod tests {
     fn import_block_capturing_accepts_and_captures_plan() {
         let producer = engine_at_genesis(ENGINE_VALIDATORS);
         let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
-        let block_root: Bytes32 = signed.message.hash_tree_root().into();
+        let block_root: Bytes32 = signed.message.block.hash_tree_root().into();
 
         let importer = engine_at_genesis(ENGINE_VALIDATORS);
         let (outcome, plan) = importer.import_block_capturing(signed);
@@ -281,7 +282,7 @@ mod tests {
         let plan = plan.expect("Accepted import must capture a persist plan");
         let (root, block, _state, head, _finalized) = plan.into_parts();
         assert_eq!(root, block_root);
-        let persisted_root: Bytes32 = block.message.hash_tree_root().into();
+        let persisted_root: Bytes32 = block.message.block.hash_tree_root().into();
         assert_eq!(persisted_root, block_root);
         // Head checkpoint captured under the same lock matches the live head.
         assert_eq!(head.root, importer.head());
@@ -324,7 +325,7 @@ mod tests {
     fn import_block_state_root_mismatch_returns_rejected() {
         let producer = engine_at_genesis(ENGINE_VALIDATORS);
         let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
-        signed.message.state_root = Bytes32::new([0xff; 32]);
+        signed.message.block.state_root = Bytes32::new([0xff; 32]);
 
         let importer = engine_at_genesis(ENGINE_VALIDATORS);
         let pre = StoreSnapshot::capture(&importer);
@@ -351,15 +352,17 @@ mod tests {
         let bogus = Bytes32::new([0xbb; 32]);
         let source = Checkpoint::new(anchor_root, Slot::ZERO);
         let target = Checkpoint::new(bogus, Slot::new(1));
-        let sv = SignedVote {
-            validator_id: ValidatorIndex::new(0),
-            message: Vote {
-                slot: Slot::new(1),
-                head: target,
-                target,
-                source,
+        let sv = SignedAttestation {
+            message: Attestation {
+                validator_id: ValidatorIndex::new(0),
+                data: AttestationData {
+                    slot: Slot::new(1),
+                    head: target,
+                    target,
+                    source,
+                },
             },
-            signature: Bytes4000::new([0; 4000]),
+            signature: types::Signature::new([0; types::Signature::LEN]),
         };
         assert!(matches!(
             engine.import_attestation(sv),
@@ -414,7 +417,7 @@ mod tests {
         let producer = engine_at_genesis(ENGINE_VALIDATORS);
         let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
         // Corrupt the committed state root so the transition is rejected.
-        signed.message.state_root = Bytes32::new([0xff; 32]);
+        signed.message.block.state_root = Bytes32::new([0xff; 32]);
 
         let importer = engine_at_genesis(ENGINE_VALIDATORS).with_metrics(metrics);
         assert!(matches!(

@@ -1,54 +1,57 @@
-//! [`Vote`] — unsigned validator vote — and [`SignedVote`], the wire-shape
-//! container that pairs a vote with its post-quantum-signature placeholder.
+//! Attestation containers — [`AttestationData`] (the unsigned vote body),
+//! [`Attestation`] (a validator's attestation), and [`SignedAttestation`], the
+//! wire-shape container pairing an attestation with its post-quantum signature.
 //!
-//! Wire layout follows the canonical consensus-spec containers:
+//! Wire layout follows the leanSpec consensus-spec containers:
 //!
-//! - `Vote { slot, head, target, source }` — four fixed-size fields.
-//! - `SignedVote { validator_id, message, signature }` — `validator_id` lives
-//!   on the outer signed envelope, **not** on the inner `Vote`. The
-//!   signature is sized at 4000 bytes for the eventual XMSS post-quantum
-//!   scheme.
+//! - `AttestationData { slot, head, target, source }` — four fixed-size fields.
+//! - `Attestation { validator_id, data }` — the validator id lives **inside**
+//!   the attestation, ahead of the `data` body.
+//! - `SignedAttestation { message, signature }` — the [`Attestation`] plus the
+//!   3116-byte XMSS post-quantum [`Signature`].
 //!
-//! All fields are SSZ-fixed-length, so both containers serialize to a fixed
-//! byte count: 128 bytes for [`Vote`], 4136 bytes for [`SignedVote`].
+//! All fields are SSZ-fixed-length, so every container serializes to a fixed
+//! byte count: 128 bytes for [`AttestationData`], 136 bytes for [`Attestation`],
+//! 3252 bytes for [`SignedAttestation`].
 
-use ssz::merkleize::{hash_pair, merkleize, ZERO_HASH};
+use ssz::merkleize::{hash_pair, merkleize};
 use ssz::{Decode, DecodeError, Encode, HashTreeRoot};
-// Retained construction sites for the deprecated `Bytes4000` placeholder; move
-// to `Signature` with the container refactor. Scoped to the items that name it
-// — the `SignedVote` field, the decode leg, and the test module — so unrelated
-// deprecations in the rest of this file are still surfaced. `expect` rather than
-// `allow`: once the sites move, the unfulfilled expectation fails the build.
-#[expect(deprecated)]
-use types::Bytes4000;
+use types::Signature;
 
 use crate::checkpoint::Checkpoint;
 use crate::internal::{
-    ensure_len, read_byte_array, read_fixed, u64_chunk, BYTES4000_LEN, CHECKPOINT_LEN, SLOT_LEN,
+    ensure_len, read_byte_array, read_fixed, u64_chunk, CHECKPOINT_LEN, SIGNATURE_LEN, SLOT_LEN,
     VALIDATOR_INDEX_LEN,
 };
 use crate::slot::Slot;
 use crate::validator::ValidatorIndex;
 
-const VOTE_SSZ_LEN: usize = SLOT_LEN + 3 * CHECKPOINT_LEN; // 128
-const SIGNED_VOTE_SSZ_LEN: usize = VALIDATOR_INDEX_LEN + VOTE_SSZ_LEN + BYTES4000_LEN; // 4136
+const ATTESTATION_DATA_SSZ_LEN: usize = SLOT_LEN + 3 * CHECKPOINT_LEN; // 128
+/// Fixed SSZ wire size of an [`Attestation`] (`validator_id` + `data`). Shared
+/// with the block-envelope sizing in `block.rs`.
+pub(crate) const ATTESTATION_SSZ_LEN: usize = VALIDATOR_INDEX_LEN + ATTESTATION_DATA_SSZ_LEN; // 136
+const SIGNED_ATTESTATION_SSZ_LEN: usize = ATTESTATION_SSZ_LEN + SIGNATURE_LEN; // 3252
 
-/// Unsigned validator vote.
+// =====================================================================
+// AttestationData
+// =====================================================================
+
+/// Unsigned attestation body — the vote a validator casts.
 ///
 /// # Example
 /// ```
-/// use protocol::{Checkpoint, Slot, Vote};
+/// use protocol::{AttestationData, Checkpoint, Slot};
 /// use types::Bytes32;
-/// let v = Vote {
+/// let d = AttestationData {
 ///     slot: Slot::new(1),
 ///     head: Checkpoint::new(Bytes32::zero(), Slot::new(1)),
 ///     target: Checkpoint::new(Bytes32::zero(), Slot::new(0)),
 ///     source: Checkpoint::new(Bytes32::zero(), Slot::new(0)),
 /// };
-/// assert_eq!(v.slot.get(), 1);
+/// assert_eq!(d.slot.get(), 1);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Vote {
+pub struct AttestationData {
     /// Slot in which the vote was cast.
     pub slot: Slot,
     /// Block the voter considers the canonical head at `slot`.
@@ -59,17 +62,17 @@ pub struct Vote {
     pub source: Checkpoint,
 }
 
-impl Encode for Vote {
+impl Encode for AttestationData {
     fn is_ssz_fixed_len() -> bool {
         true
     }
 
     fn ssz_fixed_len() -> usize {
-        VOTE_SSZ_LEN
+        ATTESTATION_DATA_SSZ_LEN
     }
 
     fn ssz_bytes_len(&self) -> usize {
-        VOTE_SSZ_LEN
+        ATTESTATION_DATA_SSZ_LEN
     }
 
     fn ssz_append(&self, buf: &mut Vec<u8>) {
@@ -80,17 +83,17 @@ impl Encode for Vote {
     }
 }
 
-impl Decode for Vote {
+impl Decode for AttestationData {
     fn is_ssz_fixed_len() -> bool {
         true
     }
 
     fn ssz_fixed_len() -> usize {
-        VOTE_SSZ_LEN
+        ATTESTATION_DATA_SSZ_LEN
     }
 
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        ensure_len(bytes, VOTE_SSZ_LEN)?;
+        ensure_len(bytes, ATTESTATION_DATA_SSZ_LEN)?;
         let mut c = 0;
         Ok(Self {
             slot: read_fixed::<Slot>(bytes, &mut c)?,
@@ -101,7 +104,7 @@ impl Decode for Vote {
     }
 }
 
-impl HashTreeRoot for Vote {
+impl HashTreeRoot for AttestationData {
     fn hash_tree_root(&self) -> [u8; 32] {
         // Container with 4 fields → merkleize at width 4 (already a power
         // of two). Two levels of `hash_pair`.
@@ -115,98 +118,149 @@ impl HashTreeRoot for Vote {
     }
 }
 
-/// Signed validator vote — a [`Vote`] plus the validator id that produced it
-/// and a post-quantum-signature placeholder.
+// =====================================================================
+// Attestation
+// =====================================================================
+
+/// A validator's attestation — its index paired with the [`AttestationData`]
+/// it votes for.
 ///
-/// Not [`Copy`]: [`Bytes4000`] is intentionally non-`Copy` to prevent silent
-/// 4 KB stack copies. Pass by reference where ownership is not needed.
-// `allow` rather than `expect`, unlike the other sites in this file: the derives
-// below expand to code naming the field's type, and a lint *expectation* does
-// not propagate into derive expansion (a field- or struct-level `expect` is
-// reported fulfilled while the expanded `Clone`/`Default`/`PartialEq` impls
-// still warn). `allow` does propagate. Scoped to this struct, and retires with
-// the field when it moves to `Signature`.
-#[allow(deprecated)]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SignedVote {
-    /// Index of the validator that produced [`Self::message`].
+/// `validator_id` precedes `data`; the field order is hash-tree-root-bearing.
+/// Small enough (136 bytes) to derive [`Copy`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Attestation {
+    /// Index of the validator that produced this attestation.
     pub validator_id: ValidatorIndex,
-    /// The unsigned [`Vote`] being attested to.
-    pub message: Vote,
-    /// 4000-byte XMSS post-quantum-signature placeholder.
-    pub signature: Bytes4000,
+    /// The unsigned attestation body.
+    pub data: AttestationData,
 }
 
-impl Encode for SignedVote {
+impl Encode for Attestation {
     fn is_ssz_fixed_len() -> bool {
         true
     }
 
     fn ssz_fixed_len() -> usize {
-        SIGNED_VOTE_SSZ_LEN
+        ATTESTATION_SSZ_LEN
     }
 
     fn ssz_bytes_len(&self) -> usize {
-        SIGNED_VOTE_SSZ_LEN
+        ATTESTATION_SSZ_LEN
     }
 
     fn ssz_append(&self, buf: &mut Vec<u8>) {
         self.validator_id.ssz_append(buf);
+        self.data.ssz_append(buf);
+    }
+}
+
+impl Decode for Attestation {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        ATTESTATION_SSZ_LEN
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        ensure_len(bytes, ATTESTATION_SSZ_LEN)?;
+        let mut c = 0;
+        Ok(Self {
+            validator_id: read_fixed::<ValidatorIndex>(bytes, &mut c)?,
+            data: read_fixed::<AttestationData>(bytes, &mut c)?,
+        })
+    }
+}
+
+impl HashTreeRoot for Attestation {
+    fn hash_tree_root(&self) -> [u8; 32] {
+        // 2 fields → merkleize at width 2 → a single `hash_pair`, NO zero pad.
+        hash_pair(
+            &u64_chunk(self.validator_id.get()),
+            &self.data.hash_tree_root(),
+        )
+    }
+}
+
+// =====================================================================
+// SignedAttestation
+// =====================================================================
+
+/// A signed attestation — an [`Attestation`] plus its post-quantum signature.
+///
+/// Not [`Copy`]: [`Signature`] is 3116 bytes, intentionally Clone-only to
+/// prevent silent large stack copies. The validator id lives **inside**
+/// `message`, not on this envelope. `message` precedes `signature`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SignedAttestation {
+    /// The unsigned [`Attestation`] being signed.
+    pub message: Attestation,
+    /// The XMSS post-quantum signature over `message`.
+    pub signature: Signature,
+}
+
+impl Encode for SignedAttestation {
+    fn is_ssz_fixed_len() -> bool {
+        true
+    }
+
+    fn ssz_fixed_len() -> usize {
+        SIGNED_ATTESTATION_SSZ_LEN
+    }
+
+    fn ssz_bytes_len(&self) -> usize {
+        SIGNED_ATTESTATION_SSZ_LEN
+    }
+
+    fn ssz_append(&self, buf: &mut Vec<u8>) {
         self.message.ssz_append(buf);
         buf.extend_from_slice(self.signature.as_slice());
     }
 }
 
-impl Decode for SignedVote {
+impl Decode for SignedAttestation {
     fn is_ssz_fixed_len() -> bool {
         true
     }
 
     fn ssz_fixed_len() -> usize {
-        SIGNED_VOTE_SSZ_LEN
+        SIGNED_ATTESTATION_SSZ_LEN
     }
 
-    #[expect(deprecated)]
     fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        ensure_len(bytes, SIGNED_VOTE_SSZ_LEN)?;
+        ensure_len(bytes, SIGNED_ATTESTATION_SSZ_LEN)?;
         let mut c = 0;
-        Ok(Self {
-            validator_id: read_fixed::<ValidatorIndex>(bytes, &mut c)?,
-            message: read_fixed::<Vote>(bytes, &mut c)?,
-            signature: Bytes4000::new(read_byte_array::<BYTES4000_LEN>(bytes, &mut c)),
-        })
+        let message = read_fixed::<Attestation>(bytes, &mut c)?;
+        let signature = Signature::new(read_byte_array::<SIGNATURE_LEN>(bytes, &mut c));
+        Ok(Self { message, signature })
     }
 }
 
-impl HashTreeRoot for SignedVote {
+impl HashTreeRoot for SignedAttestation {
     fn hash_tree_root(&self) -> [u8; 32] {
-        // Container with 3 fields → merkleize at width 4 (next power of
-        // two). The fourth slot is `ZERO_HASH`. Equivalent to
-        // `merkleize(&chunks)` but written explicitly so the layout is
-        // visible.
-        let validator = u64_chunk(self.validator_id.get());
-        let message = self.message.hash_tree_root();
-        let signature = self.signature.hash_tree_root();
+        // 2 fields → width 2 → single `hash_pair`, NO width-4 zero pad.
         hash_pair(
-            &hash_pair(&validator, &message),
-            &hash_pair(&signature, &ZERO_HASH),
+            &self.message.hash_tree_root(),
+            &self.signature.hash_tree_root(),
         )
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[expect(deprecated)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use ssz::test_support::{assert_htr_eq, assert_ssz_round_trip};
     use ssz::{decode, encode, SszError};
     use types::Bytes32;
 
     use crate::error::ProtocolError;
+    use crate::test_fixtures::{sample_attestation, sample_signature, sample_signed_attestation};
 
-    fn sample_vote() -> Vote {
-        Vote {
+    fn sample_attestation_data() -> AttestationData {
+        AttestationData {
             slot: Slot::new(7),
             head: Checkpoint::new(Bytes32::new([0x11; 32]), Slot::new(7)),
             target: Checkpoint::new(Bytes32::new([0x22; 32]), Slot::new(4)),
@@ -214,27 +268,19 @@ mod tests {
         }
     }
 
-    fn sample_signed_vote() -> SignedVote {
-        SignedVote {
-            validator_id: ValidatorIndex::new(42),
-            message: sample_vote(),
-            signature: Bytes4000::new([0xab; 4000]),
-        }
-    }
-
-    // -- Vote: fixed-length / encode layout --------------------------------
+    // -- AttestationData: fixed-length / encode layout ---------------------
 
     #[test]
-    fn vote_ssz_fixed_len_is_one_twenty_eight() {
-        assert_eq!(<Vote as Encode>::ssz_fixed_len(), 128);
-        assert!(<Vote as Encode>::is_ssz_fixed_len());
+    fn attestation_data_ssz_fixed_len_is_128() {
+        assert_eq!(<AttestationData as Encode>::ssz_fixed_len(), 128);
+        assert!(<AttestationData as Encode>::is_ssz_fixed_len());
     }
 
     #[test]
-    fn vote_encode_layout_concatenates_fields_in_order() {
-        let v = sample_vote();
-        let bytes = encode(&v);
-        assert_eq!(bytes.len(), VOTE_SSZ_LEN);
+    fn attestation_data_encode_layout_concatenates_fields_in_order() {
+        let d = sample_attestation_data();
+        let bytes = encode(&d);
+        assert_eq!(bytes.len(), ATTESTATION_DATA_SSZ_LEN);
         let mut cursor = 0;
         assert_eq!(&bytes[cursor..cursor + 8], &7_u64.to_le_bytes());
         cursor += 8;
@@ -248,30 +294,24 @@ mod tests {
         assert_eq!(&bytes[cursor + 32..cursor + 40], &0_u64.to_le_bytes());
     }
 
-    // -- Vote: round-trip --------------------------------------------------
-
     #[test]
-    fn vote_ssz_round_trip_default() {
-        let v = Vote::default();
-        let back: Vote = decode(&encode(&v)).unwrap();
-        assert_eq!(back, v);
+    fn attestation_data_ssz_round_trip_default() {
+        assert_ssz_round_trip(&AttestationData::default());
     }
 
     #[test]
-    fn vote_ssz_round_trip_populated() {
-        let v = sample_vote();
-        let back: Vote = decode(&encode(&v)).unwrap();
-        assert_eq!(back, v);
+    fn attestation_data_ssz_round_trip_populated() {
+        assert_ssz_round_trip(&sample_attestation_data());
     }
 
     #[test]
-    fn vote_decode_rejects_short_input() {
-        let err = decode::<Vote>(&[0_u8; VOTE_SSZ_LEN - 1]).unwrap_err();
+    fn attestation_data_decode_rejects_short_input() {
+        let err = decode::<AttestationData>(&[0_u8; ATTESTATION_DATA_SSZ_LEN - 1]).unwrap_err();
         match err {
             SszError::Decode { source } => match source.0 {
                 DecodeError::InvalidByteLength { len, expected } => {
-                    assert_eq!(len, VOTE_SSZ_LEN - 1);
-                    assert_eq!(expected, VOTE_SSZ_LEN);
+                    assert_eq!(len, ATTESTATION_DATA_SSZ_LEN - 1);
+                    assert_eq!(expected, ATTESTATION_DATA_SSZ_LEN);
                 }
                 other => panic!("unexpected upstream variant: {other:?}"),
             },
@@ -280,118 +320,150 @@ mod tests {
     }
 
     #[test]
-    fn vote_decode_rejects_long_input() {
-        let err = decode::<Vote>(&[0_u8; VOTE_SSZ_LEN + 1]).unwrap_err();
-        assert!(matches!(err, SszError::Decode { .. }));
-    }
-
-    // -- Vote: HashTreeRoot ------------------------------------------------
-
-    #[test]
-    fn vote_hash_tree_root_is_merkleize_of_field_roots() {
-        let v = sample_vote();
+    fn attestation_data_hash_tree_root_is_merkleize_of_field_roots() {
+        let d = sample_attestation_data();
         let chunks = [
-            u64_chunk(v.slot.get()),
-            v.head.hash_tree_root(),
-            v.target.hash_tree_root(),
-            v.source.hash_tree_root(),
+            u64_chunk(d.slot.get()),
+            d.head.hash_tree_root(),
+            d.target.hash_tree_root(),
+            d.source.hash_tree_root(),
         ];
-        assert_eq!(v.hash_tree_root(), merkleize(&chunks));
+        assert_eq!(d.hash_tree_root(), merkleize(&chunks));
     }
 
     #[test]
-    fn vote_hash_tree_root_distinguishes_field_swaps() {
-        let mut v = sample_vote();
-        // Swap target and source — different field positions must yield
-        // different roots even though the byte content is the same set.
-        let original = v.hash_tree_root();
-        std::mem::swap(&mut v.target, &mut v.source);
-        assert_ne!(original, v.hash_tree_root());
+    fn attestation_data_hash_tree_root_distinguishes_field_swaps() {
+        let mut d = sample_attestation_data();
+        let original = d.hash_tree_root();
+        std::mem::swap(&mut d.target, &mut d.source);
+        assert_ne!(original, d.hash_tree_root());
     }
 
-    // -- SignedVote: fixed-length / encode layout --------------------------
+    // -- Attestation: fixed-length / encode layout ------------------------
 
     #[test]
-    fn signed_vote_ssz_fixed_len_is_four_one_three_six() {
-        assert_eq!(<SignedVote as Encode>::ssz_fixed_len(), 4136);
-        assert!(<SignedVote as Encode>::is_ssz_fixed_len());
-    }
-
-    #[test]
-    fn signed_vote_encode_layout_validator_message_signature() {
-        let sv = sample_signed_vote();
-        let bytes = encode(&sv);
-        assert_eq!(bytes.len(), SIGNED_VOTE_SSZ_LEN);
-        assert_eq!(&bytes[..8], &42_u64.to_le_bytes());
-        assert_eq!(&bytes[8..8 + VOTE_SSZ_LEN], encode(&sv.message).as_slice());
-        assert!(bytes[8 + VOTE_SSZ_LEN..].iter().all(|&b| b == 0xab));
-    }
-
-    // -- SignedVote: round-trip --------------------------------------------
-
-    #[test]
-    fn signed_vote_ssz_round_trip_default() {
-        let sv = SignedVote::default();
-        let back: SignedVote = decode(&encode(&sv)).unwrap();
-        assert_eq!(back, sv);
+    fn attestation_ssz_fixed_len_is_136() {
+        assert_eq!(<Attestation as Encode>::ssz_fixed_len(), 136);
+        assert!(<Attestation as Encode>::is_ssz_fixed_len());
     }
 
     #[test]
-    fn signed_vote_ssz_round_trip_populated() {
-        let sv = sample_signed_vote();
-        let back: SignedVote = decode(&encode(&sv)).unwrap();
-        assert_eq!(back, sv);
+    fn attestation_encode_layout_validator_then_data() {
+        let a = sample_attestation(42);
+        let bytes = encode(&a);
+        assert_eq!(bytes.len(), ATTESTATION_SSZ_LEN);
+        assert_eq!(&bytes[..8], &a.validator_id.get().to_le_bytes());
+        assert_eq!(&bytes[8..], encode(&a.data).as_slice());
     }
 
     #[test]
-    fn signed_vote_decode_rejects_short_input() {
-        let err = decode::<SignedVote>(&[0_u8; SIGNED_VOTE_SSZ_LEN - 1]).unwrap_err();
-        assert!(matches!(err, SszError::Decode { .. }));
+    fn attestation_ssz_round_trip_default_and_populated() {
+        for a in [Attestation::default(), sample_attestation(42)] {
+            assert_ssz_round_trip(&a);
+        }
     }
 
     #[test]
-    fn signed_vote_decode_rejects_long_input() {
-        let err = decode::<SignedVote>(&[0_u8; SIGNED_VOTE_SSZ_LEN + 1]).unwrap_err();
-        assert!(matches!(err, SszError::Decode { .. }));
+    fn attestation_hash_tree_root_is_hash_pair() {
+        let a = sample_attestation(42);
+        assert_htr_eq(
+            &a,
+            hash_pair(&u64_chunk(a.validator_id.get()), &a.data.hash_tree_root()),
+        );
     }
 
     #[test]
-    fn signed_vote_decode_propagates_protocol_error_via_question_mark() {
-        let result: Result<SignedVote, ProtocolError> =
-            decode::<SignedVote>(&[]).map_err(Into::into);
-        assert!(matches!(result, Err(ProtocolError::Ssz(_))));
-    }
+    fn attestation_hash_tree_root_responds_to_validator_id_and_data() {
+        let baseline = sample_attestation(42).hash_tree_root();
 
-    // -- SignedVote: HashTreeRoot -----------------------------------------
-
-    #[test]
-    fn signed_vote_hash_tree_root_is_merkleize_with_zero_pad() {
-        let sv = sample_signed_vote();
-        let chunks = [
-            u64_chunk(sv.validator_id.get()),
-            sv.message.hash_tree_root(),
-            sv.signature.hash_tree_root(),
-        ];
-        // 3 fields → width 4 → expect zero-padded merkleization.
-        assert_eq!(sv.hash_tree_root(), merkleize(&chunks));
-    }
-
-    #[test]
-    fn signed_vote_hash_tree_root_responds_to_each_field() {
-        let baseline = sample_signed_vote().hash_tree_root();
-
-        let mut a = sample_signed_vote();
+        let mut a = sample_attestation(42);
         a.validator_id = ValidatorIndex::new(43);
         assert_ne!(a.hash_tree_root(), baseline);
 
-        let mut b = sample_signed_vote();
-        b.message.slot = Slot::new(8);
+        let mut b = sample_attestation(42);
+        b.data.slot = Slot::new(9);
+        assert_ne!(b.hash_tree_root(), baseline);
+    }
+
+    // -- SignedAttestation: fixed-length / encode layout ------------------
+
+    #[test]
+    fn signed_attestation_ssz_fixed_len_is_3252() {
+        assert_eq!(<SignedAttestation as Encode>::ssz_fixed_len(), 3252);
+        assert!(<SignedAttestation as Encode>::is_ssz_fixed_len());
+    }
+
+    #[test]
+    fn signed_attestation_encode_layout_message_then_signature() {
+        let sa = sample_signed_attestation(42);
+        let bytes = encode(&sa);
+        assert_eq!(bytes.len(), SIGNED_ATTESTATION_SSZ_LEN);
+        assert_eq!(
+            &bytes[..ATTESTATION_SSZ_LEN],
+            encode(&sa.message).as_slice()
+        );
+        assert_eq!(&bytes[ATTESTATION_SSZ_LEN..], sa.signature.as_slice());
+    }
+
+    // -- SignedAttestation: round-trip ------------------------------------
+
+    #[test]
+    fn signed_attestation_ssz_round_trip_default() {
+        assert_ssz_round_trip(&SignedAttestation::default());
+    }
+
+    #[test]
+    fn signed_attestation_ssz_round_trip_populated() {
+        assert_ssz_round_trip(&sample_signed_attestation(42));
+    }
+
+    #[test]
+    fn signed_attestation_decode_rejects_short_input() {
+        let err = decode::<SignedAttestation>(&[0_u8; SIGNED_ATTESTATION_SSZ_LEN - 1]).unwrap_err();
+        assert!(matches!(err, SszError::Decode { .. }));
+    }
+
+    #[test]
+    fn signed_attestation_decode_rejects_long_input() {
+        let err = decode::<SignedAttestation>(&[0_u8; SIGNED_ATTESTATION_SSZ_LEN + 1]).unwrap_err();
+        assert!(matches!(err, SszError::Decode { .. }));
+    }
+
+    #[test]
+    fn signed_attestation_decode_propagates_protocol_error_via_question_mark() {
+        let result: Result<SignedAttestation, ProtocolError> =
+            decode::<SignedAttestation>(&[]).map_err(Into::into);
+        assert!(matches!(result, Err(ProtocolError::Ssz(_))));
+    }
+
+    // -- SignedAttestation: HashTreeRoot ----------------------------------
+
+    #[test]
+    fn signed_attestation_hash_tree_root_is_hash_pair() {
+        let sa = sample_signed_attestation(42);
+        // 2 fields → width 2 → single hash_pair, NO width-4 zero pad.
+        assert_htr_eq(
+            &sa,
+            hash_pair(&sa.message.hash_tree_root(), &sa.signature.hash_tree_root()),
+        );
+    }
+
+    #[test]
+    fn signed_attestation_hash_tree_root_responds_to_each_field() {
+        let baseline = sample_signed_attestation(42).hash_tree_root();
+
+        let mut a = sample_signed_attestation(42);
+        a.message.validator_id = ValidatorIndex::new(43);
+        assert_ne!(a.hash_tree_root(), baseline);
+
+        let mut b = sample_signed_attestation(42);
+        b.message.data.slot = Slot::new(8);
         assert_ne!(b.hash_tree_root(), baseline);
 
-        let mut c = sample_signed_vote();
-        let mut sig = [0xab_u8; 4000];
-        sig[0] = 0xac;
-        c.signature = Bytes4000::new(sig);
+        let mut c = sample_signed_attestation(42);
+        let mut sig = [0x2a_u8; Signature::LEN];
+        sig[0] ^= 0xff;
+        c.signature = Signature::new(sig);
         assert_ne!(c.hash_tree_root(), baseline);
     }
 
@@ -399,7 +471,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn vote_ssz_round_trips(
+        fn attestation_data_ssz_round_trips(
             slot in any::<u64>(),
             head_root in proptest::array::uniform32(any::<u8>()),
             head_slot in any::<u64>(),
@@ -408,35 +480,37 @@ mod tests {
             source_root in proptest::array::uniform32(any::<u8>()),
             source_slot in any::<u64>(),
         ) {
-            let v = Vote {
+            let d = AttestationData {
                 slot: Slot::new(slot),
                 head: Checkpoint::new(Bytes32::new(head_root), Slot::new(head_slot)),
                 target: Checkpoint::new(Bytes32::new(target_root), Slot::new(target_slot)),
                 source: Checkpoint::new(Bytes32::new(source_root), Slot::new(source_slot)),
             };
-            let back: Vote = decode(&encode(&v)).unwrap();
-            prop_assert_eq!(back, v);
+            let back: AttestationData = decode(&encode(&d)).unwrap();
+            prop_assert_eq!(back, d);
         }
 
         #[test]
-        fn signed_vote_ssz_round_trips(
+        fn signed_attestation_ssz_round_trips(
             validator in any::<u64>(),
             slot in any::<u64>(),
             sig_byte in any::<u8>(),
         ) {
-            let sv = SignedVote {
-                validator_id: ValidatorIndex::new(validator),
-                message: Vote { slot: Slot::new(slot), ..Default::default() },
-                signature: Bytes4000::new([sig_byte; 4000]),
+            let sa = SignedAttestation {
+                message: Attestation {
+                    validator_id: ValidatorIndex::new(validator),
+                    data: AttestationData { slot: Slot::new(slot), ..Default::default() },
+                },
+                signature: sample_signature(sig_byte),
             };
-            let back: SignedVote = decode(&encode(&sv)).unwrap();
-            prop_assert_eq!(back, sv);
+            let back: SignedAttestation = decode(&encode(&sa)).unwrap();
+            prop_assert_eq!(back, sa);
         }
 
         #[test]
-        fn vote_hash_tree_root_is_deterministic(slot in any::<u64>()) {
-            let v = Vote { slot: Slot::new(slot), ..Default::default() };
-            prop_assert_eq!(v.hash_tree_root(), v.hash_tree_root());
+        fn attestation_data_hash_tree_root_is_deterministic(slot in any::<u64>()) {
+            let d = AttestationData { slot: Slot::new(slot), ..Default::default() };
+            prop_assert_eq!(d.hash_tree_root(), d.hash_tree_root());
         }
     }
 }

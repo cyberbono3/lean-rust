@@ -9,7 +9,7 @@
 //!   tracking), repeat until the vote set stabilizes, then track the
 //!   block in the store.
 //! - [`Store::produce_attestation_vote`] composes the local attestation
-//!   `Vote` from `(head, target, source)` plus the store's current
+//!   `AttestationData` from `(head, target, source)` plus the store's current
 //!   safe-target snapshot.
 //!
 //! Both flows are pure with respect to networking/runtime — this module
@@ -19,8 +19,8 @@
 use std::cmp::Ordering;
 
 use protocol::{
-    is_proposer, Block, BlockBody, Checkpoint, SignedVote, Slot, State, ValidatorIndex, Vote,
-    MAX_ATTESTATIONS,
+    is_proposer, AttestationData, Block, BlockBody, Checkpoint, SignedAttestation, Slot, State,
+    ValidatorIndex, MAX_ATTESTATIONS,
 };
 use ssz::HashTreeRoot;
 use types::Bytes32;
@@ -55,7 +55,7 @@ pub struct ProducedBlock {
 #[derive(Debug, Clone, Copy)]
 pub struct ProducedVote {
     /// The unsigned vote ready for signing by the validator client.
-    pub vote: Vote,
+    pub vote: AttestationData,
     /// `vote.head.root`, surfaced separately for log/metric convenience.
     pub head_root: Bytes32,
     /// `vote.target`, surfaced separately.
@@ -110,7 +110,7 @@ impl Store {
 
         let (attestations, post_state) =
             self.converge_attestations(head_root, slot, validator, &head_state)?;
-        self.finalize_produced_block(head_root, slot, validator, attestations, post_state)
+        self.finalize_produced_block(head_root, slot, validator, &attestations, post_state)
     }
 
     /// Convergent attestation gathering: rebuild the candidate's post-state
@@ -127,8 +127,8 @@ impl Store {
         slot: Slot,
         validator: ValidatorIndex,
         head_state: &State,
-    ) -> Result<(Vec<SignedVote>, State), ForkchoiceError> {
-        let mut attestations: Vec<SignedVote> = Vec::new();
+    ) -> Result<(Vec<SignedAttestation>, State), ForkchoiceError> {
+        let mut attestations: Vec<SignedAttestation> = Vec::new();
         loop {
             let (_, post_state) =
                 build_candidate_block(head_root, slot, validator, head_state, &attestations)?;
@@ -148,7 +148,7 @@ impl Store {
         head_root: Bytes32,
         slot: Slot,
         validator: ValidatorIndex,
-        attestations: Vec<SignedVote>,
+        attestations: &[SignedAttestation],
         post_state: State,
     ) -> Result<ProducedBlock, ForkchoiceError> {
         let post_state_root: Bytes32 = post_state.hash_tree_root().into();
@@ -157,7 +157,7 @@ impl Store {
             proposer_index: validator,
             parent_root: head_root,
             state_root: post_state_root,
-            body: BlockBody { attestations },
+            body: body_from(attestations),
         };
         let root: Bytes32 = block.hash_tree_root().into();
         self.track_block(block.clone(), post_state.clone())?;
@@ -194,7 +194,7 @@ impl Store {
         let target = self.get_vote_target()?;
         let source = self.latest_justified();
 
-        let vote = Vote {
+        let vote = AttestationData {
             slot,
             head: Checkpoint::new(head_root, head_slot),
             target,
@@ -220,20 +220,29 @@ impl Store {
     fn collect_includable_votes(
         &self,
         post_state: &State,
-        already_included: &[SignedVote],
-    ) -> Vec<SignedVote> {
+        already_included: &[SignedAttestation],
+    ) -> Vec<SignedAttestation> {
         let cap = MAX_ATTESTATIONS.saturating_sub(already_included.len());
         if cap == 0 {
             return Vec::new();
         }
         self.latest_known_votes()
             .values()
-            .filter(|sv| self.has_block(&sv.message.target.root))
-            .filter(|sv| sv.message.source == post_state.latest_justified)
+            .filter(|sv| self.has_block(&sv.message.data.target.root))
+            .filter(|sv| sv.message.data.source == post_state.latest_justified)
             .filter(|sv| !already_included.contains(sv))
             .take(cap)
             .cloned()
             .collect()
+    }
+}
+
+/// Builds a [`BlockBody`] of plain attestations from pooled signed votes. The
+/// per-vote signature placeholders are dropped here; the block-signature list is
+/// a later (sign-path) concern.
+fn body_from(votes: &[SignedAttestation]) -> BlockBody {
+    BlockBody {
+        attestations: votes.iter().map(|sv| sv.message).collect(),
     }
 }
 
@@ -246,16 +255,14 @@ fn build_candidate_block(
     slot: Slot,
     validator: ValidatorIndex,
     head_state: &State,
-    votes: &[SignedVote],
+    votes: &[SignedAttestation],
 ) -> Result<(Block, State), ForkchoiceError> {
     let candidate = Block {
         slot,
         proposer_index: validator,
         parent_root: head_root,
         state_root: Bytes32::zero(),
-        body: BlockBody {
-            attestations: votes.to_vec(),
-        },
+        body: body_from(votes),
     };
 
     let mut next = advance_state_to_slot(head_state.clone(), slot)?;
@@ -280,12 +287,8 @@ fn advance_state_to_slot(mut state: State, target: Slot) -> Result<State, Forkch
     }
 }
 
-// Fixtures here still build the deprecated `Bytes4000` placeholder. `expect`
-// rather than `allow` so it retires itself when the fixture moves to
-// `Signature`.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#[expect(deprecated)]
 mod tests {
     use super::*;
     use protocol::Slot;
@@ -378,22 +381,25 @@ mod tests {
         // the cap is then zero and the result must be empty regardless of
         // `latest_known_votes` content.
         let (store, _) = produce_setup();
-        let dummy: Vec<SignedVote> = (0..MAX_ATTESTATIONS).map(|_| dummy_signed_vote()).collect();
+        let dummy: Vec<SignedAttestation> =
+            (0..MAX_ATTESTATIONS).map(|_| dummy_signed_vote()).collect();
         let votes = store.collect_includable_votes(&dummy_state(), &dummy);
         assert!(votes.is_empty());
     }
 
-    fn dummy_signed_vote() -> SignedVote {
-        use protocol::Vote;
-        SignedVote {
-            validator_id: ValidatorIndex::new(0),
-            message: Vote {
-                slot: Slot::ZERO,
-                head: Checkpoint::default(),
-                target: Checkpoint::default(),
-                source: Checkpoint::default(),
+    fn dummy_signed_vote() -> SignedAttestation {
+        use protocol::Attestation;
+        SignedAttestation {
+            message: Attestation {
+                validator_id: ValidatorIndex::new(0),
+                data: AttestationData {
+                    slot: Slot::ZERO,
+                    head: Checkpoint::default(),
+                    target: Checkpoint::default(),
+                    source: Checkpoint::default(),
+                },
             },
-            signature: types::Bytes4000::new([0; 4000]),
+            signature: types::Signature::new([0; types::Signature::LEN]),
         }
     }
 

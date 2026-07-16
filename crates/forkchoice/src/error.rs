@@ -97,7 +97,7 @@ pub enum ForkchoiceError {
     /// per entry — 250K forged ids ≈ 1 GiB).
     #[error("forkchoice attestation validator id {validator_id} out of range (num_validators={num_validators})")]
     ValidatorIndexOutOfRange {
-        /// `signed_vote.validator_id` declared by the attester.
+        /// `signed_attestation.message.validator_id` declared by the attester.
         validator_id: u64,
         /// `Store::config.num_validators` at call time.
         num_validators: u64,

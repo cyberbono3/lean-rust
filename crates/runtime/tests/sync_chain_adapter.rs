@@ -54,7 +54,7 @@ async fn has_block_reports_true_after_import() {
     let svc = build_service();
     let producer = sibling_engine();
     let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
-    let block_root: Bytes32 = signed.message.hash_tree_root().into();
+    let block_root: Bytes32 = signed.message.block.hash_tree_root().into();
 
     assert!(!svc.has_block(&block_root).unwrap());
     let _ = Service::import_block(&svc, signed).await.unwrap();

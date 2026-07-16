@@ -28,7 +28,10 @@ use lean_wire::{
     decode_req_resp, decode_req_resp_wire, encode_req_resp, encode_req_resp_wire,
     read_req_resp_frame, write_req_resp_frame, NetworkingError, Status,
 };
-use protocol::{Block, BlockBody, BlockHeader, Checkpoint, SignedBlock, SignedVote, State, Vote};
+use protocol::{
+    AttestationData, Block, BlockBody, BlockHeader, Checkpoint, SignedAttestation,
+    SignedBlockWithAttestation, State,
+};
 use ssz::{decode, encode, Decode, Encode};
 
 // =============================================================================
@@ -69,12 +72,12 @@ const FIXTURES: &[(&str, &[u8])] = &[
         include_bytes!("data/wire-parity/slot1-empty.signedblock.ssz"),
     ),
     (
-        "slot7-vote.vote",
-        include_bytes!("data/wire-parity/slot7-vote.vote.ssz"),
+        "slot7.attestationdata",
+        include_bytes!("data/wire-parity/slot7.attestationdata.ssz"),
     ),
     (
-        "validator3-vote.signedvote",
-        include_bytes!("data/wire-parity/validator3-vote.signedvote.ssz"),
+        "validator3.signedattestation",
+        include_bytes!("data/wire-parity/validator3.signedattestation.ssz"),
     ),
 ];
 
@@ -173,22 +176,22 @@ fn block_round_trip() {
 
 #[test]
 fn signed_block_round_trip() {
-    assert_round_trip::<SignedBlock>(
+    assert_round_trip::<SignedBlockWithAttestation>(
         "slot1-empty.signedblock",
         fixture("slot1-empty.signedblock"),
     );
 }
 
 #[test]
-fn vote_round_trip() {
-    assert_round_trip::<Vote>("slot7-vote.vote", fixture("slot7-vote.vote"));
+fn attestationdata_round_trip() {
+    assert_round_trip::<AttestationData>("slot7.attestationdata", fixture("slot7.attestationdata"));
 }
 
 #[test]
-fn signedvote_round_trip() {
-    assert_round_trip::<SignedVote>(
-        "validator3-vote.signedvote",
-        fixture("validator3-vote.signedvote"),
+fn signedattestation_round_trip() {
+    assert_round_trip::<SignedAttestation>(
+        "validator3.signedattestation",
+        fixture("validator3.signedattestation"),
     );
 }
 
@@ -198,7 +201,7 @@ fn signedvote_round_trip() {
 
 #[test]
 fn multi_chunk_stream_carries_independent_frames() {
-    // Two SignedBlock frames written back-to-back — the BlocksByRoot
+    // Two SignedBlockWithAttestation frames written back-to-back — the BlocksByRoot
     // response shape libp2p will feed us.
     let a = fixture("slot1-empty.signedblock");
     let b = fixture("slot1-empty.signedblock");
@@ -224,7 +227,7 @@ fn truncated_ssz_payload_surfaces_typed_error() {
     let mut bytes = fixture("slot1-empty.signedblock").to_vec();
     bytes.pop();
     let wire = encode_req_resp_wire(&bytes);
-    let err = decode_req_resp::<SignedBlock>(&wire).unwrap_err();
+    let err = decode_req_resp::<SignedBlockWithAttestation>(&wire).unwrap_err();
     assert!(
         matches!(err, NetworkingError::Ssz(_)),
         "expected NetworkingError::Ssz, got {err:?}",
@@ -252,10 +255,106 @@ fn read_frame_rejects_length_over_cap() {
 #[test]
 fn short_eof_mid_frame_surfaces_io_error() {
     let mut stream = Vec::new();
-    write_req_resp_frame(&mut stream, fixture("slot7-vote.vote")).unwrap();
+    write_req_resp_frame(&mut stream, fixture("slot7.attestationdata")).unwrap();
     let truncated_len = stream.len() - 4;
     stream.truncate(truncated_len);
     let mut cursor = Cursor::new(stream);
     let err = read_req_resp_frame(&mut cursor, None).unwrap_err();
     assert!(matches!(err, NetworkingError::Io(_)), "got {err:?}");
+}
+
+// =============================================================================
+// devnet-1 wire-break fixture regeneration (SA2)
+// =============================================================================
+//
+// `slot7.attestationdata.ssz` is byte-identical to the retired `slot7-vote.vote.ssz`
+// (`AttestationData` shares `Vote`'s layout) and is preserved by `git mv`.
+// `validator3.signedattestation.ssz` (4136 -> 3252) and `two-votes.blockbody.ssz`
+// (8276 -> 6508) are regenerated from the canonical values below, faithful to the
+// retired devnet-0 vectors: the same slot-7 attestation data, validator ids
+// 3 and 1, and signature fills 0xa1 / 0xb2. Run once, then commit:
+//
+//   cargo test -p lean-wire --test parity regenerate_devnet1_fixtures -- --ignored --exact
+mod regen {
+    use protocol::{
+        Attestation, AttestationData, Block, BlockBody, BlockSignatures, BlockWithAttestation,
+        Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot, ValidatorIndex,
+    };
+    use ssz::test_support::regen_vector;
+    use types::{Bytes32, Signature};
+
+    fn slot1_empty_signed_block() -> SignedBlockWithAttestation {
+        SignedBlockWithAttestation {
+            message: BlockWithAttestation {
+                block: Block {
+                    slot: Slot::new(1),
+                    proposer_index: ValidatorIndex::new(1),
+                    parent_root: Bytes32::new([0x03; 32]),
+                    state_root: Bytes32::new([0x04; 32]),
+                    body: BlockBody::default(),
+                },
+                proposer_attestation: Attestation::default(),
+            },
+            signature: BlockSignatures::default(),
+        }
+    }
+
+    fn slot7_data() -> AttestationData {
+        AttestationData {
+            slot: Slot::new(7),
+            head: Checkpoint::new(Bytes32::new([0xab; 32]), Slot::new(12)),
+            target: Checkpoint::new(Bytes32::new([0xab; 32]), Slot::new(12)),
+            source: Checkpoint::new(Bytes32::zero(), Slot::ZERO),
+        }
+    }
+
+    fn attestation(validator: u64) -> Attestation {
+        Attestation {
+            validator_id: ValidatorIndex::new(validator),
+            data: slot7_data(),
+        }
+    }
+
+    fn signed_attestation(validator: u64, sig_fill: u8) -> SignedAttestation {
+        SignedAttestation {
+            message: attestation(validator),
+            signature: Signature::new([sig_fill; Signature::LEN]),
+        }
+    }
+
+    #[test]
+    #[ignore = "regeneration writes committed fixtures; run explicitly on a wire break"]
+    fn regenerate_devnet1_fixtures() {
+        let dir = "tests/data/wire-parity";
+
+        // Byte-identical rename target — proves the AttestationData layout matches
+        // the retired Vote bytes.
+        let (data_bytes, _) =
+            regen_vector(&format!("{dir}/slot7.attestationdata.ssz"), &slot7_data());
+        assert_eq!(data_bytes.len(), 128);
+
+        let (sa_bytes, _) = regen_vector(
+            &format!("{dir}/validator3.signedattestation.ssz"),
+            &signed_attestation(3, 0xa1),
+        );
+        assert_eq!(sa_bytes.len(), 3252);
+
+        // Part 7: the block body now holds PLAIN attestations (signatures moved
+        // to the block-signature list), so this fixture is regenerated again —
+        // 2 * 136 + 4 offset = 276 bytes (was 6508 with SignedAttestation elements).
+        let body = BlockBody {
+            attestations: vec![attestation(3), attestation(1)],
+        };
+        let (body_bytes, _) = regen_vector(&format!("{dir}/two-votes.blockbody.ssz"), &body);
+        assert_eq!(body_bytes.len(), 276);
+
+        // Part 7: the block envelope changed (SignedBlock -> SignedBlockWithAttestation),
+        // so this fixture is regenerated. 8 (two offsets) + 228 (message:
+        // BlockWithAttestation = 140 fixed-part + 88 block) + 0 (empty signatures) = 236.
+        let (signed_block_bytes, _) = regen_vector(
+            &format!("{dir}/slot1-empty.signedblock.ssz"),
+            &slot1_empty_signed_block(),
+        );
+        assert_eq!(signed_block_bytes.len(), 236);
+    }
 }

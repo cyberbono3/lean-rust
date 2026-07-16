@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::chain::Service as ChainService;
 use lean_wire::Status;
-use protocol::SignedBlock;
+use protocol::SignedBlockWithAttestation;
 use storage::Store;
 use tracing::warn;
 use types::Bytes32;
@@ -56,7 +56,7 @@ impl RpcProvider {
     /// `None` lookups out of the response — matching the "unknown roots →
     /// empty entry" spec semantics.
     #[must_use]
-    pub fn get_block_by_root(&self, root: &Bytes32) -> Option<SignedBlock> {
+    pub fn get_block_by_root(&self, root: &Bytes32) -> Option<SignedBlockWithAttestation> {
         match self {
             Self::NoOp => None,
             Self::Chain { store, .. } => match store.load_block(root) {

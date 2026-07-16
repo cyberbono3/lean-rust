@@ -29,9 +29,22 @@ Verbatim SSZ-encoded container blobs (paired with their `.root.hex` HashTreeRoot
 | `slot12-justified.checkpoint.ssz`    | `Checkpoint`    |
 | `slot1.blockheader.ssz`              | `BlockHeader`   |
 | `slot1-empty.block.ssz`              | `Block`         |
-| `slot1-empty.signedblock.ssz`        | `SignedBlock`   |
-| `slot7-vote.vote.ssz`                | `Vote`          |
-| `validator3-vote.signedvote.ssz`     | `SignedVote`    |
+| `slot1-empty.signedblock.ssz`        | `SignedBlockWithAttestation` |
+| `slot7.attestationdata.ssz`          | `AttestationData`    |
+| `validator3.signedattestation.ssz`   | `SignedAttestation`  |
+
+The devnet-1 attestation wire break renamed and re-shaped the last two rows.
+`slot7.attestationdata.ssz` is byte-identical to the retired `slot7-vote.vote.ssz`
+(`AttestationData` shares `Vote`'s field layout — a pure rename). `validator3.signedattestation.ssz`
+(4136 → 3252 bytes) and `two-votes.blockbody.ssz` (8276 → 6508 bytes, two `SignedAttestation`
+elements) were regenerated from the canonical values — same slot-7 attestation data, validator
+ids 3 and 1, signature fills `0xa1` / `0xb2` — by the `regen::regenerate_devnet1_fixtures`
+test in [tests/parity.rs](../parity.rs) via the SA2 `regen_vector` helper. `two-votes.blockbody.ssz`
+was regenerated again when Part 7 flipped the block body to plain `Attestation` (2 × 136 + 4
+offset = 276 bytes) and moved signatures to the block-signature list. Part 7 also regenerated
+`slot1-empty.signedblock.ssz` for the new envelope `SignedBlockWithAttestation` (236 bytes: two
+offsets + a 228-byte `BlockWithAttestation` message + an empty signature list). All Part-7
+regens run from the same `regen::regenerate_devnet1_fixtures` test.
 
 The parity test in [tests/parity.rs](../parity.rs) validates, for every fixture:
 

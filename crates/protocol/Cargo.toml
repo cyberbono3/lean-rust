@@ -18,3 +18,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# SA2 shared SSZ round-trip helper for the container tests. Dev-dependency only.
+ssz      = { path = "../ssz", features = ["test-support"] }
