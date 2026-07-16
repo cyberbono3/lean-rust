@@ -65,7 +65,7 @@ pub enum BlockImportResult {
 pub enum AttestationImportResult {
     /// The attestation mutated `latest_new_votes` (gossip pool insert or refresh).
     Accepted {
-        /// `signed_vote.validator_id`.
+        /// `signed_attestation.message.validator_id`.
         validator_id: ValidatorIndex,
         /// Store head after the call.
         head_root: Bytes32,
@@ -75,7 +75,7 @@ pub enum AttestationImportResult {
     /// The attestation was valid but older or equal to the existing pending
     /// entry for that validator. The store is unchanged.
     Ignored {
-        /// `signed_vote.validator_id`.
+        /// `signed_attestation.message.validator_id`.
         validator_id: ValidatorIndex,
         /// Store head after the call.
         head_root: Bytes32,
@@ -84,7 +84,7 @@ pub enum AttestationImportResult {
     },
     /// `validate_attestation` or `process_attestation` rejected the vote.
     Rejected {
-        /// `signed_vote.validator_id`.
+        /// `signed_attestation.message.validator_id`.
         validator_id: ValidatorIndex,
         /// Underlying failure that triggered the rejection.
         error: EngineError,

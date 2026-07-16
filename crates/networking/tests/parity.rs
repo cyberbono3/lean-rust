@@ -32,7 +32,7 @@ use protocol::{
     AttestationData, Block, BlockBody, BlockHeader, Checkpoint, SignedAttestation,
     SignedBlockWithAttestation, State,
 };
-use ssz::{decode, encode, Decode, Encode};
+use ssz::{decode, encode, Decode, Encode, HashTreeRoot};
 
 // =============================================================================
 // per-fixture entries
@@ -44,8 +44,8 @@ const FIXTURES: &[(&str, &[u8])] = &[
         include_bytes!("data/wire-parity/empty.blockbody.ssz"),
     ),
     (
-        "two-votes.blockbody",
-        include_bytes!("data/wire-parity/two-votes.blockbody.ssz"),
+        "two-attestations.blockbody",
+        include_bytes!("data/synthetic/two-attestations.blockbody.ssz"),
     ),
     (
         "genesis-4val.state",
@@ -69,7 +69,7 @@ const FIXTURES: &[(&str, &[u8])] = &[
     ),
     (
         "slot1-empty.signedblock",
-        include_bytes!("data/wire-parity/slot1-empty.signedblock.ssz"),
+        include_bytes!("data/synthetic/slot1-empty.signedblock.ssz"),
     ),
     (
         "slot7.attestationdata",
@@ -77,7 +77,7 @@ const FIXTURES: &[(&str, &[u8])] = &[
     ),
     (
         "validator3.signedattestation",
-        include_bytes!("data/wire-parity/validator3.signedattestation.ssz"),
+        include_bytes!("data/synthetic/validator3.signedattestation.ssz"),
     ),
 ];
 
@@ -139,8 +139,11 @@ fn empty_blockbody_round_trip() {
 }
 
 #[test]
-fn two_votes_blockbody_round_trip() {
-    assert_round_trip::<BlockBody>("two-votes.blockbody", fixture("two-votes.blockbody"));
+fn two_attestations_blockbody_round_trip() {
+    assert_round_trip::<BlockBody>(
+        "two-attestations.blockbody",
+        fixture("two-attestations.blockbody"),
+    );
 }
 
 #[test]
@@ -192,6 +195,51 @@ fn signedattestation_round_trip() {
     assert_round_trip::<SignedAttestation>(
         "validator3.signedattestation",
         fixture("validator3.signedattestation"),
+    );
+}
+
+/// Locks the hash-tree-roots of the `synthetic/` vectors to the values recorded
+/// in `tests/data/PROVENANCE.md`.
+///
+/// These roots are self-generated, so they cannot prove the merkleization shape
+/// is *correct* — only this workspace produced them, and a cross-client anchor
+/// for the devnet-1 attestation containers does not exist until a live peer
+/// supplies one. What they do is make the shape *fixed*: an accidental change to
+/// field order, merkleization width, or padding fails here loudly instead of
+/// passing silently and splitting consensus. Without this, the roots in
+/// PROVENANCE are prose that nothing checks.
+///
+/// If this test fails, do not update the constants to match. Establish which
+/// side is wrong first — a changed root means the wire shape moved.
+#[test]
+fn synthetic_vector_roots_are_pinned() {
+    const SIGNED_ATTESTATION_ROOT: &str =
+        "f698770b0bf6ae48b597bee138698b4829b5452d762f4ba9b2db56a32c18fbeb";
+    const BLOCKBODY_ROOT: &str = "0a786852dc25250a5f62918d10bc7a2d19d448cd4b696f015d2ca3ad8942fe10";
+    const SIGNED_BLOCK_ROOT: &str =
+        "6210c7d3a20a8d046283fdbd2257543c3ee100f29342fa4c48d9095d19dfbf50";
+
+    let signed: SignedAttestation =
+        decode(fixture("validator3.signedattestation")).expect("decode signedattestation");
+    assert_eq!(
+        hex::encode(signed.hash_tree_root()),
+        SIGNED_ATTESTATION_ROOT,
+        "SignedAttestation root moved — the wire shape changed, or PROVENANCE is stale",
+    );
+
+    let body: BlockBody = decode(fixture("two-attestations.blockbody")).expect("decode blockbody");
+    assert_eq!(
+        hex::encode(body.hash_tree_root()),
+        BLOCKBODY_ROOT,
+        "BlockBody root moved — the wire shape changed, or PROVENANCE is stale",
+    );
+
+    let signed_block: SignedBlockWithAttestation =
+        decode(fixture("slot1-empty.signedblock")).expect("decode signedblock");
+    assert_eq!(
+        hex::encode(signed_block.hash_tree_root()),
+        SIGNED_BLOCK_ROOT,
+        "SignedBlockWithAttestation root moved — the wire shape changed, or PROVENANCE is stale",
     );
 }
 
@@ -261,100 +309,4 @@ fn short_eof_mid_frame_surfaces_io_error() {
     let mut cursor = Cursor::new(stream);
     let err = read_req_resp_frame(&mut cursor, None).unwrap_err();
     assert!(matches!(err, NetworkingError::Io(_)), "got {err:?}");
-}
-
-// =============================================================================
-// devnet-1 wire-break fixture regeneration (SA2)
-// =============================================================================
-//
-// `slot7.attestationdata.ssz` is byte-identical to the retired `slot7-vote.vote.ssz`
-// (`AttestationData` shares `Vote`'s layout) and is preserved by `git mv`.
-// `validator3.signedattestation.ssz` (4136 -> 3252) and `two-votes.blockbody.ssz`
-// (8276 -> 6508) are regenerated from the canonical values below, faithful to the
-// retired devnet-0 vectors: the same slot-7 attestation data, validator ids
-// 3 and 1, and signature fills 0xa1 / 0xb2. Run once, then commit:
-//
-//   cargo test -p lean-wire --test parity regenerate_devnet1_fixtures -- --ignored --exact
-mod regen {
-    use protocol::{
-        Attestation, AttestationData, Block, BlockBody, BlockSignatures, BlockWithAttestation,
-        Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot, ValidatorIndex,
-    };
-    use ssz::test_support::regen_vector;
-    use types::{Bytes32, Signature};
-
-    fn slot1_empty_signed_block() -> SignedBlockWithAttestation {
-        SignedBlockWithAttestation {
-            message: BlockWithAttestation {
-                block: Block {
-                    slot: Slot::new(1),
-                    proposer_index: ValidatorIndex::new(1),
-                    parent_root: Bytes32::new([0x03; 32]),
-                    state_root: Bytes32::new([0x04; 32]),
-                    body: BlockBody::default(),
-                },
-                proposer_attestation: Attestation::default(),
-            },
-            signature: BlockSignatures::default(),
-        }
-    }
-
-    fn slot7_data() -> AttestationData {
-        AttestationData {
-            slot: Slot::new(7),
-            head: Checkpoint::new(Bytes32::new([0xab; 32]), Slot::new(12)),
-            target: Checkpoint::new(Bytes32::new([0xab; 32]), Slot::new(12)),
-            source: Checkpoint::new(Bytes32::zero(), Slot::ZERO),
-        }
-    }
-
-    fn attestation(validator: u64) -> Attestation {
-        Attestation {
-            validator_id: ValidatorIndex::new(validator),
-            data: slot7_data(),
-        }
-    }
-
-    fn signed_attestation(validator: u64, sig_fill: u8) -> SignedAttestation {
-        SignedAttestation {
-            message: attestation(validator),
-            signature: Signature::new([sig_fill; Signature::LEN]),
-        }
-    }
-
-    #[test]
-    #[ignore = "regeneration writes committed fixtures; run explicitly on a wire break"]
-    fn regenerate_devnet1_fixtures() {
-        let dir = "tests/data/wire-parity";
-
-        // Byte-identical rename target — proves the AttestationData layout matches
-        // the retired Vote bytes.
-        let (data_bytes, _) =
-            regen_vector(&format!("{dir}/slot7.attestationdata.ssz"), &slot7_data());
-        assert_eq!(data_bytes.len(), 128);
-
-        let (sa_bytes, _) = regen_vector(
-            &format!("{dir}/validator3.signedattestation.ssz"),
-            &signed_attestation(3, 0xa1),
-        );
-        assert_eq!(sa_bytes.len(), 3252);
-
-        // Part 7: the block body now holds PLAIN attestations (signatures moved
-        // to the block-signature list), so this fixture is regenerated again —
-        // 2 * 136 + 4 offset = 276 bytes (was 6508 with SignedAttestation elements).
-        let body = BlockBody {
-            attestations: vec![attestation(3), attestation(1)],
-        };
-        let (body_bytes, _) = regen_vector(&format!("{dir}/two-votes.blockbody.ssz"), &body);
-        assert_eq!(body_bytes.len(), 276);
-
-        // Part 7: the block envelope changed (SignedBlock -> SignedBlockWithAttestation),
-        // so this fixture is regenerated. 8 (two offsets) + 228 (message:
-        // BlockWithAttestation = 140 fixed-part + 88 block) + 0 (empty signatures) = 236.
-        let (signed_block_bytes, _) = regen_vector(
-            &format!("{dir}/slot1-empty.signedblock.ssz"),
-            &slot1_empty_signed_block(),
-        );
-        assert_eq!(signed_block_bytes.len(), 236);
-    }
 }
