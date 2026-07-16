@@ -399,7 +399,7 @@ mod tests {
                     source: Checkpoint::default(),
                 },
             },
-            signature: types::Signature::new([0; types::Signature::LEN]),
+            signature: types::Signature::zero(),
         }
     }
 

@@ -399,7 +399,7 @@ impl PeerWorker {
 
 /// Outcome of fetching one hop of a [`walk_back_with`] traversal.
 ///
-/// `Block` carries a full `SignedBlockWithAttestation` (~4 KB, dominated by the signature).
+/// `Block` carries a full `SignedBlockWithAttestation` (dominated by the variable-length block-signature list).
 /// The value is transient — produced and consumed one hop at a time, then
 /// moved straight into the collected `Vec<SignedBlockWithAttestation>` — so boxing it would
 /// only add an allocation and copy per hop without shrinking any retained

@@ -362,7 +362,7 @@ mod tests {
                     source,
                 },
             },
-            signature: types::Signature::new([0; types::Signature::LEN]),
+            signature: types::Signature::zero(),
         };
         assert!(matches!(
             engine.import_attestation(sv),

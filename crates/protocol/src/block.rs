@@ -288,6 +288,11 @@ impl HashTreeRoot for Block {
 
 /// Mirrors the leanSpec `BlockSignatures = List[Signature, VALIDATOR_REGISTRY_LIMIT]`.
 ///
+/// The spec bound is the validator-registry limit; [`MAX_ATTESTATIONS`] is that
+/// same limit (`config::DEVNET_CONFIG::validator_registry_limit`), so the list
+/// is capped on it — one signature per attesting validator plus the proposer
+/// never exceeds the registry size.
+///
 /// A bare fixed-element list: empty encodes to zero bytes, `k` elements to
 /// `k * Signature::LEN`. The offset that bounds these bytes lives in the parent
 /// [`SignedBlockWithAttestation`], not here. Holds inert signature *bytes* only —

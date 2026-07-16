@@ -280,7 +280,7 @@ impl Service {
                 validator_id: validator,
                 data: produced.vote,
             },
-            signature: Signature::new([0; Signature::LEN]),
+            signature: Signature::zero(),
         };
         // Best-effort re-import: when `latest_justified` is still the
         // zero-sentinel (e.g. fresh anchor before the first justified

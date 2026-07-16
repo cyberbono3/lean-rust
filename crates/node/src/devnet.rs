@@ -17,6 +17,8 @@ use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
 use storage::{HeadInfo, MemoryStore, RedbStore, Store};
 use types::Bytes32;
 
+use crate::consensus_loop::ConsensusLoop;
+
 /// Wraps an unsigned [`Block`] into a [`SignedBlockWithAttestation`] with a
 /// default proposer attestation and an empty signature list. Anchor/genesis and
 /// devnet-produced blocks carry these placeholders until sign-path wiring lands.
@@ -29,8 +31,6 @@ fn signed_block_envelope(block: Block) -> SignedBlockWithAttestation {
         signature: BlockSignatures::default(),
     }
 }
-
-use crate::consensus_loop::ConsensusLoop;
 
 /// Result type returned by node composition.
 pub type Result<T> = anyhow::Result<T>;
