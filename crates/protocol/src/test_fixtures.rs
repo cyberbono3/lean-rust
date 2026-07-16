@@ -56,7 +56,7 @@ where
 /// # Panics
 /// Panics if the root does not match `expected`.
 pub(crate) fn assert_htr_eq<T: HashTreeRoot>(value: &T, expected: [u8; 32]) {
-    assert_eq!(value.hash_tree_root(), expected, "hash-tree-root mismatch",);
+    assert_eq!(value.hash_tree_root(), expected, "hash-tree-root mismatch");
 }
 
 /// Emits the `(ssz_bytes, root)` pair used to freeze a wire vector.

@@ -76,11 +76,13 @@ pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
 /// callers; genesis keygen (a later part) supplies the real `Bytes52` pubkeys.
 ///
 /// # Preconditions
-/// `validators.len()` is expected to equal `num_validators`. This constructor
-/// does not enforce that coupling — the registry and `config.num_validators`
-/// are wired together by the genesis keygen part. A caller supplying a
-/// mismatched registry produces a `State` whose `process_attestations`
-/// validator bound (`config.num_validators`) disagrees with the registry size.
+/// An empty registry is the valid pre-keygen shape — it is what [`genesis_state`]
+/// produces and what this delegates to. When `validators` is non-empty its
+/// length should equal `num_validators`; this constructor does not enforce that
+/// coupling (the registry and `config.num_validators` are wired together by the
+/// genesis keygen part). A non-empty registry whose length disagrees with
+/// `num_validators` produces a `State` whose `process_attestations` validator
+/// bound (`config.num_validators`) disagrees with the registry size.
 ///
 /// # Example
 /// ```
