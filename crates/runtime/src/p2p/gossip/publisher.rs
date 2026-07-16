@@ -7,7 +7,7 @@
 //! [`gossipsub::PublishError`] as a typed [`PublishError`] for callers.
 
 use libp2p::gossipsub;
-use protocol::{SignedAttestation, SignedBlock};
+use protocol::{SignedAttestation, SignedBlockWithAttestation};
 use tokio::sync::oneshot;
 
 use crate::p2p::host::{Host, HostCommand};
@@ -42,7 +42,10 @@ impl Host {
     ///   exited.
     /// - [`PublishError::Gossipsub`] for any libp2p-surfaced publish
     ///   failure (most often `InsufficientPeers` until the mesh forms).
-    pub async fn publish_block(&self, block: &SignedBlock) -> Result<MessageId, PublishError> {
+    pub async fn publish_block(
+        &self,
+        block: &SignedBlockWithAttestation,
+    ) -> Result<MessageId, PublishError> {
         self.publish_raw(Topic::Block, lean_wire::encode_gossip(block))
             .await
     }

@@ -23,13 +23,6 @@ pub(crate) const U64_LEN: usize = 8;
 /// Wire size (bytes) of a [`types::Bytes32`] SSZ field.
 pub(crate) const BYTES32_LEN: usize = 32;
 
-/// Wire size (bytes) of a [`types::Bytes4000`] SSZ field — signature
-/// placeholder used by `SignedBlock`.
-///
-/// Superseded by [`types::Signature`], whose width is [`types::Signature::LEN`];
-/// retires with its last decode consumer when the containers move over.
-pub(crate) const BYTES4000_LEN: usize = 4000;
-
 /// Wire size (bytes) of a [`types::Signature`] SSZ field.
 ///
 /// This is the container *width*, not the signature payload length:

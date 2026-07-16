@@ -1,6 +1,6 @@
 //! Persistence trait + canonical-chain view exposed to runtime callers.
 
-use protocol::{Checkpoint, SignedBlock, State};
+use protocol::{Checkpoint, SignedBlockWithAttestation, State};
 use thiserror::Error;
 use types::Bytes32;
 
@@ -89,7 +89,11 @@ pub trait Store: Send + Sync {
     ///
     /// # Errors
     /// Backend-specific failures via [`StorageError`].
-    fn save_block(&self, root: Bytes32, block: SignedBlock) -> Result<(), StorageError>;
+    fn save_block(
+        &self,
+        root: Bytes32,
+        block: SignedBlockWithAttestation,
+    ) -> Result<(), StorageError>;
 
     /// Persists `state` keyed by `root`. Overwrites any prior entry.
     ///
@@ -130,7 +134,7 @@ pub trait Store: Send + Sync {
     fn save_accepted(
         &self,
         block_root: Bytes32,
-        block: SignedBlock,
+        block: SignedBlockWithAttestation,
         state: State,
         head: HeadInfo,
     ) -> Result<(), StorageError> {
@@ -166,7 +170,10 @@ pub trait Store: Send + Sync {
     /// # Errors
     /// Backend-specific failures via [`StorageError`]. Returns
     /// `Ok(None)` for unknown roots — absence is not an error.
-    fn load_block(&self, root: &Bytes32) -> Result<Option<SignedBlock>, StorageError>;
+    fn load_block(
+        &self,
+        root: &Bytes32,
+    ) -> Result<Option<SignedBlockWithAttestation>, StorageError>;
 
     /// Resolves a persisted post-state by `root`.
     ///

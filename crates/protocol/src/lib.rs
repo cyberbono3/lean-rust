@@ -11,10 +11,11 @@
 //! - [`Checkpoint`] — `(root, slot)` container with SSZ codec and Merkle
 //!   hash-tree-root.
 //! - [`AttestationData`] / [`Attestation`] / [`SignedAttestation`] — the
-//!   unsigned attestation body, the body bound to its attesting validator,
-//!   and the wire-shape container that pairs an attestation with its
-//!   post-quantum signature.
-//! - [`Block`] / [`BlockBody`] / [`BlockHeader`] / [`SignedBlock`] —
+//!   unsigned vote body, a validator's attestation (its id plus the body), and
+//!   the wire-shape container pairing an attestation with its post-quantum
+//!   signature.
+//! - [`Block`] / [`BlockBody`] / [`BlockHeader`] / [`BlockSignatures`] /
+//!   [`BlockWithAttestation`] / [`SignedBlockWithAttestation`] —
 //!   variable-length block containers with manual SSZ codecs and Merkle
 //!   hash-tree-roots.
 //! - [`State`] / [`ProtocolConfig`] — variable-length consensus state
@@ -66,7 +67,10 @@ pub mod stf;
 pub mod validator;
 pub mod vote;
 
-pub use block::{Block, BlockBody, BlockHeader, SignedBlock, MAX_ATTESTATIONS};
+pub use block::{
+    Block, BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation,
+    SignedBlockWithAttestation, MAX_ATTESTATIONS,
+};
 pub use checkpoint::Checkpoint;
 pub use error::{AttSlotKind, ProtocolError, StateTransitionError};
 pub use slot::Slot;

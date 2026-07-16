@@ -5,12 +5,6 @@
 //! Shape mirrors `forkchoice::test_fixtures::genesis_anchor` but uses only
 //! re-exported `protocol` types.
 
-// Retained construction sites for the deprecated `Bytes4000` placeholder.
-// Scoped to this file so unrelated deprecations elsewhere in the crate are
-// still surfaced. `expect` rather than `allow`: once this file's last site
-// moves to `Signature`, the unfulfilled expectation fails the build instead of
-// lingering as a stale allow.
-#![expect(deprecated)]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -19,9 +13,12 @@
 )]
 
 use protocol::stf::genesis_state;
-use protocol::{Block, BlockBody, SignedBlock, Slot, State, ValidatorIndex};
+use protocol::{
+    Attestation, Block, BlockBody, BlockSignatures, BlockWithAttestation,
+    SignedBlockWithAttestation, Slot, State, ValidatorIndex,
+};
 use ssz::HashTreeRoot;
-use types::{Bytes32, Bytes4000};
+use types::Bytes32;
 
 use super::handle::Engine;
 
@@ -55,16 +52,23 @@ pub fn engine_at_genesis(num_validators: u64) -> Engine {
     Engine::from_anchor(state, block).expect("genesis anchor invariants")
 }
 
-/// Produces a [`SignedBlock`] via [`Engine::produce_block`] and wraps it with
+/// Produces a [`SignedBlockWithAttestation`] via [`Engine::produce_block`] and wraps it with
 /// a zero-filled signature. Used to manufacture realistic import inputs for
 /// the importer-side tests without re-implementing the production flow.
 #[must_use]
-pub fn produce_signed_block(engine: &Engine, slot: Slot, validator: ValidatorIndex) -> SignedBlock {
+pub fn produce_signed_block(
+    engine: &Engine,
+    slot: Slot,
+    validator: ValidatorIndex,
+) -> SignedBlockWithAttestation {
     let produced = engine
         .produce_block(slot, validator)
         .expect("produce_block on genesis engine");
-    SignedBlock {
-        message: produced.block,
-        signature: Bytes4000::new([0; 4000]),
+    SignedBlockWithAttestation {
+        message: BlockWithAttestation {
+            block: produced.block,
+            proposer_attestation: Attestation::default(),
+        },
+        signature: BlockSignatures::default(),
     }
 }

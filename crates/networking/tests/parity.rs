@@ -29,8 +29,8 @@ use lean_wire::{
     read_req_resp_frame, write_req_resp_frame, NetworkingError, Status,
 };
 use protocol::{
-    AttestationData, Block, BlockBody, BlockHeader, Checkpoint, SignedAttestation, SignedBlock,
-    State,
+    AttestationData, Block, BlockBody, BlockHeader, Checkpoint, SignedAttestation,
+    SignedBlockWithAttestation, State,
 };
 use ssz::{decode, encode, Decode, Encode, HashTreeRoot};
 
@@ -69,7 +69,7 @@ const FIXTURES: &[(&str, &[u8])] = &[
     ),
     (
         "slot1-empty.signedblock",
-        include_bytes!("data/wire-parity/slot1-empty.signedblock.ssz"),
+        include_bytes!("data/synthetic/slot1-empty.signedblock.ssz"),
     ),
     (
         "slot7.attestationdata",
@@ -179,7 +179,7 @@ fn block_round_trip() {
 
 #[test]
 fn signed_block_round_trip() {
-    assert_round_trip::<SignedBlock>(
+    assert_round_trip::<SignedBlockWithAttestation>(
         "slot1-empty.signedblock",
         fixture("slot1-empty.signedblock"),
     );
@@ -215,7 +215,9 @@ fn signedattestation_round_trip() {
 fn synthetic_vector_roots_are_pinned() {
     const SIGNED_ATTESTATION_ROOT: &str =
         "f698770b0bf6ae48b597bee138698b4829b5452d762f4ba9b2db56a32c18fbeb";
-    const BLOCKBODY_ROOT: &str = "f083211414094ef6acf38b23fb46085225ae0aad4fad9c3933f6bf907f7eabf0";
+    const BLOCKBODY_ROOT: &str = "0a786852dc25250a5f62918d10bc7a2d19d448cd4b696f015d2ca3ad8942fe10";
+    const SIGNED_BLOCK_ROOT: &str =
+        "6210c7d3a20a8d046283fdbd2257543c3ee100f29342fa4c48d9095d19dfbf50";
 
     let signed: SignedAttestation =
         decode(fixture("validator3.signedattestation")).expect("decode signedattestation");
@@ -231,6 +233,14 @@ fn synthetic_vector_roots_are_pinned() {
         BLOCKBODY_ROOT,
         "BlockBody root moved — the wire shape changed, or PROVENANCE is stale",
     );
+
+    let signed_block: SignedBlockWithAttestation =
+        decode(fixture("slot1-empty.signedblock")).expect("decode signedblock");
+    assert_eq!(
+        hex::encode(signed_block.hash_tree_root()),
+        SIGNED_BLOCK_ROOT,
+        "SignedBlockWithAttestation root moved — the wire shape changed, or PROVENANCE is stale",
+    );
 }
 
 // =============================================================================
@@ -239,7 +249,7 @@ fn synthetic_vector_roots_are_pinned() {
 
 #[test]
 fn multi_chunk_stream_carries_independent_frames() {
-    // Two SignedBlock frames written back-to-back — the BlocksByRoot
+    // Two SignedBlockWithAttestation frames written back-to-back — the BlocksByRoot
     // response shape libp2p will feed us.
     let a = fixture("slot1-empty.signedblock");
     let b = fixture("slot1-empty.signedblock");
@@ -265,7 +275,7 @@ fn truncated_ssz_payload_surfaces_typed_error() {
     let mut bytes = fixture("slot1-empty.signedblock").to_vec();
     bytes.pop();
     let wire = encode_req_resp_wire(&bytes);
-    let err = decode_req_resp::<SignedBlock>(&wire).unwrap_err();
+    let err = decode_req_resp::<SignedBlockWithAttestation>(&wire).unwrap_err();
     assert!(
         matches!(err, NetworkingError::Ssz(_)),
         "expected NetworkingError::Ssz, got {err:?}",

@@ -12,26 +12,48 @@ use std::fs;
 use std::path::Path;
 
 use protocol::{
-    Attestation, AttestationData, BlockBody, Checkpoint, SignedAttestation, Slot, ValidatorIndex,
+    Attestation, AttestationData, Block, BlockBody, BlockSignatures, BlockWithAttestation,
+    Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot, ValidatorIndex,
 };
 use ssz::{encode, HashTreeRoot};
 use types::{Bytes32, Signature};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let signed = SignedAttestation {
-        message: Attestation {
-            validator_id: ValidatorIndex::new(3),
-            data: AttestationData {
-                slot: Slot::new(7),
-                head: Checkpoint::new(Bytes32::new([0x11; 32]), Slot::new(7)),
-                target: Checkpoint::new(Bytes32::new([0x22; 32]), Slot::new(4)),
-                source: Checkpoint::new(Bytes32::new([0x33; 32]), Slot::new(0)),
-            },
+    let attestation = Attestation {
+        validator_id: ValidatorIndex::new(3),
+        data: AttestationData {
+            slot: Slot::new(7),
+            head: Checkpoint::new(Bytes32::new([0x11; 32]), Slot::new(7)),
+            target: Checkpoint::new(Bytes32::new([0x22; 32]), Slot::new(4)),
+            source: Checkpoint::new(Bytes32::new([0x33; 32]), Slot::new(0)),
         },
+    };
+    let signed = SignedAttestation {
+        message: attestation,
         signature: Signature::new([0xab; Signature::LEN]),
     };
+    // The block body carries PLAIN attestations; the per-vote signatures live in
+    // the block-signature list on the signed envelope, not per body element.
     let body = BlockBody {
-        attestations: vec![signed.clone(), signed.clone()],
+        attestations: vec![attestation, attestation],
+    };
+
+    // Empty-body signed block in the devnet-1 envelope. Its inner `Block` matches
+    // `wire-parity/slot1-empty.block.ssz` (slot 1, proposer 1, parent 0x03..,
+    // state 0x04..), wrapped with a default proposer attestation and an empty
+    // signature list.
+    let signed_block = SignedBlockWithAttestation {
+        message: BlockWithAttestation {
+            block: Block {
+                slot: Slot::new(1),
+                proposer_index: ValidatorIndex::new(1),
+                parent_root: Bytes32::new([0x03; 32]),
+                state_root: Bytes32::new([0x04; 32]),
+                body: BlockBody::default(),
+            },
+            proposer_attestation: Attestation::default(),
+        },
+        signature: BlockSignatures::default(),
     };
 
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/synthetic");
@@ -39,8 +61,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let signed_bytes = encode(&signed);
     let body_bytes = encode(&body);
+    let signed_block_bytes = encode(&signed_block);
     fs::write(dir.join("validator3.signedattestation.ssz"), &signed_bytes)?;
     fs::write(dir.join("two-attestations.blockbody.ssz"), &body_bytes)?;
+    fs::write(dir.join("slot1-empty.signedblock.ssz"), &signed_block_bytes)?;
 
     // `hex::encode` produces the same lower-hex the PROVENANCE table records; it
     // is already a dev-dependency and used by tests/parity.rs.
@@ -53,6 +77,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         "two-attestations.blockbody.ssz    {} bytes  root {}",
         body_bytes.len(),
         hex::encode(body.hash_tree_root()),
+    );
+    println!(
+        "slot1-empty.signedblock.ssz       {} bytes  root {}",
+        signed_block_bytes.len(),
+        hex::encode(signed_block.hash_tree_root()),
     );
     Ok(())
 }
