@@ -206,14 +206,16 @@ pub(crate) fn decode_byte_vector_list<const N: usize>(
             "byte-vector list length ({count}) exceeds max ({max})",
         )));
     }
-    let mut cursor = 0;
-    let mut items = Vec::with_capacity(count);
-    for _ in 0..count {
-        items.push(types::ByteVector::new(read_byte_array::<N>(
-            bytes,
-            &mut cursor,
-        )));
-    }
+    // Divisibility was checked above, so `chunks_exact` yields exactly `count`
+    // full `N`-byte chunks with no remainder.
+    let items = bytes
+        .chunks_exact(N)
+        .map(|chunk| {
+            let mut arr = [0_u8; N];
+            arr.copy_from_slice(chunk);
+            types::ByteVector::new(arr)
+        })
+        .collect();
     Ok(items)
 }
 
@@ -407,5 +409,14 @@ mod tests {
 
         assert_eq!(decoded, sig);
         assert_eq!(cursor, 8 + Signature::LEN);
+    }
+
+    /// The `N == 0` guard returns before any `% N` / `/ N` divide or
+    /// `chunks_exact(0)` (both of which would panic), pinning the contract for
+    /// a future `ByteVector<0>` instantiation that no current caller reaches.
+    #[test]
+    fn decode_byte_vector_list_rejects_zero_element_size() {
+        let err = super::decode_byte_vector_list::<0>(&[], 4).unwrap_err();
+        assert!(matches!(err, super::DecodeError::ZeroLengthItem));
     }
 }
