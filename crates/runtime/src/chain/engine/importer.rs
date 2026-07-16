@@ -108,16 +108,16 @@ impl Engine {
         }
     }
 
-    /// Validates `signed_vote` as a gossip attestation (the `is_from_block =
+    /// Validates `signed_attestation` as a gossip attestation (the `is_from_block =
     /// false` branch of `Store::process_attestation`) and folds it into the
     /// pending-vote pool when newer than the existing entry.
     ///
     /// Returns a structured outcome — see [`AttestationImportResult`].
-    pub fn import_attestation(&self, signed_vote: SignedAttestation) -> AttestationImportResult {
-        let validator_id = signed_vote.message.validator_id;
+    pub fn import_attestation(&self, signed_attestation: SignedAttestation) -> AttestationImportResult {
+        let validator_id = signed_attestation.message.validator_id;
         let mut store = self.lock();
 
-        let changed = match store.process_attestation(signed_vote, false) {
+        let changed = match store.process_attestation(signed_attestation, false) {
             Ok(changed) => changed,
             Err(e) => {
                 return AttestationImportResult::Rejected {
