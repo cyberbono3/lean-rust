@@ -1194,7 +1194,6 @@ mod justifications_tests {
 mod attestation_tests {
     use super::*;
 
-    use crate::block::BlockHeader;
     use crate::checkpoint::Checkpoint;
     use crate::validator::ValidatorIndex;
     use crate::vote::{Attestation, AttestationData};
@@ -1218,14 +1217,10 @@ mod attestation_tests {
                 genesis_time: 0,
             },
             slot: Slot::new(historical_roots.len() as u64),
-            latest_block_header: BlockHeader::default(),
-            latest_justified: Checkpoint::default(),
             latest_finalized: Checkpoint::new(Bytes32::zero(), latest_finalized_slot),
             historical_block_hashes: historical_roots,
             justified_slots,
-            validators: Vec::new(),
-            justifications_roots: Vec::new(),
-            justifications_validators: Bitlist::new(),
+            ..State::default()
         }
     }
 
