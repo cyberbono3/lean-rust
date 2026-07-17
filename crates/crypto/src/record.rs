@@ -52,9 +52,10 @@ impl<S: SchemeWire> SigningKey<S> {
     ///
     /// - [`CryptoError::ActivationOutOfRange`] when the record's window does not
     ///   fit the scheme's lifetime (via `generate_from_seed`).
-    /// - [`CryptoError::EpochNotActive`] when `next_index` lies past the window
-    ///   end — a watermark there describes a key that could never sign, so it is
-    ///   rejected rather than returned as a silently unsignable key.
+    /// - [`CryptoError::EpochNotActive`] when a nonzero `next_index` falls outside
+    ///   `(activation_epoch, activation_end]` — a value at/below the window start
+    ///   would rewind the watermark (re-enabling reuse), and one past the end
+    ///   describes a key that could never sign; both are refused.
     pub fn from_record(record: &OtsKeyState) -> Result<Self, CryptoError> {
         let activation_epoch = usize::try_from(record.activation_epoch).map_err(|_| {
             CryptoError::ActivationOutOfRange {
@@ -75,10 +76,15 @@ impl<S: SchemeWire> SigningKey<S> {
             generate_from_seed::<S>(record.seed, activation_epoch, num_active_epochs)?;
 
         if record.next_index > 0 {
-            // `next_index == activation_end` is the legitimate exhausted-key case
-            // (`last_signed == end - 1`); anything past the end is a corrupt record.
+            // A valid nonzero watermark falls within `(activation_epoch, activation_end]`:
+            // `last_signed = next_index - 1` must be a real epoch inside the window.
+            // `next_index == activation_end` is the legitimate exhausted-key case. A value
+            // at/below the window start (impossible from `to_record`) would rewind the
+            // watermark to before any signable epoch, and one past the end describes a key
+            // that could never sign — both are corrupt records and are refused rather than
+            // returned as a silently unsignable or replay-enabling key.
             let activation_end = record.activation_epoch + record.num_active_epochs;
-            if record.next_index > activation_end {
+            if record.next_index <= record.activation_epoch || record.next_index > activation_end {
                 return Err(CryptoError::EpochNotActive {
                     epoch: u32::try_from(record.next_index).unwrap_or(u32::MAX),
                     start: record.activation_epoch,
@@ -210,5 +216,28 @@ mod tests {
 
         let err = SigningKey::<TestScheme>::from_record(&record).unwrap_err();
         assert!(matches!(err, CryptoError::EpochNotActive { .. }));
+    }
+
+    #[test]
+    fn from_record_rejects_nonzero_next_index_at_or_below_window_start() {
+        // A nonzero watermark at/below the activation start is impossible from
+        // to_record and would rewind the guard on reload — refuse it so a stale or
+        // corrupt record cannot re-enable one-time-key reuse.
+        let (_pk, sk) = generate_from_seed::<TestScheme>(SEED, 64, 64).unwrap();
+        let start = sk.activation_interval().start;
+        assert!(start > 0, "test needs a non-zero activation start");
+        let mut record = sk.to_record();
+
+        record.next_index = start; // == window start: last_signed would be start-1 (below window)
+        assert!(matches!(
+            SigningKey::<TestScheme>::from_record(&record),
+            Err(CryptoError::EpochNotActive { .. })
+        ));
+
+        record.next_index = 1; // well below the window
+        assert!(matches!(
+            SigningKey::<TestScheme>::from_record(&record),
+            Err(CryptoError::EpochNotActive { .. })
+        ));
     }
 }
