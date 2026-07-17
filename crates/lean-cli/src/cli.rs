@@ -127,6 +127,23 @@ pub enum Command {
         #[arg(long)]
         private_key_path: PathBuf,
     },
+    /// Offline: pre-generate per-validator XMSS attestation keys and the
+    /// coordinator-canonical `genesis_validators` pubkey manifest.
+    GenerateValidatorKeys {
+        /// Number of validator keys to generate (indices `0..count`).
+        #[arg(long)]
+        count: u64,
+        /// Directory for the per-validator `validator_<i>.ssz` secret files.
+        #[arg(long)]
+        out_dir: PathBuf,
+        /// Output path for the `genesis_validators` manifest.
+        #[arg(long)]
+        manifest_path: PathBuf,
+        /// Activation epoch; must be a multiple of the sqrt-lifetime boundary
+        /// (2^16 = 65536) or it is rejected (never silently rounded). Default 0.
+        #[arg(long)]
+        activation_epoch: Option<u64>,
+    },
 }
 
 impl Cli {
@@ -174,6 +191,33 @@ mod tests {
             cli.command,
             Some(Command::GeneratePrivateKey {
                 output_path: PathBuf::from("/tmp/key.pb")
+            })
+        );
+    }
+
+    #[test]
+    fn parses_generate_validator_keys_subcommand() {
+        let cli = Cli::try_parse_from([
+            "lean-rust",
+            "generate-validator-keys",
+            "--count",
+            "2",
+            "--out-dir",
+            "/tmp/secrets",
+            "--manifest-path",
+            "/tmp/genesis_validators.yaml",
+            "--activation-epoch",
+            "65536",
+        ])
+        .expect("parse generate-validator-keys subcommand");
+
+        assert_eq!(
+            cli.command,
+            Some(Command::GenerateValidatorKeys {
+                count: 2,
+                out_dir: PathBuf::from("/tmp/secrets"),
+                manifest_path: PathBuf::from("/tmp/genesis_validators.yaml"),
+                activation_epoch: Some(1 << 16), // aligned sqrt-lifetime boundary
             })
         );
     }

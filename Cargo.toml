@@ -179,3 +179,10 @@ opt-level = 3
 
 [profile.test.package.crypto]
 opt-level = 3
+
+# lean-cli's offline validator keygen calls `crypto::generate::<ProdScheme>`, which
+# monomorphizes leanSig's `key_gen` into lean-cli's own codegen units (same reason
+# as `crypto` above — `"*"` does not cover workspace members). Without this its
+# keygen tests run at opt-level 0 and take minutes.
+[profile.test.package.lean-cli]
+opt-level = 3

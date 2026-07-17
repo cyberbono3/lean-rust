@@ -51,6 +51,32 @@ async fn run(cli: Cli) -> Result<()> {
             println!("{peer_id}");
             return Ok(());
         }
+        Some(Command::GenerateValidatorKeys {
+            count,
+            out_dir,
+            manifest_path,
+            activation_epoch,
+        }) => {
+            let params = lean_cli::validator_keygen::KeygenParams {
+                count: *count,
+                out_dir: out_dir.clone(),
+                manifest_path: manifest_path.clone(),
+                activation_epoch: activation_epoch.unwrap_or(0),
+            };
+            // ThreadRng is a CSPRNG seeded from OS entropy (CryptoRng); rand 0.9's
+            // idiomatic default, and it avoids the rand_core version skew that the
+            // libp2p dependency tree introduces around `OsRng`.
+            let manifest =
+                lean_cli::validator_keygen::generate_validator_keys(&params, &mut rand::rng())
+                    .context("generate validator keys")?;
+            info!(
+                count = manifest.pubkeys.len(),
+                out_dir = %out_dir.display(),
+                manifest = %manifest_path.display(),
+                "generated validator keys",
+            );
+            return Ok(());
+        }
         None => {}
     }
 

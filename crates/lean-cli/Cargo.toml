@@ -15,12 +15,18 @@ runtime            = { path = "../runtime" }
 config             = { path = "../config" }
 protocol           = { path = "../protocol" }
 ssz                = { path = "../ssz" }
+crypto             = { path = "../crypto" }
 anyhow             = { workspace = true }
 clap               = { workspace = true }
 libp2p             = { workspace = true }
 tracing            = { workspace = true }
+# ThreadRng via rand::rng() (production) + seeded StdRng (tests); rand 0.9,
+# matching crypto's port.
+rand               = { workspace = true }
+# Lower-case hex encoding of the genesis_validators manifest — a production path,
+# so a normal dependency rather than dev-only.
+hex                = { workspace = true }
 
 [dev-dependencies]
 fixtures = { path = "../fixtures" }
 tempfile = { workspace = true }
-hex      = { workspace = true }
