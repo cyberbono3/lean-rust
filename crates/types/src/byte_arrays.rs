@@ -207,15 +207,21 @@ impl<const N: usize> TryFrom<&str> for ByteVector<N> {
                 detail: "odd number of hex digits",
             });
         }
-        // Decode into a bounded `Vec`, then length-check via the `&[u8]` impl so
-        // the width check lives in exactly one place.
-        let mut bytes = Vec::with_capacity(hex.len() / 2);
-        for pair in hex.as_bytes().chunks_exact(2) {
-            let hi = hex_nibble(pair[0])?;
-            let lo = hex_nibble(pair[1])?;
-            bytes.push((hi << 4) | lo);
+        // Fail fast on the wrong width BEFORE decoding, and decode straight into
+        // the fixed-size array: no heap allocation, and an oversized invalid
+        // input is rejected without doing the full decode.
+        if hex.len() != 2 * N {
+            return Err(TypesError::InvalidByteLength {
+                type_name: "ByteVector",
+                want: N,
+                got: hex.len() / 2,
+            });
         }
-        Self::try_from(bytes.as_slice())
+        let mut arr = [0_u8; N];
+        for (byte, pair) in arr.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+            *byte = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+        }
+        Ok(Self(arr))
     }
 }
 
