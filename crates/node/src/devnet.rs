@@ -1,23 +1,25 @@
 //! Devnet composition entry point.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
+use parking_lot::Mutex;
 use protocol::{
     Attestation, Block, BlockSignatures, BlockWithAttestation, Checkpoint,
-    SignedBlockWithAttestation, Slot, State,
+    SignedBlockWithAttestation, Slot, State, ValidatorIndex,
 };
 use runtime::api::{HttpService, MetricsService, Recorder};
 use runtime::chain::{ChainMetrics, Service as ChainService};
 use runtime::core::{Node, NodeConfig};
+use runtime::duties::LocalSigner;
 use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
 use storage::{HeadInfo, MemoryStore, RedbStore, Store};
 use types::Bytes32;
 
-use crate::consensus_loop::ConsensusLoop;
+use crate::consensus_loop::{resolve_local_validators, ConsensusLoop};
 
 /// Wraps an unsigned [`Block`] into a [`SignedBlockWithAttestation`] with a
 /// default proposer attestation and an empty signature list. Anchor/genesis and
@@ -34,6 +36,28 @@ fn signed_block_envelope(block: Block) -> SignedBlockWithAttestation {
 
 /// Result type returned by node composition.
 pub type Result<T> = anyhow::Result<T>;
+
+/// Builds the [`LocalSigner`] for this node's local validators.
+///
+/// Observer node (empty local set) → [`LocalSigner::empty`], no secrets dir
+/// needed. Validating node → the secrets dir is REQUIRED and every local
+/// validator MUST have a loadable key; a missing dir or key is a fatal
+/// misconfiguration (fail fast, never sign a placeholder). This extends the
+/// optional-path convention but is intentionally stricter for secret keys.
+fn build_local_signer(
+    local: &[ValidatorIndex],
+    secrets_dir: Option<&Path>,
+) -> Result<Arc<Mutex<LocalSigner>>> {
+    let signer = if local.is_empty() {
+        LocalSigner::empty()
+    } else {
+        let dir = secrets_dir.context(
+            "--validator-secrets-dir is required for a validating node (local validators are configured)",
+        )?;
+        LocalSigner::load(dir, local.iter().copied()).context("load validator secret keys")?
+    };
+    Ok(Arc::new(Mutex::new(signer)))
+}
 
 /// Selects the persistence backend for the devnet node.
 #[derive(Debug, Clone)]
@@ -74,6 +98,10 @@ pub struct Config {
     pub genesis_block: Block,
     /// Persistence backend selector. Defaults to in-memory.
     pub storage: StorageKind,
+    /// Directory holding this node's per-validator secret key records
+    /// (`validator_<i>.ssz`). Required when the node runs local validators;
+    /// `None` for an observer (no local validators).
+    pub validator_secrets_dir: Option<PathBuf>,
 }
 
 /// Builds a devnet [`Node`] with concrete runtime services.
@@ -99,6 +127,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         genesis_state,
         genesis_block,
         storage,
+        validator_secrets_dir,
     } = config;
 
     let store = build_store(&storage)?;
@@ -144,9 +173,18 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         )?;
         engine
     };
-    let chain = Arc::new(ChainService::new(
+    // Resolve this node's local validator set ONCE (the assignment YAML is read a
+    // single time here) and share it between the signer and the consensus-loop
+    // proposer schedule.
+    let (local_validators, total_validators) = resolve_local_validators(&duties)?;
+    // Build the local validator signer at the composition root. Observer node
+    // (no local validators) → empty signer; validating node → load its own
+    // secret keys (a configured validator with no key is a fatal misconfig).
+    let signer = build_local_signer(&local_validators, validator_secrets_dir.as_deref())?;
+    let chain = Arc::new(ChainService::with_signer(
         engine.with_metrics(chain_metrics),
         Arc::clone(&store),
+        signer,
     ));
 
     let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
@@ -163,12 +201,15 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     ));
 
     // Self-driving consensus loop in the duties slot: it owns engine advance,
-    // propose, attest, gossip drain, and publish.
+    // propose, attest, gossip drain, and publish. Reuses the already-resolved
+    // local validator set (no second assignment-YAML read).
     let driver = Arc::new(ConsensusLoop::new(
         Arc::clone(&chain),
         Arc::clone(&p2p),
         Arc::clone(&sync),
         &duties,
+        local_validators,
+        total_validators,
     )?);
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));
@@ -331,11 +372,50 @@ fn persist_anchor(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crypto::ProdScheme;
+    use protocol::ValidatorIndex;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
     use runtime::duties::GenesisTimeUnix;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     const VALIDATORS_PATH: &str = "../runtime/tests/duties_fixtures/validators.yaml";
+
+    /// The `ream` group's local validators (`build_config`'s default group).
+    const REAM_VALIDATORS: &[u64] = &[0, 3, 6, 9, 12, 15, 18, 21, 24, 27];
+    /// The `solo` fixture's local validators (one node owns all four).
+    const SOLO_VALIDATORS: &[u64] = &[0, 1, 2, 3];
+    /// Active-epoch window for the production-driving tests: comfortably covers
+    /// the ~6 slots they reach (each validator signs once per slot).
+    const DRIVE_ACTIVE_EPOCHS: usize = 16;
+
+    /// Writes `validator_<i>.ssz` secret records for `indices` (activation 0) into
+    /// `dir`. `num_active_epochs` must cover every epoch the test signs at — a key
+    /// is only signable within its activation window; load-only tests use the
+    /// minimum (2), production-driving tests need enough for the slots they reach.
+    fn write_validator_secrets(dir: &Path, indices: &[u64], num_active_epochs: usize) {
+        std::fs::create_dir_all(dir).unwrap();
+        let mut rng = StdRng::seed_from_u64(0x5161);
+        for &i in indices {
+            let (_pk, sk) =
+                crypto::generate::<ProdScheme, _>(&mut rng, 0, num_active_epochs).unwrap();
+            std::fs::write(
+                dir.join(format!("validator_{i}.ssz")),
+                sk.to_record().to_ssz_bytes(),
+            )
+            .unwrap();
+        }
+    }
+
+    /// Builds an in-memory signer holding freshly generated keys for `indices`.
+    fn signer_for(indices: &[u64], num_active_epochs: usize) -> Arc<Mutex<LocalSigner>> {
+        let dir = tempfile::tempdir().unwrap();
+        write_validator_secrets(dir.path(), indices, num_active_epochs);
+        let signer =
+            LocalSigner::load(dir.path(), indices.iter().map(|&i| ValidatorIndex::new(i))).unwrap();
+        Arc::new(Mutex::new(signer))
+    }
 
     fn loopback() -> SocketAddr {
         "127.0.0.1:0".parse().unwrap()
@@ -367,6 +447,13 @@ mod tests {
             .with_genesis_time_unix(future_genesis());
         let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
 
+        // Secrets for the (validating) ream group, written into the persistent
+        // identity dir so they survive until `new_devnet` loads them. These
+        // build/resume tests use a future genesis, so no signing runs — the keys
+        // only need to LOAD, hence the minimum active window.
+        let secrets_dir = identity_dir.join("validator-secrets");
+        write_validator_secrets(&secrets_dir, REAM_VALIDATORS, 2);
+
         Config {
             node: NodeConfig::default(),
             p2p,
@@ -376,6 +463,7 @@ mod tests {
             genesis_state,
             genesis_block,
             storage: StorageKind::Memory,
+            validator_secrets_dir: Some(secrets_dir),
         }
     }
 
@@ -401,6 +489,7 @@ mod tests {
     /// `start_paused` + `advance` to fire the driver's interval ticker
     /// deterministically.
     #[tokio::test(start_paused = true, flavor = "current_thread")]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     async fn self_driving_node_proposes_attests_and_advances() {
         use crate::consensus_loop::ConsensusLoop;
         use runtime::core::Service as _;
@@ -441,7 +530,11 @@ mod tests {
             genesis_state,
         )
         .unwrap();
-        let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
+        let chain = Arc::new(ChainService::with_signer(
+            engine,
+            Arc::clone(&store),
+            signer_for(SOLO_VALIDATORS, DRIVE_ACTIVE_EPOCHS),
+        ));
         let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
         let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider).unwrap());
         let sync = Arc::new(SyncLoop::new(
@@ -449,11 +542,14 @@ mod tests {
             Arc::clone(&chain),
             Arc::clone(&p2p),
         ));
+        let (local, total) = resolve_local_validators(&duties).unwrap();
         let driver = ConsensusLoop::new(
             Arc::clone(&chain),
             Arc::clone(&p2p),
             Arc::clone(&sync),
             &duties,
+            local,
+            total,
         )
         .unwrap();
 
@@ -498,6 +594,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     async fn new_devnet_builds_node_that_starts_and_stops() {
         assert!(validators_path().exists());
         let identity_dir = tempfile::tempdir().unwrap();
@@ -604,6 +701,7 @@ mod tests {
     // drop it, then construct a node pointed at the same path and assert it
     // builds/starts/stops via the `Some(resume)` branch.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     async fn new_devnet_resumes_from_persistent_store() {
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("chain.redb");
@@ -681,7 +779,11 @@ mod tests {
             genesis_state,
         )
         .unwrap();
-        let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
+        let chain = Arc::new(ChainService::with_signer(
+            engine,
+            Arc::clone(&store),
+            signer_for(SOLO_VALIDATORS, DRIVE_ACTIVE_EPOCHS),
+        ));
         let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
         let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider).unwrap());
         let sync = Arc::new(SyncLoop::new(
@@ -689,11 +791,14 @@ mod tests {
             Arc::clone(&chain),
             Arc::clone(&p2p),
         ));
+        let (local, total) = resolve_local_validators(&duties).unwrap();
         let driver = ConsensusLoop::new(
             Arc::clone(&chain),
             Arc::clone(&p2p),
             Arc::clone(&sync),
             &duties,
+            local,
+            total,
         )
         .unwrap();
 
@@ -728,6 +833,7 @@ mod tests {
     // counter starts at slot 0 and so cannot extend a resumed higher-slot head —
     // a separate concern from the forkchoice resume bug this fixes.)
     #[tokio::test(start_paused = true, flavor = "current_thread")]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     async fn persistent_node_restart_resumes_forkchoice_head_recompute() {
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("chain.redb");

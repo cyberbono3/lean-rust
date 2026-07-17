@@ -14,6 +14,7 @@ mod config;
 mod error;
 mod genesis_pubkeys;
 mod proposer;
+mod signer;
 mod validators;
 
 pub use config::{
@@ -23,4 +24,9 @@ pub use config::{
 pub use error::{DutiesError, DutiesResult};
 pub use genesis_pubkeys::GenesisRegistry;
 pub use proposer::LocalProposers;
+// `LocalSigner` / its errors are `pub`: the composition root (`node`) builds the
+// signer and passes it to the public `chain::Service::new`, so the type appears
+// in a public signature. `sign_attestation` itself is `pub(crate)` — only the
+// chain service calls it.
+pub use signer::{LocalSigner, SignError, SignerLoadError};
 pub use validators::ValidatorAssignments;
