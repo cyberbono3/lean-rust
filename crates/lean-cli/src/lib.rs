@@ -10,3 +10,4 @@
 pub mod cli;
 pub mod genesis;
 pub mod keygen;
+pub mod validator_keygen;

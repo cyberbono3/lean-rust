@@ -21,6 +21,7 @@ runtime = { path = "../../crates/runtime" }
 config             = { path = "../../crates/config" }
 anyhow             = { workspace = true }
 clap               = { workspace = true }
+rand               = { workspace = true }
 tokio              = { workspace = true }
 tracing            = { workspace = true }
 

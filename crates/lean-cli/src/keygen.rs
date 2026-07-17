@@ -25,7 +25,7 @@ pub fn generate_and_write(output_path: &Path) -> Result<PeerId> {
         .to_protobuf_encoding()
         .context("encode libp2p keypair as protobuf")?;
 
-    write_key_bytes(output_path, &bytes)?;
+    write_secret_bytes(output_path, &bytes)?;
     Ok(peer_id)
 }
 
@@ -44,7 +44,44 @@ pub fn peer_id_from_file(path: &Path) -> Result<PeerId> {
         .with_context(|| format!("load identity file {}", path.display()))
 }
 
-fn write_key_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+/// Writes `bytes` to `path` as an owner-only (`0o600`), `create_new` secret file,
+/// creating parent directories as needed.
+///
+/// `create_new` refuses to overwrite an existing file, so a re-run cannot silently
+/// destroy key material. Shared by libp2p identity keygen and XMSS validator keygen.
+///
+/// # Errors
+///
+/// Returns an error if the parent directory cannot be created, the file already
+/// exists, or the write / permission-adjust fails.
+pub(crate) fn write_secret_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    ensure_parent_dir(path)?;
+    // `owner_only` sets the mode atomically at creation (unix); the explicit
+    // set_owner_only_permissions below is belt-and-suspenders against umask.
+    let file = open_create_new(path, /* owner_only */ true)?;
+    write_all_flush(file, path, bytes)?;
+    set_owner_only_permissions(path)?;
+    Ok(())
+}
+
+/// Writes `bytes` to a NEW file at `path` (`create_new`, no-clobber) with default
+/// permissions, creating parent directories as needed.
+///
+/// For PUBLIC artifacts that another user or a different uid must read — e.g. the
+/// `genesis_validators` pubkey manifest, which is a shared interop artifact. Unlike
+/// [`write_secret_bytes`], it does NOT restrict the file to the owner.
+///
+/// # Errors
+///
+/// Returns an error if the parent directory cannot be created, the file already
+/// exists, or the write fails.
+pub(crate) fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    ensure_parent_dir(path)?;
+    let file = open_create_new(path, /* owner_only */ false)?;
+    write_all_flush(file, path, bytes)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -52,57 +89,50 @@ fn write_key_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("create key output directory {}", parent.display()))?;
     }
-
-    write_file(path, bytes)?;
-    set_owner_only_permissions(path)?;
     Ok(())
 }
 
+/// Context message for a failed `create_new` open — names the path and hints that
+/// an already-existing file must be removed. The "already exists" phrasing is
+/// load-bearing: the no-clobber test asserts on it.
+fn open_context(path: &Path) -> String {
+    format!(
+        "open output file {} (already exists? delete it first to regenerate)",
+        path.display()
+    )
+}
+
+/// Writes then flushes `bytes`, attaching path context to each step.
+fn write_all_flush(mut file: fs::File, path: &Path, bytes: &[u8]) -> Result<()> {
+    file.write_all(bytes)
+        .with_context(|| format!("write output file {}", path.display()))?;
+    file.flush()
+        .with_context(|| format!("flush output file {}", path.display()))
+}
+
+/// Opens `path` with `create_new` (`O_CREAT | O_EXCL`) so an existing file is never
+/// clobbered. When `owner_only`, the file is created `0o600` atomically (unix).
 #[cfg(unix)]
-fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
+fn open_create_new(path: &Path, owner_only: bool) -> Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
-    // create_new (O_CREAT | O_EXCL) refuses to overwrite an existing key so a
-    // re-run of `generate-private-key` cannot silently destroy a validator
-    // identity. Mirrors host::keypair's own write path.
-    let mut file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)
-        .with_context(|| {
-            format!(
-                "open key output file {} (file already exists? delete it first if you really mean to replace the validator identity)",
-                path.display()
-            )
-        })?;
-    file.write_all(bytes)
-        .with_context(|| format!("write key output file {}", path.display()))?;
-    file.flush()
-        .with_context(|| format!("flush key output file {}", path.display()))
+    let mut opts = fs::OpenOptions::new();
+    opts.create_new(true).write(true);
+    if owner_only {
+        opts.mode(0o600);
+    }
+    opts.open(path).with_context(|| open_context(path))
 }
 
 #[cfg(not(unix))]
-fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::ErrorKind;
-
-    // create_new refuses to overwrite an existing key. fs::write would
-    // silently truncate.
-    let mut file = fs::OpenOptions::new()
+fn open_create_new(path: &Path, _owner_only: bool) -> Result<fs::File> {
+    // No unix mode bits here; set_owner_only_permissions is also a no-op on
+    // non-unix, so secret files are NOT owner-restricted on these targets.
+    fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(path)
-        .map_err(|e| match e.kind() {
-            ErrorKind::AlreadyExists => anyhow::anyhow!(
-                "key output file {} already exists (delete it first if you really mean to replace the validator identity)",
-                path.display()
-            ),
-            _ => anyhow::Error::new(e).context(format!("open key output file {}", path.display())),
-        })?;
-    file.write_all(bytes)
-        .with_context(|| format!("write key output file {}", path.display()))?;
-    file.flush()
-        .with_context(|| format!("flush key output file {}", path.display()))
+        .with_context(|| open_context(path))
 }
 
 #[cfg(unix)]
