@@ -58,7 +58,7 @@ containers, and Docker volumes while preserving scaffold `.gitkeep` files.
 | `tests/fixtures/` | Pinned 2-node validator registry, SSZ genesis, secp256k1 keys, Rust bootnodes adapter. See [`tests/fixtures/README.md`](tests/fixtures/README.md). |
 | `scripts/core/` | Devnet shell scripts: `quick-start.sh`, `setup-genesis.sh`, `build-lean-rust.sh`, `status.sh`, `cleanup.sh`, `debug-summary.sh`, `smoke-head-sample.sh`, `compare-vote-checkpoints.sh`, `check-genesis-time.sh`, `check-cleanup.sh`, `devnet-paths.sh`, and `docker-compose.yml`. |
 | `config/keys/` | Generated `node0.key` / `node1.key` (removed by `make devnet-clean`). |
-| `genesis/` | Generated `config.yaml`, `genesis.{json,ssz}`, `nodes.yaml`, `validators.yaml`, `bootnodes.rust.yaml`, `lean-rust-devnet0.yaml`, `validator-config.yaml`. |
+| `genesis/` | Generated `config.yaml`, `genesis.{json,ssz}`, `nodes.yaml`, `validators.yaml`, `bootnodes.rust.yaml`, `lean-rust-devnet0.yaml`, `validator-config.yaml`, `genesis_validators.yaml` (public pubkey manifest), and `secrets/` (per-validator XMSS attestation secret keys — gitignored, never committed). |
 | `logs/` | `lean-rust-<utc>.log` files written by the Rust container. |
 | `Dockerfile` | Builds `lean-rust:local` from the workspace `beacon` binary. |
 | `.env.example` | Default image tags and `RUST_LOG` filter. Copy to `.env`. |

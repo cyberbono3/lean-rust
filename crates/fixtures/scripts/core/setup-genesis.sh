@@ -37,6 +37,8 @@ GENESIS_CONFIG_FILE="$GENESIS_DIR/config.yaml"
 LEAN_RUST_CONFIG_FILE="$GENESIS_DIR/lean-rust-devnet0.yaml"
 NODES_FILE="$GENESIS_DIR/nodes.yaml"
 VALIDATORS_FILE="$GENESIS_DIR/validators.yaml"
+GENESIS_VALIDATORS_FILE="$GENESIS_DIR/genesis_validators.yaml"
+VALIDATOR_SECRETS_DIR="$GENESIS_DIR/secrets"
 
 die() {
   echo "error: $*" >&2
@@ -128,6 +130,11 @@ ensure_devnet_config_helper() {
     || die "$LEAN_RUST_IMAGE does not support 'devnet-config'; rerun with FORCE=1 to rebuild it"
 }
 
+ensure_generate_validator_keys_helper() {
+  docker run --rm "$LEAN_RUST_IMAGE" generate-validator-keys --help >/dev/null 2>&1 \
+    || die "$LEAN_RUST_IMAGE does not support 'generate-validator-keys'; rerun with FORCE=1 to rebuild it"
+}
+
 if [[ ! "$GENESIS_OFFSET_SECS" =~ ^[0-9]+$ ]]; then
   die "GENESIS_OFFSET_SECS must be a non-negative integer, got $GENESIS_OFFSET_SECS"
 fi
@@ -140,6 +147,7 @@ echo "GENESIS_OFFSET_SECS=$GENESIS_OFFSET_SECS"
 "$SCRIPT_DIR/build-lean-rust.sh"
 ensure_peer_id_helper
 ensure_devnet_config_helper
+ensure_generate_validator_keys_helper
 ensure_image_available "$REAM_IMAGE"
 ensure_image_available "$GENESIS_GEN_IMAGE"
 
@@ -227,6 +235,28 @@ assert_contains "$LEAN_RUST_NODE_ID" "$VALIDATORS_FILE"
 assert_contains "/p2p/" "$RUST_BOOTNODES"
 assert_contains "GENESIS_TIME" "$GENESIS_CONFIG_FILE"
 assert_contains "slot_duration_ms:" "$LEAN_RUST_CONFIG_FILE"
+
+echo "Generating validator attestation keys + genesis_validators manifest..."
+# The real validator count is the mass-validators set (config.yaml VALIDATOR_COUNT
+# is a 0 placeholder), i.e. the sum of the per-entry `count:` fields.
+VALIDATOR_KEY_COUNT="$(awk '/^ *count:/ { sum += $2 } END { print sum + 0 }' "$VALIDATOR_CONFIG")"
+[[ "$VALIDATOR_KEY_COUNT" -ge 1 ]] \
+  || die "could not determine validator count from $VALIDATOR_CONFIG"
+# Regenerate from scratch: the offline keygen refuses to clobber (create_new), so
+# clear any prior run's outputs first. These are local dev fixtures, not committed.
+rm -rf "$VALIDATOR_SECRETS_DIR" "$GENESIS_VALIDATORS_FILE"
+docker_run_devnet \
+  "$LEAN_RUST_IMAGE" \
+  generate-validator-keys \
+  --count "$VALIDATOR_KEY_COUNT" \
+  --out-dir "$(container_path "$VALIDATOR_SECRETS_DIR")" \
+  --manifest-path "$(container_path "$GENESIS_VALIDATORS_FILE")"
+require_file "$GENESIS_VALIDATORS_FILE"
+
+MANIFEST_ENTRY_COUNT="$(grep -c '^  - ' "$GENESIS_VALIDATORS_FILE" || true)"
+[[ "$MANIFEST_ENTRY_COUNT" -eq "$VALIDATOR_KEY_COUNT" ]] \
+  || die "expected $VALIDATOR_KEY_COUNT genesis_validators entries, found $MANIFEST_ENTRY_COUNT"
+assert_contains "genesis_validators:" "$GENESIS_VALIDATORS_FILE"
 
 echo
 echo "Genesis ready."

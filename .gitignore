@@ -26,6 +26,9 @@ crates/fixtures/genesis/nodes.yaml
 crates/fixtures/genesis/validators.yaml
 crates/fixtures/genesis/validator-config.yaml
 crates/fixtures/genesis/bootnodes.rust.yaml
+crates/fixtures/genesis/genesis_validators.yaml
+# Generated XMSS validator attestation secret keys — NEVER commit.
+crates/fixtures/genesis/secrets/
 crates/fixtures/logs/*.log
 
 # Third-party research sources (not part of this project)
