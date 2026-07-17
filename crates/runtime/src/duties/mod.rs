@@ -12,6 +12,7 @@
 
 mod config;
 mod error;
+mod genesis_pubkeys;
 mod proposer;
 mod validators;
 
@@ -20,5 +21,6 @@ pub use config::{
     DEFAULT_VALIDATOR_GROUP,
 };
 pub use error::{DutiesError, DutiesResult};
+pub use genesis_pubkeys::GenesisRegistry;
 pub use proposer::LocalProposers;
 pub use validators::ValidatorAssignments;
