@@ -40,6 +40,12 @@ use crate::error::CryptoError;
 pub struct SigningKey<S: SignatureScheme> {
     secret: S::SecretKey,
     last_signed: Option<u32>,
+    /// Reproducible RNG seed this key was generated from.
+    ///
+    /// Held so [`to_record`](crate::SigningKey::to_record) can persist a compact
+    /// record that regenerates the key, rather than the variable-size secret
+    /// itself. As sensitive as the secret key — redacted in `Debug`, never logged.
+    seed: [u8; 32],
 }
 
 impl<S: SignatureScheme> SigningKey<S> {
@@ -54,11 +60,29 @@ impl<S: SignatureScheme> SigningKey<S> {
     /// the secret, and `secret` has no accessor, so that escape is closed for
     /// every out-of-crate caller.
     #[must_use]
-    pub(crate) const fn new(secret: S::SecretKey) -> Self {
+    pub(crate) const fn new(secret: S::SecretKey, seed: [u8; 32]) -> Self {
         Self {
             secret,
             last_signed: None,
+            seed,
         }
+    }
+
+    /// The reproducible seed this key was generated from.
+    ///
+    /// `pub(crate)`: only [`to_record`](crate::SigningKey::to_record) reads it,
+    /// and the seed must not leak onto the public surface.
+    #[must_use]
+    pub(crate) const fn seed(&self) -> [u8; 32] {
+        self.seed
+    }
+
+    /// Restores the one-time-key watermark when reconstructing from a record.
+    ///
+    /// `pub(crate)`: only [`from_record`](crate::SigningKey::from_record) uses it,
+    /// to reinstate the highest-signed epoch so a reload cannot re-enable reuse.
+    pub(crate) fn set_last_signed(&mut self, epoch: u32) {
+        self.last_signed = Some(epoch);
     }
 
     /// Returns the epoch interval this key was generated to cover.
@@ -196,6 +220,7 @@ impl<S: SignatureScheme> core::fmt::Debug for SigningKey<S> {
         f.debug_struct("SigningKey")
             .field("secret", &"<redacted>")
             .field("last_signed", &self.last_signed)
+            .field("seed", &"<redacted>")
             .finish()
     }
 }

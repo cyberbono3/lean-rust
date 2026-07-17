@@ -121,6 +121,10 @@ proptest          = "1"
 # rand 0.9 is not a free choice: leanSig's `key_gen<R: Rng>` takes a rand 0.9
 # `Rng`, so the crypto test fixtures must hand it the same major.
 rand              = "0.9"
+# Portable, reproducible RNG for seed-based key reconstruction (SA5): a persisted
+# seed must regenerate the identical key across builds, which rand's `StdRng` does
+# not guarantee. Same major as `rand` (rand_core 0.9).
+rand_chacha       = "0.9"
 insta             = { version = "1", features = ["yaml"] }
 wiremock          = "0.6"
 tokio-test        = "0.4"

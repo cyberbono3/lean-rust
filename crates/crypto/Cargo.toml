@@ -18,7 +18,13 @@ thiserror = { workspace = true }
 # rather than dev-only. The major must match leanSig's: its `key_gen` takes a
 # rand 0.9 `Rng`, and handing it a different major would not compile.
 rand      = { workspace = true }
+# Portable, reproducible RNG (SA5): `generate_from_seed` seeds a ChaCha20 stream so
+# a persisted 32-byte seed regenerates the identical key across builds. rand's
+# `StdRng` is not stability-guaranteed, so it cannot back a persisted seed.
+rand_chacha = { workspace = true }
 
 # Deliberately absent: `ssz`. leanSig implements ethereum_ssz 0.10 while the
 # workspace `ssz` crate pins 0.7; naming an ssz trait here would resolve 0.7's
 # and collide. All encoding goes through leansig::serialization::Serializable.
+# The SA5 record (`types::OtsKeyState`) is fixed-width with inherent byte
+# (de)serialization, so it needs no ssz crate and keeps ssz out of this tree.
