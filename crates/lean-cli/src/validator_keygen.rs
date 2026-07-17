@@ -105,11 +105,18 @@ pub fn generate_validator_keys<R: rand::RngCore + rand::CryptoRng>(
 ) -> Result<GenesisKeyManifest> {
     params.validate()?;
 
-    // Fail fast on pre-existing outputs BEFORE the expensive keygen loop — a
+    // Fail fast on ANY pre-existing output BEFORE the expensive keygen loop — a
     // mistargeted path or a leftover from an aborted run should not burn keygen
-    // time. `create_new` remains the authoritative no-clobber guard for the writes.
-    let first_secret = secret_path(&params.out_dir, 0);
-    for path in [&params.manifest_path, &first_secret] {
+    // time or leave a partial result. `create_new` remains the authoritative
+    // no-clobber guard for the writes themselves. `count` is bounded (<= registry
+    // limit) by validate(), so enumerating the paths is cheap.
+    anyhow::ensure!(
+        !params.manifest_path.exists(),
+        "output {} already exists; remove it (or the out-dir) to regenerate",
+        params.manifest_path.display(),
+    );
+    for index in 0..params.count {
+        let path = secret_path(&params.out_dir, index);
         anyhow::ensure!(
             !path.exists(),
             "output {} already exists; remove it (or the out-dir) to regenerate",

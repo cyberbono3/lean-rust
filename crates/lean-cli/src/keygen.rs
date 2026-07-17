@@ -44,11 +44,15 @@ pub fn peer_id_from_file(path: &Path) -> Result<PeerId> {
         .with_context(|| format!("load identity file {}", path.display()))
 }
 
-/// Writes `bytes` to `path` as an owner-only (`0o600`), `create_new` secret file,
-/// creating parent directories as needed.
+/// Writes `bytes` to `path` as a `create_new` secret file, creating parent
+/// directories as needed.
 ///
-/// `create_new` refuses to overwrite an existing file, so a re-run cannot silently
-/// destroy key material. Shared by libp2p identity keygen and XMSS validator keygen.
+/// On unix the file is created owner-only (`0o600`, atomically at `O_CREAT`).
+/// On non-unix targets the permission restriction is NOT applied — the file gets
+/// the platform's default ACLs, so callers must not assume owner-only protection
+/// there. `create_new` refuses to overwrite an existing file on all targets, so a
+/// re-run cannot silently destroy key material. Shared by libp2p identity keygen
+/// and XMSS validator keygen.
 ///
 /// # Errors
 ///
@@ -87,7 +91,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent)
-            .with_context(|| format!("create key output directory {}", parent.display()))?;
+            .with_context(|| format!("create output directory {}", parent.display()))?;
     }
     Ok(())
 }
