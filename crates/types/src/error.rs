@@ -83,4 +83,14 @@ pub enum TypesError {
         /// Index that violated the bound.
         got: usize,
     },
+
+    /// A hex string decoded by [`ByteVector::try_from`](crate::ByteVector)
+    /// contained a non-hex character or had an odd number of digits.
+    #[error("{type_name} hex decode failed: {detail}")]
+    InvalidHexEncoding {
+        /// Human-readable name of the target type (e.g. `"ByteVector"`).
+        type_name: &'static str,
+        /// Static reason (`"non-hex character"` | `"odd number of hex digits"`).
+        detail: &'static str,
+    },
 }

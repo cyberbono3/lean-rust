@@ -15,6 +15,8 @@
 
 use core::fmt::{self, Write};
 
+use crate::error::TypesError;
+
 /// Fixed-width byte vector of length `N`.
 ///
 /// The inner array is `pub` so callers may pattern-match or take a
@@ -152,6 +154,91 @@ impl<const N: usize> From<[u8; N]> for ByteVector<N> {
     }
 }
 
+impl<const N: usize> TryFrom<&[u8]> for ByteVector<N> {
+    type Error = TypesError;
+
+    /// Length-checked construction from a raw byte slice. Rejects any slice
+    /// whose length is not exactly `N`.
+    ///
+    /// # Example
+    /// ```
+    /// use types::{ByteVector, TypesError};
+    /// let v = ByteVector::<2>::try_from([0x0a, 0xff].as_slice()).unwrap();
+    /// assert_eq!(v.as_slice(), &[0x0a, 0xff]);
+    /// let err = ByteVector::<2>::try_from([0x00].as_slice()).unwrap_err();
+    /// assert!(matches!(err, TypesError::InvalidByteLength { want: 2, got: 1, .. }));
+    /// ```
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        let arr: [u8; N] = bytes
+            .try_into()
+            .map_err(|_| TypesError::InvalidByteLength {
+                type_name: "ByteVector",
+                want: N,
+                got: bytes.len(),
+            })?;
+        Ok(Self(arr))
+    }
+}
+
+impl<const N: usize> TryFrom<&str> for ByteVector<N> {
+    type Error = TypesError;
+
+    /// Decodes lower- or upper-case hex, tolerating an optional `0x`/`0X`
+    /// prefix, into a `ByteVector<N>`. The decoded byte length must be exactly
+    /// `N`. Mirrors [`Self::to_hex`] (which emits a `0x`-prefixed lower-case
+    /// string) and also accepts the unprefixed form written by the
+    /// `genesis_validators` manifest.
+    ///
+    /// # Example
+    /// ```
+    /// use types::ByteVector;
+    /// // Both prefixed and unprefixed hex decode to the same value.
+    /// assert_eq!(ByteVector::<2>::try_from("0x0aff").unwrap().as_slice(), &[0x0a, 0xff]);
+    /// assert_eq!(ByteVector::<2>::try_from("0aff").unwrap().as_slice(), &[0x0a, 0xff]);
+    /// ```
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        let hex = s
+            .strip_prefix("0x")
+            .or_else(|| s.strip_prefix("0X"))
+            .unwrap_or(s);
+        if hex.len() % 2 != 0 {
+            return Err(TypesError::InvalidHexEncoding {
+                type_name: "ByteVector",
+                detail: "odd number of hex digits",
+            });
+        }
+        // Fail fast on the wrong width BEFORE decoding, and decode straight into
+        // the fixed-size array: no heap allocation, and an oversized invalid
+        // input is rejected without doing the full decode.
+        if hex.len() != 2 * N {
+            return Err(TypesError::InvalidByteLength {
+                type_name: "ByteVector",
+                want: N,
+                got: hex.len() / 2,
+            });
+        }
+        let mut arr = [0_u8; N];
+        for (byte, pair) in arr.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+            *byte = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+        }
+        Ok(Self(arr))
+    }
+}
+
+/// Maps one ASCII hex digit to its `0..=15` value, or an
+/// [`TypesError::InvalidHexEncoding`] for any non-hex byte.
+fn hex_nibble(c: u8) -> Result<u8, TypesError> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => Err(TypesError::InvalidHexEncoding {
+            type_name: "ByteVector",
+            detail: "non-hex character",
+        }),
+    }
+}
+
 impl<const N: usize> fmt::Debug for ByteVector<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ByteVector<{N}>({})", self.to_hex())
@@ -247,6 +334,98 @@ mod tests {
         let pk = PublicKey::new([0xa5; PublicKey::LEN]);
         assert_eq!(pk.as_slice(), &[0xa5; PublicKey::LEN][..]);
         assert_eq!(pk.as_slice().len(), PublicKey::LEN);
+    }
+
+    // -- TryFrom hex/byte decoder (inverse of to_hex) ----------------------
+
+    #[test]
+    fn try_from_hex_round_trips_via_to_hex() {
+        let pk = PublicKey::new([0xa5; PublicKey::LEN]);
+        // to_hex is 0x-prefixed; the decoder accepts it.
+        let decoded = PublicKey::try_from(pk.to_hex().as_str()).unwrap();
+        assert_eq!(decoded, pk);
+    }
+
+    #[test]
+    fn try_from_hex_accepts_unprefixed_lowercase() {
+        // The `genesis_validators` manifest emits unprefixed lower-case hex.
+        // Every byte is 0x0a, so the unprefixed encoding is "0a" repeated.
+        let raw = [0x0a_u8; PublicKey::LEN];
+        let unprefixed = "0a".repeat(PublicKey::LEN);
+        let decoded = PublicKey::try_from(unprefixed.as_str()).unwrap();
+        assert_eq!(decoded.as_slice(), &raw);
+    }
+
+    #[test]
+    fn try_from_hex_rejects_wrong_length() {
+        // 51 bytes → 102 hex chars, one short of PublicKey's 52.
+        let short: String = "ab".repeat(PublicKey::LEN - 1);
+        let err = PublicKey::try_from(short.as_str()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TypesError::InvalidByteLength {
+                    want: 52,
+                    got: 51,
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn try_from_hex_rejects_odd_length() {
+        let err = PublicKey::try_from("abc").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TypesError::InvalidHexEncoding {
+                    detail: "odd number of hex digits",
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn try_from_hex_rejects_non_hex_char() {
+        let bad: String = "zz".repeat(PublicKey::LEN);
+        let err = PublicKey::try_from(bad.as_str()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TypesError::InvalidHexEncoding {
+                    detail: "non-hex character",
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn try_from_slice_round_trips() {
+        let raw = [0x5a_u8; PublicKey::LEN];
+        let pk = PublicKey::try_from(raw.as_slice()).unwrap();
+        assert_eq!(pk.as_slice(), &raw);
+    }
+
+    #[test]
+    fn try_from_slice_rejects_wrong_length() {
+        let err = PublicKey::try_from([0_u8; 51].as_slice()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TypesError::InvalidByteLength {
+                    want: 52,
+                    got: 51,
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
     }
 
     // -- Construction + accessors -------------------------------------------
