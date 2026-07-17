@@ -19,6 +19,7 @@ mod error;
 mod handle;
 mod importer;
 mod results;
+mod verify;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
@@ -27,3 +28,4 @@ pub use error::EngineError;
 pub use handle::Engine;
 pub(crate) use handle::PersistPlan;
 pub use results::{AttestationImportResult, BlockImportResult};
+pub use verify::{prod_verifier, ProdVerifier, Verifier, VerifyError};

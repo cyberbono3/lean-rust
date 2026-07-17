@@ -29,6 +29,7 @@ use tracing::{debug, info, warn};
 use types::Bytes32;
 
 use super::error::EngineError;
+use super::verify::Verifier;
 use crate::chain::metrics::ChainMetrics;
 
 /// Consensus execution boundary around a shared [`forkchoice::Store`].
@@ -41,6 +42,13 @@ pub struct Engine {
     /// Chain-tick trigger metrics. Default is a no-op; the composition root
     /// injects live handles via [`Engine::with_metrics`].
     metrics: ChainMetrics,
+    /// Import-boundary signature verifier. `None` (default) makes the verify
+    /// gate a no-op; the composition root injects the leanSig-backed
+    /// [`super::verify::ProdVerifier`] via [`Engine::with_verifier`].
+    verifier: Option<Arc<dyn Verifier + Send + Sync>>,
+    /// Runtime gate. `true` (default) verifies on the `import_block` path when a
+    /// verifier is present; self-sync forces it off via `import_block_synced`.
+    verify_signatures: bool,
 }
 
 impl Engine {
@@ -144,6 +152,8 @@ impl Engine {
         Self {
             store: Arc::new(Mutex::new(store)),
             metrics: ChainMetrics::default(),
+            verifier: None,
+            verify_signatures: true,
         }
     }
 
@@ -156,9 +166,36 @@ impl Engine {
         self
     }
 
+    /// Injects the import-boundary signature verifier. Composition-root only;
+    /// with no verifier set the verify gate is a no-op regardless of
+    /// [`Engine::with_verify_signatures`].
+    #[must_use]
+    pub fn with_verifier(mut self, verifier: Arc<dyn Verifier + Send + Sync>) -> Self {
+        self.verifier = Some(verifier);
+        self
+    }
+
+    /// Overrides the verify gate (default `true`). Self-sync of already-canonical
+    /// history sets this off; live gossip leaves it on.
+    #[must_use]
+    pub fn with_verify_signatures(mut self, verify: bool) -> Self {
+        self.verify_signatures = verify;
+        self
+    }
+
     /// Read-only borrow of the trigger metrics for the importer module.
     pub(crate) fn metrics(&self) -> &ChainMetrics {
         &self.metrics
+    }
+
+    /// Read-only borrow of the injected verifier for the importer module.
+    pub(crate) fn verifier(&self) -> Option<&(dyn Verifier + Send + Sync)> {
+        self.verifier.as_deref()
+    }
+
+    /// Whether the import-boundary verify gate is enabled.
+    pub(crate) fn verify_signatures(&self) -> bool {
+        self.verify_signatures
     }
 
     /// Snapshots the canonical head root.

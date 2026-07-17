@@ -12,13 +12,13 @@
     clippy::missing_panics_doc
 )]
 
-use protocol::stf::genesis_state;
+use protocol::stf::{genesis_state, genesis_state_with_validators};
 use protocol::{
     Attestation, Block, BlockBody, BlockSignatures, BlockWithAttestation,
-    SignedBlockWithAttestation, Slot, State, ValidatorIndex,
+    SignedBlockWithAttestation, Slot, State, Validator, ValidatorIndex,
 };
 use ssz::HashTreeRoot;
-use types::Bytes32;
+use types::{Bytes32, PublicKey};
 
 use super::handle::Engine;
 
@@ -49,6 +49,29 @@ pub fn anchor_pair(num_validators: u64) -> (State, Block) {
 #[must_use]
 pub fn engine_at_genesis(num_validators: u64) -> Engine {
     let (state, block) = anchor_pair(num_validators);
+    Engine::from_anchor(state, block).expect("genesis anchor invariants")
+}
+
+/// Like [`engine_at_genesis`] but the genesis state carries a populated
+/// validator registry (`num_validators` entries, default pubkeys). Needed by the
+/// import-boundary verify-gate tests so `validator_id` lookups resolve — plain
+/// [`genesis_state`] leaves the registry empty.
+#[must_use]
+pub fn engine_at_genesis_with_validators(num_validators: u64) -> Engine {
+    let validators: Vec<Validator> = (0..num_validators)
+        .map(|i| Validator {
+            pubkey: PublicKey::default(),
+            index: ValidatorIndex::new(i),
+        })
+        .collect();
+    let state = genesis_state_with_validators(num_validators, GENESIS_TIME, validators);
+    let block = Block {
+        slot: Slot::ZERO,
+        proposer_index: ValidatorIndex::new(0),
+        parent_root: Bytes32::zero(),
+        state_root: state.hash_tree_root().into(),
+        body: BlockBody::default(),
+    };
     Engine::from_anchor(state, block).expect("genesis anchor invariants")
 }
 

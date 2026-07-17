@@ -605,7 +605,15 @@ async fn import_chain(
             return;
         }
         let slot = block.message.block.slot.get();
-        if let Err(err) = chain.import_block(block).await {
+        // Sync backfill imports peer-provided blocks (hash-chained and
+        // STF-validated by `walk_back`, but NOT signature-verified) through the
+        // skip path. The sync trigger is peer-inducible, so this is a deliberate
+        // trust boundary, not "already-canonical" history: it is safe only while
+        // no live verifier is wired (the gate is inert). The ingress must be
+        // closed — verify on sync, or bound the imported segment to a trusted
+        // finalized checkpoint — before the live verifier is activated. Live
+        // gossip stays on the verifying `import_block` path (see `chain::Service`).
+        if let Err(err) = chain.import_block_synced(block).await {
             warn!(%err, slot, "import_block dropped");
         }
     }

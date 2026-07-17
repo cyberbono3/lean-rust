@@ -180,7 +180,44 @@ impl Service {
         // acquisition, so no concurrent writer can shift the head/finalized
         // checkpoint between accept and capture.
         let (outcome, plan) = self.engine.import_block_capturing(signed);
+        self.persist_accepted(slot, outcome, plan)
+    }
 
+    /// Sync-backfill import: SKIPS the import-boundary signature verify gate.
+    ///
+    /// The sync loop imports peer-provided blocks through this entry. Those
+    /// blocks are hash-chained and STF-validated by the sync walk but are NOT
+    /// signature-verified, and the sync trigger is peer-inducible — so this is a
+    /// deliberate trust boundary, not "already-canonical" history. It is safe
+    /// while no live verifier is wired (the gate is inert); the ingress must be
+    /// closed (verify on sync, or bound the imported segment to a trusted
+    /// finalized checkpoint) before the live verifier is activated. Live gossip
+    /// uses [`Self::import_block`] (the verifying path).
+    ///
+    /// `pub(crate)`: only the in-crate self-sync loop may take the skip; no
+    /// downstream crate can reach the verification-skipping path.
+    ///
+    /// # Errors
+    /// Same as [`Self::import_block`].
+    #[instrument(level = "debug", skip_all, fields(slot = signed.message.block.slot.get()), err)]
+    pub(crate) async fn import_block_synced(
+        &self,
+        signed: SignedBlockWithAttestation,
+    ) -> Result<BlockImportResult, ChainError> {
+        let slot = signed.message.block.slot;
+        let (outcome, plan) = self.engine.import_block_synced_capturing(signed);
+        self.persist_accepted(slot, outcome, plan)
+    }
+
+    /// Persists the block on [`BlockImportResult::Accepted`]. Shared by
+    /// [`Self::import_block`] and [`Self::import_block_synced`] so the two entry
+    /// points cannot drift on the persist path.
+    fn persist_accepted(
+        &self,
+        slot: Slot,
+        outcome: BlockImportResult,
+        plan: Option<PersistPlan>,
+    ) -> Result<BlockImportResult, ChainError> {
         if let BlockImportResult::Accepted {
             block_root,
             head_root,
