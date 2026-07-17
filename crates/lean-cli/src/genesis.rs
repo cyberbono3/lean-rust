@@ -224,10 +224,8 @@ fn load_genesis_registry(
     validators_path: &Path,
     assignments: &ValidatorAssignments,
 ) -> Result<Vec<Validator>> {
-    let manifest_path = validators_path
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .join(GENESIS_VALIDATORS_MANIFEST);
+    // Sibling of the assignment file: same directory, manifest filename.
+    let manifest_path = validators_path.with_file_name(GENESIS_VALIDATORS_MANIFEST);
     // `load_optional` owns the absent-vs-present decision under ITS path
     // resolution — do NOT pre-probe with `Path::exists`, which resolves against
     // a different root and can silently disagree with the actual read.
