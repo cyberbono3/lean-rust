@@ -60,13 +60,14 @@
 // stays an implementation detail rather than a compatibility promise.
 pub(crate) mod error;
 pub(crate) mod key_state;
+pub(crate) mod record;
 pub(crate) mod scheme;
 pub(crate) mod sign;
 pub(crate) mod verify;
 
 pub use error::CryptoError;
 pub use key_state::SigningKey;
-pub use scheme::{generate, ProdScheme, SchemeWire};
+pub use scheme::{generate, ProdScheme, SchemeWire, PROD_LIFETIME};
 pub use verify::verify;
 
 /// The XMSS wire public key. Re-exported from `types` — not redefined here.
@@ -74,3 +75,7 @@ pub use types::PublicKey;
 /// The XMSS wire signature container. Re-exported from `types` — not redefined
 /// here.
 pub use types::Signature;
+/// The crypto-free, persistable OTS key-state record and its decode error (SA5).
+/// Re-exported from `types` — consumers reach the record through this crate
+/// alongside the key types and the [`SigningKey::to_record`] / `from_record` pair.
+pub use types::{OtsKeyState, OtsKeyStateDecodeError};

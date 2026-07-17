@@ -5,10 +5,18 @@
 
 use leansig::serialization::Serializable;
 use leansig::signature::SignatureScheme;
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use types::{PublicKey, Signature};
 
 use crate::error::CryptoError;
 use crate::key_state::SigningKey;
+
+/// The interop-pinned production scheme lifetime (`2^32`).
+///
+/// Re-exported crypto-free so consumers (offline keygen tooling) can derive
+/// key-activation parameters without importing leanSig's `SignatureScheme`.
+pub const PROD_LIFETIME: u64 = <ProdScheme as SignatureScheme>::LIFETIME;
 
 /// The interop-pinned production scheme.
 ///
@@ -95,8 +103,15 @@ impl SchemeWire for ProdScheme {
 /// key wrapped in a [`SigningKey`] so the one-time discipline applies from the
 /// first signature.
 ///
-/// This is the only supported way to obtain a [`SigningKey`]: it is what keeps
-/// leanSig's own key types off this crate's public surface.
+/// With [`SigningKey::from_record`](crate::SigningKey::from_record), this is one
+/// of the two supported ways to obtain a [`SigningKey`] — the seam that keeps
+/// leanSig's own key types off this crate's public surface. The seed is sampled
+/// from `rng` and retained so the key can be persisted as a compact record.
+///
+/// `rng` is bounded on [`rand::CryptoRng`], not merely [`rand::Rng`]: the 32-byte
+/// seed it yields IS the signing key's entropy, so a non-cryptographic source
+/// would make the key predictable. Production passes `OsRng`; tests pass a seeded
+/// [`rand_chacha::ChaCha20Rng`], which is also a `CryptoRng`.
 ///
 /// # Errors
 ///
@@ -104,8 +119,42 @@ impl SchemeWire for ProdScheme {
 ///   the scheme's lifetime.
 /// - [`CryptoError::PublicKeyLength`] when the generated public key does not match
 ///   the wire width — a stale interop parameter, not a per-key condition.
-pub fn generate<S: SchemeWire, R: rand::Rng>(
+pub fn generate<S: SchemeWire, R: rand::CryptoRng>(
     rng: &mut R,
+    activation_epoch: usize,
+    num_active_epochs: usize,
+) -> Result<(PublicKey, SigningKey<S>), CryptoError> {
+    // Draw a reproducible seed and generate from it, so every key carries the
+    // seed that regenerates it (SA5 `to_record`). The caller's RNG is used only
+    // to sample the seed; the key material itself is derived by the seeded
+    // ChaCha stream in `generate_from_seed`.
+    let mut seed = [0u8; 32];
+    rng.fill_bytes(&mut seed);
+    generate_from_seed::<S>(seed, activation_epoch, num_active_epochs)
+}
+
+/// Generates a key pair deterministically from a reproducible 32-byte `seed`.
+///
+/// Re-running with the same `seed` and window yields the identical key — the
+/// basis for [`SigningKey::from_record`](crate::SigningKey::from_record). Uses a
+/// `ChaCha20` stream (portable and reproducible) rather than a platform RNG, so
+/// a persisted seed reproduces the key across builds.
+///
+/// Crate-private (not `pub`): this mints a FRESH key with an EMPTY watermark, so
+/// exposing it would let a caller holding a persisted seed rebuild a key that
+/// re-signs already-burned epochs — the one-time-key reuse the watermark exists
+/// to prevent. Reconstruction from a record goes through the public
+/// [`SigningKey::from_record`], which restores the watermark; fresh generation
+/// goes through the public [`generate`], which samples its own seed.
+///
+/// # Errors
+///
+/// - [`CryptoError::ActivationOutOfRange`] when the requested window does not fit
+///   the scheme's lifetime.
+/// - [`CryptoError::PublicKeyLength`] when the generated public key does not match
+///   the wire width.
+pub(crate) fn generate_from_seed<S: SchemeWire>(
+    seed: [u8; 32],
     activation_epoch: usize,
     num_active_epochs: usize,
 ) -> Result<(PublicKey, SigningKey<S>), CryptoError> {
@@ -131,9 +180,10 @@ pub fn generate<S: SchemeWire, R: rand::Rng>(
         });
     }
 
-    let (pk, sk) = S::key_gen(rng, activation_epoch, num_active_epochs);
+    let mut cha = ChaCha20Rng::from_seed(seed);
+    let (pk, sk) = S::key_gen(&mut cha, activation_epoch, num_active_epochs);
     let wire_pk = public_key_to_wire::<S>(&pk)?;
-    Ok((wire_pk, SigningKey::new(sk)))
+    Ok((wire_pk, SigningKey::new(sk, seed)))
 }
 
 /// Encodes a scheme public key into the wire newtype.
