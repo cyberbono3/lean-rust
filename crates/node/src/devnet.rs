@@ -372,10 +372,7 @@ fn persist_anchor(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crypto::ProdScheme;
-    use protocol::ValidatorIndex;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
+    use runtime::duties::test_fixtures::{stub_signer, write_validator_secrets, MIN_ACTIVE_EPOCHS};
     use runtime::duties::GenesisTimeUnix;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -383,39 +380,11 @@ mod tests {
     const VALIDATORS_PATH: &str = "../runtime/tests/duties_fixtures/validators.yaml";
 
     /// The `ream` group's local validators (`build_config`'s default group).
+    /// Only the `new_devnet_*` tests need these: they drive composition through
+    /// [`new_devnet`], which loads REAL key material off disk. The tests that
+    /// assemble a [`ChainService`] directly inject [`stub_signer`] instead —
+    /// their subject is node lifecycle and forkchoice resume, not signatures.
     const REAM_VALIDATORS: &[u64] = &[0, 3, 6, 9, 12, 15, 18, 21, 24, 27];
-    /// The `solo` fixture's local validators (one node owns all four).
-    const SOLO_VALIDATORS: &[u64] = &[0, 1, 2, 3];
-    /// Active-epoch window for the production-driving tests: comfortably covers
-    /// the ~6 slots they reach (each validator signs once per slot).
-    const DRIVE_ACTIVE_EPOCHS: usize = 16;
-
-    /// Writes `validator_<i>.ssz` secret records for `indices` (activation 0) into
-    /// `dir`. `num_active_epochs` must cover every epoch the test signs at — a key
-    /// is only signable within its activation window; load-only tests use the
-    /// minimum (2), production-driving tests need enough for the slots they reach.
-    fn write_validator_secrets(dir: &Path, indices: &[u64], num_active_epochs: usize) {
-        std::fs::create_dir_all(dir).unwrap();
-        let mut rng = StdRng::seed_from_u64(0x5161);
-        for &i in indices {
-            let (_pk, sk) =
-                crypto::generate::<ProdScheme, _>(&mut rng, 0, num_active_epochs).unwrap();
-            std::fs::write(
-                dir.join(format!("validator_{i}.ssz")),
-                sk.to_record().to_ssz_bytes(),
-            )
-            .unwrap();
-        }
-    }
-
-    /// Builds an in-memory signer holding freshly generated keys for `indices`.
-    fn signer_for(indices: &[u64], num_active_epochs: usize) -> Arc<Mutex<LocalSigner>> {
-        let dir = tempfile::tempdir().unwrap();
-        write_validator_secrets(dir.path(), indices, num_active_epochs);
-        let signer =
-            LocalSigner::load(dir.path(), indices.iter().map(|&i| ValidatorIndex::new(i))).unwrap();
-        Arc::new(Mutex::new(signer))
-    }
 
     fn loopback() -> SocketAddr {
         "127.0.0.1:0".parse().unwrap()
@@ -452,7 +421,7 @@ mod tests {
         // build/resume tests use a future genesis, so no signing runs — the keys
         // only need to LOAD, hence the minimum active window.
         let secrets_dir = identity_dir.join("validator-secrets");
-        write_validator_secrets(&secrets_dir, REAM_VALIDATORS, 2);
+        let _pubkeys = write_validator_secrets(&secrets_dir, REAM_VALIDATORS, MIN_ACTIVE_EPOCHS);
 
         Config {
             node: NodeConfig::default(),
@@ -489,7 +458,6 @@ mod tests {
     /// `start_paused` + `advance` to fire the driver's interval ticker
     /// deterministically.
     #[tokio::test(start_paused = true, flavor = "current_thread")]
-    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     async fn self_driving_node_proposes_attests_and_advances() {
         use crate::consensus_loop::ConsensusLoop;
         use runtime::core::Service as _;
@@ -533,7 +501,7 @@ mod tests {
         let chain = Arc::new(ChainService::with_signer(
             engine,
             Arc::clone(&store),
-            signer_for(SOLO_VALIDATORS, DRIVE_ACTIVE_EPOCHS),
+            stub_signer(),
         ));
         let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
         let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider).unwrap());
@@ -782,7 +750,7 @@ mod tests {
         let chain = Arc::new(ChainService::with_signer(
             engine,
             Arc::clone(&store),
-            signer_for(SOLO_VALIDATORS, DRIVE_ACTIVE_EPOCHS),
+            stub_signer(),
         ));
         let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
         let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider).unwrap());
@@ -833,7 +801,6 @@ mod tests {
     // counter starts at slot 0 and so cannot extend a resumed higher-slot head —
     // a separate concern from the forkchoice resume bug this fixes.)
     #[tokio::test(start_paused = true, flavor = "current_thread")]
-    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     async fn persistent_node_restart_resumes_forkchoice_head_recompute() {
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("chain.redb");

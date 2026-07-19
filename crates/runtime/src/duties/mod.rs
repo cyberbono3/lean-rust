@@ -15,6 +15,8 @@ mod error;
 mod genesis_pubkeys;
 mod proposer;
 mod signer;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_fixtures;
 mod validators;
 
 pub use config::{
@@ -24,9 +26,14 @@ pub use config::{
 pub use error::{DutiesError, DutiesResult};
 pub use genesis_pubkeys::GenesisRegistry;
 pub use proposer::LocalProposers;
-// `LocalSigner` / its errors are `pub`: the composition root (`node`) builds the
-// signer and passes it to the public `chain::Service::new`, so the type appears
-// in a public signature. `sign_attestation` itself is `pub(crate)` — only the
-// chain service calls it.
-pub use signer::{LocalSigner, SignError, SignerLoadError};
+// `AttestationSigner` is the seam `chain::Service` depends on, so it appears in
+// the public `Service::with_signer` signature; `sign_attestation` is public with
+// it (a trait method cannot be narrower than its trait). `LocalSigner` / its
+// errors are `pub` because the composition root (`node`) builds the production
+// implementation and passes it in.
+// `validator_secret_path` is `pub` so the offline keygen (`lean-cli`, which
+// depends on this crate) writes the same file names this loader reads.
+pub use signer::{
+    validator_secret_path, AttestationSigner, LocalSigner, SignError, SignerLoadError,
+};
 pub use validators::ValidatorAssignments;

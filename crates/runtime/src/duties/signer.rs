@@ -18,6 +18,18 @@ use types::Signature;
 
 use crate::signing_domain::{attestation_signing_inputs, EpochOverflow};
 
+/// `<secrets_dir>/validator_<index>.ssz` — the on-disk name of one validator's
+/// [`OtsKeyState`] secret record.
+///
+/// The ONE home for this convention. The offline keygen writes these files
+/// (`lean-cli::validator_keygen`) and [`LocalSigner::load`] reads them back; a
+/// second spelling on either side would desync silently at runtime rather than
+/// failing to compile, so both sides call this.
+#[must_use]
+pub fn validator_secret_path(secrets_dir: &Path, index: u64) -> PathBuf {
+    secrets_dir.join(format!("validator_{index}.ssz"))
+}
+
 /// Errors raised while LOADING local secret key material at composition-root
 /// startup. A load failure is fatal: a node configured to run a validator it has
 /// no key for is misconfigured and must fail fast, never sign a placeholder.
@@ -75,11 +87,37 @@ pub enum SignError {
     Crypto(#[from] CryptoError),
 }
 
+/// Produces a validator's signature over one attestation.
+///
+/// The abstraction [`crate::chain::Service`] depends on, so the chain service is
+/// coupled to the ACT of signing rather than to leanSig key material: production
+/// injects [`LocalSigner`], tests inject a stub. Without this seam every test
+/// that merely produces a block has to generate real `ProdScheme` keys, which is
+/// CPU-heavy enough to force `#[ignore]`.
+///
+/// `&mut self` is load-bearing: a one-time-key implementation advances its
+/// watermark on each sign, and the borrow checker then prevents two signers
+/// sharing one key state.
+///
+/// `Send` is a supertrait so `dyn AttestationSigner` is `Send` — the chain
+/// service holds one behind an `Arc<Mutex<..>>` and must stay `Send + Sync`.
+pub trait AttestationSigner: Send {
+    /// Signs `att` for its own `validator_id`.
+    ///
+    /// # Errors
+    /// [`SignError`] if no key is loaded for the validator, the slot leaves the
+    /// signature scheme's epoch domain, or the underlying scheme rejects the
+    /// operation (including one-time-key reuse).
+    fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError>;
+}
+
 /// Holds the local validators' live signing keys, keyed by index.
 ///
 /// The map value is a [`crypto::ProdSigningKey`] (the pinned production scheme).
 /// The composition root builds this and hands it to the chain service; signing
 /// happens at the runtime boundary, outside the forkchoice store lock.
+///
+/// The production implementation of [`AttestationSigner`].
 pub struct LocalSigner {
     keys: BTreeMap<ValidatorIndex, ProdSigningKey>,
 }
@@ -114,7 +152,7 @@ impl LocalSigner {
         let mut keys = BTreeMap::new();
         for index in local_indices {
             let idx = index.get();
-            let path = secrets_dir.join(format!("validator_{idx}.ssz"));
+            let path = validator_secret_path(secrets_dir, idx);
             let bytes = std::fs::read(&path).map_err(|source| SignerLoadError::SecretFileRead {
                 index: idx,
                 path: path.clone(),
@@ -128,7 +166,9 @@ impl LocalSigner {
         }
         Ok(Self { keys })
     }
+}
 
+impl AttestationSigner for LocalSigner {
     /// Signs `att` for its own `validator_id`: a leanSig signature over
     /// `hash_tree_root(att)` at epoch = `att.data.slot`.
     ///
@@ -143,7 +183,7 @@ impl LocalSigner {
     ///   epoch domain.
     /// - [`SignError::Crypto`] on any leanSig failure (not-active / not-prepared /
     ///   reused).
-    pub(crate) fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
+    fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
         let validator_id = att.validator_id;
         let key = self
             .keys
@@ -163,32 +203,21 @@ impl LocalSigner {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use super::super::test_fixtures::{write_validator_secrets, MIN_ACTIVE_EPOCHS};
     use super::*;
     use crypto::{ProdScheme, PublicKey};
     use protocol::{AttestationData, Slot};
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
     use ssz::HashTreeRoot;
 
-    /// Generates a `ProdScheme` key per index (activation 0, 2 active epochs —
-    /// the smallest window that can sign epoch 0, matching the crypto crate's own
-    /// tests), writes each as `validator_<i>.ssz`, and returns the temp dir plus
-    /// the matching public keys. `ProdScheme` keygen is CPU-heavy, so callers pass
-    /// the minimum index set they need.
+    /// Writes a `validator_<i>.ssz` record per index into a fresh temp dir and
+    /// returns the dir (kept alive by the caller) plus the matching public keys.
+    ///
+    /// The generation itself lives in `duties::test_fixtures`; this only owns the
+    /// temp dir. `ProdScheme` keygen is CPU-heavy, so callers pass the minimum
+    /// index set they need. These tests sign at epoch 0 only.
     fn make_secret_dir(indices: &[u64]) -> (tempfile::TempDir, BTreeMap<u64, PublicKey>) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut rng = StdRng::seed_from_u64(42);
-        let mut pubs = BTreeMap::new();
-        for &i in indices {
-            let (pk, sk) = crypto::generate::<ProdScheme, _>(&mut rng, 0, 2).expect("generate");
-            let record = sk.to_record();
-            std::fs::write(
-                dir.path().join(format!("validator_{i}.ssz")),
-                record.to_ssz_bytes(),
-            )
-            .expect("write secret");
-            pubs.insert(i, pk);
-        }
+        let pubs = write_validator_secrets(dir.path(), indices, MIN_ACTIVE_EPOCHS);
         (dir, pubs)
     }
 

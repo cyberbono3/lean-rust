@@ -9,8 +9,6 @@
     clippy::unwrap_used
 )]
 
-mod common;
-
 use std::sync::Arc;
 
 use forkchoice::ForkchoiceError;
@@ -20,24 +18,27 @@ use runtime::chain::engine::test_fixtures::{
 };
 use runtime::chain::engine::{Engine, EngineError};
 use runtime::chain::{ChainError, Service};
+use runtime::duties::test_fixtures::stub_signer;
 use ssz::HashTreeRoot;
 use storage::{MemoryStore, Store};
 use types::Bytes32;
 
+/// The subject of every test here is what `produce_*` PERSISTS and how it moves
+/// the head — never the signature bytes, which `chain_sign.rs` covers with real
+/// key material. A stub signer therefore keeps this file out of CPU-heavy
+/// `ProdScheme` keygen and in the default test suite.
 fn fresh_service() -> (Service, Arc<MemoryStore>, Engine) {
     let engine = engine_at_genesis(ENGINE_VALIDATORS);
     let store = Arc::new(MemoryStore::new());
-    // Keys for the validators these tests actually sign for: the slot-1 proposer
-    // (validator 1) and the attester (validator 0). Validator 2 is exercised only
-    // on the unauthorized-proposer path, which the engine rejects before signing.
-    let (signer, _pubs) = common::signer_with_keys(&[0, 1]);
-    let service =
-        Service::with_signer(engine.clone(), Arc::clone(&store) as Arc<dyn Store>, signer);
+    let service = Service::with_signer(
+        engine.clone(),
+        Arc::clone(&store) as Arc<dyn Store>,
+        stub_signer(),
+    );
     (service, store, engine)
 }
 
 #[tokio::test]
-#[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
 async fn produce_block_persists_and_moves_head() {
     let (service, store, _engine) = fresh_service();
     let pre = service.snapshot();
@@ -65,9 +66,13 @@ async fn produce_block_persists_and_moves_head() {
 }
 
 #[tokio::test]
-#[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
 async fn produce_block_rejects_unauthorized_proposer() {
-    let (service, _store, _engine) = fresh_service();
+    // The engine rejects an unauthorized proposer BEFORE any signing happens,
+    // so this path needs no key material: a non-signing `Service::new` keeps
+    // the test out of the CPU-heavy `ProdScheme` keygen and in the default suite.
+    let engine = engine_at_genesis(ENGINE_VALIDATORS);
+    let store = Arc::new(MemoryStore::new());
+    let service = Service::new(engine, Arc::clone(&store) as Arc<dyn Store>);
 
     // Slot 1 proposer is validator 1; validator 2 is unauthorized.
     let err = service
@@ -86,7 +91,6 @@ async fn produce_block_rejects_unauthorized_proposer() {
 }
 
 #[tokio::test]
-#[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
 async fn produce_attestation_carries_validator_id_and_holds_head() {
     let (service, _store, _engine) = fresh_service();
     let pre = service.snapshot();
@@ -104,7 +108,6 @@ async fn produce_attestation_carries_validator_id_and_holds_head() {
 }
 
 #[tokio::test]
-#[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
 async fn produce_attestation_reimports_early_vote_with_anchor_source() {
     // A fresh engine normalizes the genesis justified checkpoint to the
     // tracked anchor root, so early own votes should be importable instead
