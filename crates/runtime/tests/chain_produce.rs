@@ -28,8 +28,7 @@ fn fresh_service() -> (Service, Arc<MemoryStore>, Engine) {
     let engine = engine_at_genesis(ENGINE_VALIDATORS);
     let store = Arc::new(MemoryStore::new());
     // Keys for the validators these tests actually sign for: the slot-1 proposer
-    // (validator 1) and the attester (validator 0). Validator 2 is exercised only
-    // on the unauthorized-proposer path, which the engine rejects before signing.
+    // (validator 1) and the attester (validator 0).
     let (signer, _pubs) = common::signer_with_keys(&[0, 1]);
     let service =
         Service::with_signer(engine.clone(), Arc::clone(&store) as Arc<dyn Store>, signer);
@@ -65,9 +64,13 @@ async fn produce_block_persists_and_moves_head() {
 }
 
 #[tokio::test]
-#[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
 async fn produce_block_rejects_unauthorized_proposer() {
-    let (service, _store, _engine) = fresh_service();
+    // The engine rejects an unauthorized proposer BEFORE any signing happens,
+    // so this path needs no key material: a non-signing `Service::new` keeps
+    // the test out of the CPU-heavy `ProdScheme` keygen and in the default suite.
+    let engine = engine_at_genesis(ENGINE_VALIDATORS);
+    let store = Arc::new(MemoryStore::new());
+    let service = Service::new(engine, Arc::clone(&store) as Arc<dyn Store>);
 
     // Slot 1 proposer is validator 1; validator 2 is unauthorized.
     let err = service
