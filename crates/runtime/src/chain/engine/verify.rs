@@ -241,9 +241,10 @@ pub(crate) mod test_support {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use super::super::test_fixtures::validator_registry;
     use super::test_support::FakeVerifier;
     use super::*;
-    use protocol::{AttestationData, Slot, Validator, ValidatorIndex};
+    use protocol::{AttestationData, Slot, ValidatorIndex};
 
     /// Builds an attestation for `validator_id` at `slot` (other fields default).
     fn att(validator_id: u64, slot: u64) -> Attestation {
@@ -257,13 +258,10 @@ mod tests {
     }
 
     /// A registry of `n` validators (pubkeys default — the fake ignores them).
+    /// Shares the engine fixture so this module and the importer gate tests
+    /// cannot drift on registry shape.
     fn validators(n: u64) -> Validators {
-        (0..n)
-            .map(|i| Validator {
-                pubkey: PublicKey::default(),
-                index: ValidatorIndex::new(i),
-            })
-            .collect()
+        validator_registry(n)
     }
 
     fn zero_sigs(n: usize) -> Vec<Signature> {

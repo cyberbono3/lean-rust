@@ -47,7 +47,8 @@ pub struct Engine {
     /// [`super::verify::ProdVerifier`] via [`Engine::with_verifier`].
     verifier: Option<Arc<dyn Verifier + Send + Sync>>,
     /// Runtime gate. `true` (default) verifies on the `import_block` path when a
-    /// verifier is present; self-sync forces it off via `import_block_synced`.
+    /// verifier is present. Sync backfill does NOT consult this flag — it
+    /// bypasses the gate by entering through `import_block_synced`.
     verify_signatures: bool,
 }
 
@@ -175,8 +176,10 @@ impl Engine {
         self
     }
 
-    /// Overrides the verify gate (default `true`). Self-sync of already-canonical
-    /// history sets this off; live gossip leaves it on.
+    /// Overrides the verify gate for the `import_block` path (default `true`).
+    /// This is a whole-engine switch — operator or test override — not the sync
+    /// escape hatch: sync backfill leaves this flag alone and skips the gate by
+    /// calling `import_block_synced` instead.
     #[must_use]
     pub fn with_verify_signatures(mut self, verify: bool) -> Self {
         self.verify_signatures = verify;
