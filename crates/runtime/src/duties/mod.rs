@@ -15,6 +15,8 @@ mod error;
 mod genesis_pubkeys;
 mod proposer;
 mod signer;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_fixtures;
 mod validators;
 
 pub use config::{
@@ -28,5 +30,7 @@ pub use proposer::LocalProposers;
 // signer and passes it to the public `chain::Service::new`, so the type appears
 // in a public signature. `sign_attestation` itself is `pub(crate)` — only the
 // chain service calls it.
-pub use signer::{LocalSigner, SignError, SignerLoadError};
+// `validator_secret_path` is `pub` so the offline keygen (`lean-cli`, which
+// depends on this crate) writes the same file names this loader reads.
+pub use signer::{validator_secret_path, LocalSigner, SignError, SignerLoadError};
 pub use validators::ValidatorAssignments;

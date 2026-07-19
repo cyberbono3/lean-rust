@@ -157,9 +157,10 @@ pub fn generate_validator_keys<R: rand::RngCore + rand::CryptoRng>(
     Ok(manifest)
 }
 
-/// `<out_dir>/validator_<index>.ssz`.
+/// `<out_dir>/validator_<index>.ssz` — delegates to the runtime loader's own
+/// convention so the writer and the reader cannot drift apart.
 fn secret_path(out_dir: &Path, index: u64) -> PathBuf {
-    out_dir.join(format!("validator_{index}.ssz"))
+    runtime::duties::validator_secret_path(out_dir, index)
 }
 
 /// Canonical manifest text: a `genesis_validators:` YAML sequence of lower-case

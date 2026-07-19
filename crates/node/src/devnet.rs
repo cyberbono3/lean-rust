@@ -372,10 +372,9 @@ fn persist_anchor(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crypto::ProdScheme;
-    use protocol::ValidatorIndex;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
+    use runtime::duties::test_fixtures::{
+        signer_with_keys, write_validator_secrets, MIN_ACTIVE_EPOCHS,
+    };
     use runtime::duties::GenesisTimeUnix;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -390,31 +389,12 @@ mod tests {
     /// the ~6 slots they reach (each validator signs once per slot).
     const DRIVE_ACTIVE_EPOCHS: usize = 16;
 
-    /// Writes `validator_<i>.ssz` secret records for `indices` (activation 0) into
-    /// `dir`. `num_active_epochs` must cover every epoch the test signs at — a key
-    /// is only signable within its activation window; load-only tests use the
-    /// minimum (2), production-driving tests need enough for the slots they reach.
-    fn write_validator_secrets(dir: &Path, indices: &[u64], num_active_epochs: usize) {
-        std::fs::create_dir_all(dir).unwrap();
-        let mut rng = StdRng::seed_from_u64(0x5161);
-        for &i in indices {
-            let (_pk, sk) =
-                crypto::generate::<ProdScheme, _>(&mut rng, 0, num_active_epochs).unwrap();
-            std::fs::write(
-                dir.join(format!("validator_{i}.ssz")),
-                sk.to_record().to_ssz_bytes(),
-            )
-            .unwrap();
-        }
-    }
-
-    /// Builds an in-memory signer holding freshly generated keys for `indices`.
+    /// Builds an in-memory signer holding freshly generated keys for `indices`,
+    /// backed by a temp dir the signer no longer needs once loaded.
     fn signer_for(indices: &[u64], num_active_epochs: usize) -> Arc<Mutex<LocalSigner>> {
         let dir = tempfile::tempdir().unwrap();
-        write_validator_secrets(dir.path(), indices, num_active_epochs);
-        let signer =
-            LocalSigner::load(dir.path(), indices.iter().map(|&i| ValidatorIndex::new(i))).unwrap();
-        Arc::new(Mutex::new(signer))
+        let (signer, _pubkeys) = signer_with_keys(dir.path(), indices, num_active_epochs);
+        signer
     }
 
     fn loopback() -> SocketAddr {
@@ -452,7 +432,7 @@ mod tests {
         // build/resume tests use a future genesis, so no signing runs — the keys
         // only need to LOAD, hence the minimum active window.
         let secrets_dir = identity_dir.join("validator-secrets");
-        write_validator_secrets(&secrets_dir, REAM_VALIDATORS, 2);
+        let _pubkeys = write_validator_secrets(&secrets_dir, REAM_VALIDATORS, MIN_ACTIVE_EPOCHS);
 
         Config {
             node: NodeConfig::default(),

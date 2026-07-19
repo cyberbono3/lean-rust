@@ -17,6 +17,18 @@ use protocol::{Attestation, Slot, ValidatorIndex};
 use ssz::HashTreeRoot;
 use types::Signature;
 
+/// `<secrets_dir>/validator_<index>.ssz` — the on-disk name of one validator's
+/// [`OtsKeyState`] secret record.
+///
+/// The ONE home for this convention. The offline keygen writes these files
+/// (`lean-cli::validator_keygen`) and [`LocalSigner::load`] reads them back; a
+/// second spelling on either side would desync silently at runtime rather than
+/// failing to compile, so both sides call this.
+#[must_use]
+pub fn validator_secret_path(secrets_dir: &Path, index: u64) -> PathBuf {
+    secrets_dir.join(format!("validator_{index}.ssz"))
+}
+
 /// Errors raised while LOADING local secret key material at composition-root
 /// startup. A load failure is fatal: a node configured to run a validator it has
 /// no key for is misconfigured and must fail fast, never sign a placeholder.
@@ -116,7 +128,7 @@ impl LocalSigner {
         let mut keys = BTreeMap::new();
         for index in local_indices {
             let idx = index.get();
-            let path = secrets_dir.join(format!("validator_{idx}.ssz"));
+            let path = validator_secret_path(secrets_dir, idx);
             let bytes = std::fs::read(&path).map_err(|source| SignerLoadError::SecretFileRead {
                 index: idx,
                 path: path.clone(),
@@ -183,31 +195,20 @@ fn attestation_sign_message(att: &Attestation) -> [u8; crypto::MESSAGE_LENGTH] {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use super::super::test_fixtures::{write_validator_secrets, MIN_ACTIVE_EPOCHS};
     use super::*;
     use crypto::{ProdScheme, PublicKey};
     use protocol::AttestationData;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
 
-    /// Generates a `ProdScheme` key per index (activation 0, 2 active epochs —
-    /// the smallest window that can sign epoch 0, matching the crypto crate's own
-    /// tests), writes each as `validator_<i>.ssz`, and returns the temp dir plus
-    /// the matching public keys. `ProdScheme` keygen is CPU-heavy, so callers pass
-    /// the minimum index set they need.
+    /// Writes a `validator_<i>.ssz` record per index into a fresh temp dir and
+    /// returns the dir (kept alive by the caller) plus the matching public keys.
+    ///
+    /// The generation itself lives in `duties::test_fixtures`; this only owns the
+    /// temp dir. `ProdScheme` keygen is CPU-heavy, so callers pass the minimum
+    /// index set they need. These tests sign at epoch 0 only.
     fn make_secret_dir(indices: &[u64]) -> (tempfile::TempDir, BTreeMap<u64, PublicKey>) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut rng = StdRng::seed_from_u64(42);
-        let mut pubs = BTreeMap::new();
-        for &i in indices {
-            let (pk, sk) = crypto::generate::<ProdScheme, _>(&mut rng, 0, 2).expect("generate");
-            let record = sk.to_record();
-            std::fs::write(
-                dir.path().join(format!("validator_{i}.ssz")),
-                record.to_ssz_bytes(),
-            )
-            .expect("write secret");
-            pubs.insert(i, pk);
-        }
+        let pubs = write_validator_secrets(dir.path(), indices, MIN_ACTIVE_EPOCHS);
         (dir, pubs)
     }
 
