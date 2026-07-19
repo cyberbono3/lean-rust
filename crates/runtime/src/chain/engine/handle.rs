@@ -49,7 +49,7 @@ pub struct Engine {
     ///
     /// Sync backfill does NOT go through this switch: it bypasses the gate by
     /// entering through `import_block_synced` regardless of what is injected.
-    verifier: Option<Arc<dyn Verifier + Send + Sync>>,
+    verifier: Option<Arc<dyn Verifier>>,
 }
 
 impl Engine {
@@ -175,7 +175,7 @@ impl Engine {
     /// It is also not the sync escape hatch: sync backfill skips the gate by
     /// calling `import_block_synced`, whatever is injected here.
     #[must_use]
-    pub fn with_verifier(mut self, verifier: Arc<dyn Verifier + Send + Sync>) -> Self {
+    pub fn with_verifier(mut self, verifier: Arc<dyn Verifier>) -> Self {
         self.verifier = Some(verifier);
         self
     }
@@ -186,7 +186,7 @@ impl Engine {
     }
 
     /// Read-only borrow of the injected verifier for the importer module.
-    pub(crate) fn verifier(&self) -> Option<&(dyn Verifier + Send + Sync)> {
+    pub(crate) fn verifier(&self) -> Option<&dyn Verifier> {
         self.verifier.as_deref()
     }
 

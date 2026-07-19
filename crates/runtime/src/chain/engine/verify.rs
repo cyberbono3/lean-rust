@@ -55,7 +55,12 @@ pub enum VerifyError {
 /// `public_key`. Mirrors [`crypto::verify`] exactly. `runtime` depends on this
 /// trait (DIP); the leanSig-backed [`ProdVerifier`] is the adapter behind it,
 /// and tests inject a hand-written fake.
-pub trait Verifier {
+///
+/// `Send + Sync` are supertraits rather than per-site `dyn Verifier + Send +
+/// Sync` bounds: the [`Engine`](crate::chain::engine::Engine) is cloned across
+/// threads, so every implementor must be shareable anyway. Stating it once here
+/// keeps every holder to a plain `dyn Verifier`.
+pub trait Verifier: Send + Sync {
     /// Returns `Ok(())` only when `signature` is valid for `message`/`epoch`
     /// under `public_key`.
     ///
@@ -160,7 +165,8 @@ pub(crate) mod test_support {
 
     /// Hand-written `Verifier` double (per testing.md — no `mockall`). Records
     /// each call's `(epoch, message)` and returns scripted results in order.
-    /// `Send + Sync` so it injects as `Arc<dyn Verifier + Send + Sync>`.
+    /// `Mutex`-wrapped state keeps it `Send + Sync`, as the [`Verifier`]
+    /// supertraits require, so it injects as `Arc<dyn Verifier>`.
     pub(crate) struct FakeVerifier {
         calls: Mutex<Vec<(u32, [u8; MESSAGE_LENGTH])>>,
         script: Mutex<VecDeque<Result<(), CryptoError>>>,
