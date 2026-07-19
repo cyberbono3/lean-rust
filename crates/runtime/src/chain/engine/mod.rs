@@ -28,4 +28,4 @@ pub use error::EngineError;
 pub use handle::Engine;
 pub(crate) use handle::PersistPlan;
 pub use results::{AttestationImportResult, BlockImportResult};
-pub use verify::{prod_verifier, ProdVerifier, Verifier, VerifyError};
+pub use verify::{ProdVerifier, Verifier, VerifyError};

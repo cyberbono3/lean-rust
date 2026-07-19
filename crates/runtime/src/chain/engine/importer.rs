@@ -89,11 +89,12 @@ impl Engine {
         self.import_block_capturing_inner(signed_block, VerifyPolicy::Enforce)
     }
 
-    /// Sync-backfill variant: SKIPS the signature verify gate. The sync loop
-    /// imports peer-provided blocks (hash-chained and STF-validated, but NOT
-    /// signature-verified) through this entry; live gossip uses
-    /// [`Self::import_block_capturing`]. See `Service::import_block_synced` for
-    /// the peer-inducible trust-boundary rationale.
+    /// Sync-backfill variant: SKIPS the signature verify gate; live gossip uses
+    /// [`Self::import_block_capturing`].
+    ///
+    /// `crate::chain::Service::import_block_synced` is the canonical statement
+    /// of the trust boundary this opens — read it before routing anything else
+    /// onto this entry.
     pub(crate) fn import_block_synced_capturing(
         &self,
         signed_block: SignedBlockWithAttestation,
@@ -103,16 +104,13 @@ impl Engine {
 
     /// Runs the import-boundary signature gate over `signed_block` against the
     /// parent post-state `validators`. A no-op (`Ok`) when no verifier is
-    /// injected or [`Engine::verify_signatures`] is off — the two ways the gate
-    /// stays inert. Read-only: it never touches the store.
+    /// injected — the one way the gate stays inert. Read-only: it never touches
+    /// the store.
     fn run_verify_gate(
         &self,
         signed_block: &SignedBlockWithAttestation,
         validators: &Validators,
     ) -> Result<(), VerifyError> {
-        if !self.verify_signatures() {
-            return Ok(());
-        }
         let Some(verifier) = self.verifier() else {
             return Ok(());
         };
@@ -561,21 +559,19 @@ mod tests {
         (signed, elements)
     }
 
-    /// An importer engine with a populated validator registry, `fake` injected,
-    /// and the gate flag set to `verify`.
-    fn gated_engine(fake: &Arc<FakeVerifier>, verify: bool) -> Engine {
-        engine_at_genesis_with_validators(ENGINE_VALIDATORS)
-            .with_verifier(fake.clone())
-            .with_verify_signatures(verify)
+    /// An importer engine with a populated validator registry and `fake`
+    /// injected — injection is what enables the gate.
+    fn gated_engine(fake: &Arc<FakeVerifier>) -> Engine {
+        engine_at_genesis_with_validators(ENGINE_VALIDATORS).with_verifier(fake.clone())
     }
 
     #[test]
-    fn import_block_rejects_invalid_signature_when_enabled() {
+    fn import_block_rejects_invalid_signature_when_verifier_injected() {
         let (signed, elements) = signed_block_len_matched();
 
         // The first element rejects → the gate short-circuits after one call.
         let fake = Arc::new(FakeVerifier::reject_nth(elements, 0));
-        let importer = gated_engine(&fake, true);
+        let importer = gated_engine(&fake);
         let pre = StoreSnapshot::capture(&importer);
 
         let outcome = importer.import_block(signed);
@@ -592,28 +588,12 @@ mod tests {
     }
 
     #[test]
-    fn import_block_accepts_invalid_signature_when_disabled() {
-        let (signed, elements) = signed_block_len_matched();
-
-        // Same rejecting verifier, but the gate is off.
-        let fake = Arc::new(FakeVerifier::reject_nth(elements, 0));
-        let importer = gated_engine(&fake, false);
-
-        assert!(matches!(
-            importer.import_block(signed),
-            BlockImportResult::Accepted { .. }
-        ));
-        // Gate disabled → verifier never invoked.
-        assert_eq!(fake.call_count(), 0);
-    }
-
-    #[test]
     fn import_block_synced_skips_verify() {
         let (signed, elements) = signed_block_len_matched();
 
-        // Verifier would reject, and the flag is ON — yet the synced entry skips.
+        // Verifier is injected and would reject — yet the synced entry skips.
         let fake = Arc::new(FakeVerifier::reject_nth(elements, 0));
-        let importer = gated_engine(&fake, true);
+        let importer = gated_engine(&fake);
 
         let (outcome, _plan) = importer.import_block_synced_capturing(signed);
         assert!(matches!(outcome, BlockImportResult::Accepted { .. }));
@@ -632,9 +612,8 @@ mod tests {
         // Deliberately mismatched vs body.len() + 1 (zero signatures).
         signed.signature = BlockSignatures::default();
 
+        // No verifier injected — the Engine default.
         let importer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
-        // The gate flag defaults ON, yet no verifier is injected.
-        assert!(importer.verify_signatures());
         assert!(matches!(
             importer.import_block(signed),
             BlockImportResult::Accepted { .. }
@@ -646,7 +625,7 @@ mod tests {
         let (signed, elements) = signed_block_len_matched();
 
         let fake = Arc::new(FakeVerifier::all_ok(elements));
-        let importer = gated_engine(&fake, true);
+        let importer = gated_engine(&fake);
 
         assert!(matches!(
             importer.import_block(signed),

@@ -13,9 +13,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crypto::{CryptoError, OtsKeyState, OtsKeyStateDecodeError, ProdSigningKey};
-use protocol::{Attestation, Slot, ValidatorIndex};
-use ssz::HashTreeRoot;
+use protocol::{Attestation, ValidatorIndex};
 use types::Signature;
+
+use crate::signing_domain::{attestation_signing_inputs, EpochOverflow};
 
 /// Errors raised while LOADING local secret key material at composition-root
 /// startup. A load failure is fatal: a node configured to run a validator it has
@@ -63,13 +64,10 @@ pub enum SignError {
         /// The validator index that has no loaded key.
         validator_id: u64,
     },
-    /// The attestation slot exceeds the leanSig epoch domain (`u32`,
-    /// LIFETIME = `2^32`).
-    #[error("attestation slot {slot} exceeds the u32 epoch domain")]
-    EpochOverflow {
-        /// The offending slot value.
-        slot: u64,
-    },
+    /// The attestation slot exceeds the leanSig epoch domain. Raised by the
+    /// shared [`attestation_signing_inputs`] derivation.
+    #[error(transparent)]
+    EpochOverflow(#[from] EpochOverflow),
     /// The underlying leanSig operation failed. Includes one-time-key reuse
     /// ([`CryptoError::EpochReused`]): it surfaces here rather than being
     /// swallowed, so a double-sign is a visible error, not a silent placeholder.
@@ -141,7 +139,8 @@ impl LocalSigner {
     ///
     /// # Errors
     /// - [`SignError::UnknownValidator`] if no key is loaded for `att.validator_id`.
-    /// - [`SignError::EpochOverflow`] if `att.data.slot` exceeds `u32::MAX`.
+    /// - [`SignError::EpochOverflow`] if `att.data.slot` exceeds the `u32`
+    ///   epoch domain.
     /// - [`SignError::Crypto`] on any leanSig failure (not-active / not-prepared /
     ///   reused).
     pub(crate) fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
@@ -152,8 +151,7 @@ impl LocalSigner {
             .ok_or(SignError::UnknownValidator {
                 validator_id: validator_id.get(),
             })?;
-        let epoch = epoch_for_slot(att.data.slot)?;
-        let message = attestation_sign_message(att);
+        let (epoch, message) = attestation_signing_inputs(att)?;
         // A reloaded key sits at its activation-start prepared window; advance it
         // to the target epoch before signing (no-op when already prepared).
         key.prepare(epoch)?;
@@ -162,32 +160,15 @@ impl LocalSigner {
     }
 }
 
-/// Narrows a [`Slot`] (`u64`) to the leanSig `u32` epoch domain, erroring on
-/// overflow. NEVER a lossy `as` cast — a truncated epoch would sign at the wrong
-/// one-time-key slot.
-fn epoch_for_slot(slot: Slot) -> Result<u32, SignError> {
-    u32::try_from(slot.get()).map_err(|_| SignError::EpochOverflow { slot: slot.get() })
-}
-
-/// The leanSig sign preimage: `bytes(hash_tree_root(Attestation))`. One home for
-/// the HTR → message conversion so every sign site is byte-identical.
-///
-/// [`Attestation::hash_tree_root`] returns `[u8; 32]`; the return-type
-/// unification with `[u8; crypto::MESSAGE_LENGTH]` is a compile-time assertion
-/// that the attestation-root width equals leanSig's message width — no cast, no
-/// fallible conversion.
-fn attestation_sign_message(att: &Attestation) -> [u8; crypto::MESSAGE_LENGTH] {
-    att.hash_tree_root()
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crypto::{ProdScheme, PublicKey};
-    use protocol::AttestationData;
+    use protocol::{AttestationData, Slot};
     use rand::rngs::StdRng;
     use rand::SeedableRng;
+    use ssz::HashTreeRoot;
 
     /// Generates a `ProdScheme` key per index (activation 0, 2 active epochs —
     /// the smallest window that can sign epoch 0, matching the crypto crate's own
@@ -267,7 +248,7 @@ mod tests {
         // Epoch overflow — a known validator, but the slot exceeds u32::MAX.
         let big = u64::from(u32::MAX) + 1;
         let overflow = signer.sign_attestation(&attestation(0, big)).unwrap_err();
-        assert!(matches!(overflow, SignError::EpochOverflow { slot } if slot == big));
+        assert!(matches!(overflow, SignError::EpochOverflow(e) if e.slot == big));
     }
 
     #[test]

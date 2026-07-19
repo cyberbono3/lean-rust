@@ -42,14 +42,14 @@ pub struct Engine {
     /// Chain-tick trigger metrics. Default is a no-op; the composition root
     /// injects live handles via [`Engine::with_metrics`].
     metrics: ChainMetrics,
-    /// Import-boundary signature verifier. `None` (default) makes the verify
-    /// gate a no-op; the composition root injects the leanSig-backed
+    /// Import-boundary signature verifier — the single switch for the verify
+    /// gate. `None` (the default) makes the gate a no-op; the composition root
+    /// enables verification by injecting the leanSig-backed
     /// [`super::verify::ProdVerifier`] via [`Engine::with_verifier`].
+    ///
+    /// Sync backfill does NOT go through this switch: it bypasses the gate by
+    /// entering through `import_block_synced` regardless of what is injected.
     verifier: Option<Arc<dyn Verifier + Send + Sync>>,
-    /// Runtime gate. `true` (default) verifies on the `import_block` path when a
-    /// verifier is present. Sync backfill does NOT consult this flag — it
-    /// bypasses the gate by entering through `import_block_synced`.
-    verify_signatures: bool,
 }
 
 impl Engine {
@@ -154,7 +154,6 @@ impl Engine {
             store: Arc::new(Mutex::new(store)),
             metrics: ChainMetrics::default(),
             verifier: None,
-            verify_signatures: true,
         }
     }
 
@@ -167,22 +166,17 @@ impl Engine {
         self
     }
 
-    /// Injects the import-boundary signature verifier. Composition-root only;
-    /// with no verifier set the verify gate is a no-op regardless of
-    /// [`Engine::with_verify_signatures`].
+    /// Injects the import-boundary signature verifier, enabling the verify gate
+    /// on the `import_block` path. Composition-root only; leaving it unset is
+    /// how the gate stays inert.
+    ///
+    /// This is the whole-engine switch — there is deliberately no separate
+    /// enable flag, so "verifier injected" and "gate enabled" cannot disagree.
+    /// It is also not the sync escape hatch: sync backfill skips the gate by
+    /// calling `import_block_synced`, whatever is injected here.
     #[must_use]
     pub fn with_verifier(mut self, verifier: Arc<dyn Verifier + Send + Sync>) -> Self {
         self.verifier = Some(verifier);
-        self
-    }
-
-    /// Overrides the verify gate for the `import_block` path (default `true`).
-    /// This is a whole-engine switch — operator or test override — not the sync
-    /// escape hatch: sync backfill leaves this flag alone and skips the gate by
-    /// calling `import_block_synced` instead.
-    #[must_use]
-    pub fn with_verify_signatures(mut self, verify: bool) -> Self {
-        self.verify_signatures = verify;
         self
     }
 
@@ -194,11 +188,6 @@ impl Engine {
     /// Read-only borrow of the injected verifier for the importer module.
     pub(crate) fn verifier(&self) -> Option<&(dyn Verifier + Send + Sync)> {
         self.verifier.as_deref()
-    }
-
-    /// Whether the import-boundary verify gate is enabled.
-    pub(crate) fn verify_signatures(&self) -> bool {
-        self.verify_signatures
     }
 
     /// Snapshots the canonical head root.

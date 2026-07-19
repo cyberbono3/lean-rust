@@ -3,22 +3,20 @@
 //!
 //! [`verify_positional`] pairs each attestation with its signature positionally
 //! (`body.attestations` then the proposer attestation LAST), verifying each via
-//! the injected [`Verifier`] port at epoch = `attestation.data.slot` over
-//! `hash_tree_root(attestation)`. These inputs match the signer's inputs
-//! byte-for-byte — a drift on either side breaks every cross-client signature
-//! under the pinned production scheme.
+//! the injected [`Verifier`] port. The `(epoch, message)` inputs come from
+//! [`crate::signing_domain::attestation_signing_inputs`] — the SAME function the
+//! signer calls, so the two sides cannot drift.
 //!
 //! Verification lives HERE, at the runtime import boundary — never in
 //! `protocol::state_transition` or `forkchoice` (see PROJECT-KNOWLEDGE.md →
 //! `LAYER_RULE`). This module and `duties/signer` are the only `runtime` sites
 //! that touch `crypto`.
 
-use std::sync::Arc;
-
 use crypto::{CryptoError, ProdScheme, MESSAGE_LENGTH};
 use protocol::{Attestation, Validators};
-use ssz::HashTreeRoot;
 use types::{PublicKey, Signature};
+
+use crate::signing_domain::{attestation_signing_inputs, EpochOverflow};
 
 /// Failure surface of the import-boundary verify gate.
 #[derive(Debug, thiserror::Error)]
@@ -42,14 +40,11 @@ pub enum VerifyError {
         /// The validator-registry length.
         len: usize,
     },
-    /// The attestation slot exceeds the leanSig epoch domain (`u32`,
-    /// LIFETIME = `2^32`). Rejected, never truncated — a truncated epoch would
-    /// verify against the wrong one-time-key slot.
-    #[error("attestation slot {slot} exceeds the u32 epoch domain")]
-    EpochOverflow {
-        /// The offending slot value.
-        slot: u64,
-    },
+    /// The attestation slot exceeds the leanSig epoch domain. Raised by the
+    /// shared [`attestation_signing_inputs`] derivation — the same error the
+    /// sign side surfaces, so the two sides reject identical inputs.
+    #[error(transparent)]
+    EpochOverflow(#[from] EpochOverflow),
     /// The underlying leanSig verification failed (bad signature, malformed
     /// bytes, or epoch out of the scheme lifetime).
     #[error("leanSig verification failed")]
@@ -92,12 +87,6 @@ impl Verifier for ProdVerifier {
     ) -> Result<(), CryptoError> {
         crypto::verify::<ProdScheme>(public_key, epoch, message, signature)
     }
-}
-
-/// Convenience constructor for the boxed production verifier the Engine holds.
-#[must_use]
-pub fn prod_verifier() -> Arc<dyn Verifier + Send + Sync> {
-    Arc::new(ProdVerifier)
 }
 
 /// Verifies every `(attestation, signature)` pair positionally: the body
@@ -149,10 +138,8 @@ fn verify_one<V: Verifier + ?Sized>(
             len: validators.len(),
         })?;
 
-    let slot = att.data.slot.get();
-    let epoch = u32::try_from(slot).map_err(|_| VerifyError::EpochOverflow { slot })?;
-
-    let message = att.hash_tree_root();
+    // Same derivation the signer used — see `crate::signing_domain`.
+    let (epoch, message) = attestation_signing_inputs(att)?;
     verifier
         .verify(&validator.pubkey, epoch, &message, sig)
         .map_err(VerifyError::Crypto)
@@ -229,11 +216,14 @@ pub(crate) mod test_support {
                 .lock()
                 .expect("fake verifier lock")
                 .push((epoch, *message));
+            // Exhaustion panics rather than defaulting to `Ok`: the scripted
+            // length is an upper bound the gate must not exceed, so an
+            // over-invocation is a test failure, not a silent pass.
             self.script
                 .lock()
                 .expect("fake verifier lock")
                 .pop_front()
-                .unwrap_or(Ok(()))
+                .expect("verifier invoked more times than scripted")
         }
     }
 }
@@ -245,6 +235,7 @@ mod tests {
     use super::test_support::FakeVerifier;
     use super::*;
     use protocol::{AttestationData, Slot, ValidatorIndex};
+    use ssz::HashTreeRoot;
 
     /// Builds an attestation for `validator_id` at `slot` (other fields default).
     fn att(validator_id: u64, slot: u64) -> Attestation {
@@ -257,13 +248,6 @@ mod tests {
         }
     }
 
-    /// A registry of `n` validators (pubkeys default — the fake ignores them).
-    /// Shares the engine fixture so this module and the importer gate tests
-    /// cannot drift on registry shape.
-    fn validators(n: u64) -> Validators {
-        validator_registry(n)
-    }
-
     fn zero_sigs(n: usize) -> Vec<Signature> {
         vec![Signature::zero(); n]
     }
@@ -273,7 +257,7 @@ mod tests {
         let body = vec![att(0, 1), att(1, 2)];
         let proposer = att(2, 3);
         let sigs = zero_sigs(3);
-        let vals = validators(4);
+        let vals = validator_registry(4);
         let fake = FakeVerifier::all_ok(3);
 
         assert!(verify_positional(&body, &proposer, &sigs, &vals, &fake).is_ok());
@@ -287,7 +271,7 @@ mod tests {
     fn verify_positional_rejects_length_mismatch() {
         let body = vec![att(0, 1), att(1, 2)];
         let proposer = att(2, 3);
-        let vals = validators(4);
+        let vals = validator_registry(4);
 
         // Too few (expected 3, got 2): the gate fires before any verify.
         let fake = FakeVerifier::all_ok(3);
@@ -317,7 +301,7 @@ mod tests {
         let body = vec![att(5, 1)];
         let proposer = att(0, 2);
         let sigs = zero_sigs(2);
-        let vals = validators(3);
+        let vals = validator_registry(3);
         let fake = FakeVerifier::all_ok(2);
 
         assert!(matches!(
@@ -336,7 +320,7 @@ mod tests {
         let body = vec![att(0, 1), att(1, 2)];
         let proposer = att(2, 3);
         let sigs = zero_sigs(3);
-        let vals = validators(4);
+        let vals = validator_registry(4);
         // 2nd element (index 1) rejects.
         let fake = FakeVerifier::reject_nth(3, 1);
 
@@ -351,7 +335,7 @@ mod tests {
         let body = vec![att(0, 7)];
         let proposer = att(1, 9);
         let sigs = zero_sigs(2);
-        let vals = validators(4);
+        let vals = validator_registry(4);
         let fake = FakeVerifier::all_ok(2);
 
         verify_positional(&body, &proposer, &sigs, &vals, &fake).unwrap();
@@ -370,12 +354,12 @@ mod tests {
         let body: Vec<Attestation> = Vec::new();
         let proposer = att(0, over);
         let sigs = zero_sigs(1);
-        let vals = validators(4);
+        let vals = validator_registry(4);
         let fake = FakeVerifier::all_ok(1);
 
         assert!(matches!(
             verify_positional(&body, &proposer, &sigs, &vals, &fake),
-            Err(VerifyError::EpochOverflow { slot }) if slot == over
+            Err(VerifyError::EpochOverflow(e)) if e.slot == over
         ));
         // Overflow is detected before the verify call.
         assert_eq!(fake.call_count(), 0);
