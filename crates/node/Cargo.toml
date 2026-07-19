@@ -30,3 +30,7 @@ runtime = { path = "../runtime", features = ["test-fixtures"] }
 config     = { path = "../config" }
 tokio      = { workspace = true, features = ["test-util"] }
 tempfile   = { workspace = true }
+# The self-driving / resume tests exercise the REAL sign path, so they generate
+# per-validator secret key material via `crypto::generate` (needs a CryptoRng).
+crypto     = { path = "../crypto" }
+rand       = { workspace = true }

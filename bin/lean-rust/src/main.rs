@@ -224,6 +224,7 @@ fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
         genesis_state,
         genesis_block,
         storage,
+        validator_secrets_dir: cli.validator_secrets_dir.clone(),
     })
 }
 

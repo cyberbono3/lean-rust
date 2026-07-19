@@ -23,10 +23,7 @@ use forkchoice::{ForkchoiceError, ProducedBlock, ProducedVote, Store};
 // `State` is re-exported below via `protocol`; `Arc<State>` flows from the
 // store's post-state map into the captured persist plan as a refcount bump.
 use parking_lot::{Mutex, MutexGuard};
-use protocol::{
-    Attestation, Block, BlockSignatures, BlockWithAttestation, Checkpoint,
-    SignedBlockWithAttestation, Slot, State, ValidatorIndex,
-};
+use protocol::{Block, Checkpoint, SignedBlockWithAttestation, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
 use types::Bytes32;
@@ -221,24 +218,27 @@ impl Engine {
         }
     }
 
-    /// Produces a block and captures its persist inputs under a single lock
-    /// acquisition, so no concurrent writer can shift the head or post-state
-    /// between production and capture (the produce-path counterpart to
-    /// [`Self::import_block_capturing`]).
+    /// Produces a block plus the proposer's own attestation vote and captures the
+    /// persist inputs, all under a single lock acquisition so no concurrent writer
+    /// can shift the head or post-state between production and capture (the
+    /// produce-path counterpart to [`Self::import_block_capturing`]).
     ///
-    /// Returns the [`SignedBlockWithAttestation`] to gossip plus an optional [`PersistPlan`].
-    /// The plan is `None` only on the unreachable invariant violation where the
-    /// just-produced block's post-state or the head block is absent; the caller
-    /// maps that to a storage-layer error.
+    /// Returns UNSIGNED output: the block, the proposer's own vote for this slot,
+    /// the block root, and the optional persist inputs. Signing and envelope
+    /// assembly happen at the runtime boundary ([`crate::chain::Service`]), so the
+    /// one-time-key `&mut` advance never occurs under the engine store lock. The
+    /// persist inputs are `None` only on the unreachable invariant violation where
+    /// the just-produced block's post-state or the head block is absent; the caller
+    /// maps that to [`crate::chain::ChainError::PostStateMissing`].
     ///
     /// # Errors
-    /// Forwards every variant raised by [`Store::produce_block`] via
-    /// [`EngineError::Forkchoice`].
-    pub(crate) fn produce_block_capturing(
+    /// Forwards every variant raised by [`Store::produce_block`] or
+    /// [`Store::produce_attestation_vote`] via [`EngineError::Forkchoice`].
+    pub(crate) fn produce_block_unsigned(
         &self,
         slot: Slot,
         validator: ValidatorIndex,
-    ) -> Result<(SignedBlockWithAttestation, Option<PersistPlan>), EngineError> {
+    ) -> Result<UnsignedProduction, EngineError> {
         let mut store = self.lock();
         let produced = match store.produce_block(slot, validator) {
             Ok(produced) => produced,
@@ -248,16 +248,21 @@ impl Engine {
             }
         };
         log_block_produced(slot, validator, &produced);
-        let signed = SignedBlockWithAttestation {
-            message: BlockWithAttestation {
-                block: produced.block,
-                proposer_attestation: Attestation::default(),
-            },
-            signature: BlockSignatures::default(),
-        };
+        // Devnet-1: the block carries — and is signed over — the proposer's own
+        // attestation for this slot. Produce that vote under the same lock.
+        let proposer_vote = store
+            .produce_attestation_vote(slot)
+            .map_err(EngineError::from)?;
+        // Capture persist inputs (post-state + checkpoints) WHILE locked; the
+        // signed envelope attaches after the lock is released.
         let head_root = store.head();
-        let plan = capture_persist_plan(&store, produced.root, head_root, signed.clone());
-        Ok((signed, plan))
+        let persist = capture_persist_inputs(&store, produced.root, head_root);
+        Ok(UnsignedProduction {
+            block: produced.block,
+            proposer_vote,
+            block_root: produced.root,
+            persist,
+        })
     }
 
     /// Delegates to [`Store::produce_attestation_vote`].
@@ -361,6 +366,26 @@ pub(crate) struct PersistPlan {
 }
 
 impl PersistPlan {
+    /// Assembles a plan from persist inputs captured under the store lock plus
+    /// the already-signed `block`. Lock-free: every argument is owned, so the
+    /// signed envelope can attach after the store lock has been released (the
+    /// produce path signs at the runtime boundary, then builds the plan here).
+    pub(crate) fn new(
+        block_root: Bytes32,
+        head: Checkpoint,
+        finalized: Checkpoint,
+        state: Arc<State>,
+        block: SignedBlockWithAttestation,
+    ) -> Self {
+        Self {
+            block_root,
+            head,
+            finalized,
+            state,
+            block,
+        }
+    }
+
     /// Consumes the plan into its owned parts:
     /// `(block_root, block, post_state, head_checkpoint, finalized_checkpoint)`.
     /// The caller passes these to `storage::Store::save_accepted`, building the
@@ -387,7 +412,7 @@ impl PersistPlan {
 }
 
 /// Emits the canonical `"engine block produced"` info event. Shared by
-/// [`Engine::produce_block`] and [`Engine::produce_block_capturing`] so the
+/// [`Engine::produce_block`] and [`Engine::produce_block_unsigned`] so the
 /// two production entry points cannot log divergent fields.
 fn log_block_produced(slot: Slot, validator: ValidatorIndex, produced: &ProducedBlock) {
     info!(
@@ -412,27 +437,79 @@ fn log_block_production_failed(slot: Slot, validator: ValidatorIndex, err: &Fork
     );
 }
 
+/// Persist inputs captured under the store lock, WITHOUT the signed envelope.
+///
+/// The produce path captures these while locked, releases the lock, signs the
+/// proposer attestation at the runtime boundary, and only then attaches the
+/// signed envelope via [`PersistPlan::new`] — keeping the one-time-key `&mut`
+/// advance off the store mutex.
+pub(crate) struct PersistInputs {
+    /// Head checkpoint at capture time.
+    pub(crate) head: Checkpoint,
+    /// Latest finalized checkpoint at capture time.
+    pub(crate) finalized: Checkpoint,
+    /// Post-state of the produced/accepted block (refcount bump, not a deep copy).
+    pub(crate) post_state: Arc<State>,
+}
+
+/// Unsigned block-production output, captured under one store-lock acquisition.
+///
+/// Carries the block, the proposer's own attestation vote for this slot, the
+/// block root, and the OPTIONAL persist inputs (`None` = post-state/head absent,
+/// which the caller maps to [`crate::chain::ChainError::PostStateMissing`],
+/// exactly as the pre-split capture did). Signing + envelope assembly happen at
+/// the runtime boundary, so no `crypto` mutation occurs under the store lock.
+pub(crate) struct UnsignedProduction {
+    /// The produced (unsigned) block.
+    pub(crate) block: Block,
+    /// The proposer's own attestation vote for the production slot.
+    pub(crate) proposer_vote: ProducedVote,
+    /// Hash-tree-root of [`Self::block`].
+    pub(crate) block_root: Bytes32,
+    /// Persist inputs, or `None` on the unreachable post-state/head-absent case.
+    pub(crate) persist: Option<PersistInputs>,
+}
+
 /// Captures the persist inputs for `block_root` from a locked store guard.
 ///
-/// Returns `None` if the post-state of `block_root` or the block at
-/// `head_root` is absent — both unreachable after a successful accept/produce
-/// (the block was just tracked and the head points at a tracked block), but
-/// surfaced as `None` rather than a panic so the caller decides the policy.
+/// Returns `None` if the post-state of `block_root` or the block at `head_root`
+/// is absent — both unreachable after a successful accept/produce (the block was
+/// just tracked and the head points at a tracked block), but surfaced as `None`
+/// rather than a panic so the caller decides the policy.
+pub(crate) fn capture_persist_inputs(
+    store: &Store,
+    block_root: Bytes32,
+    head_root: Bytes32,
+) -> Option<PersistInputs> {
+    let post_state = store.state(&block_root).cloned()?;
+    let head_slot = store.block(&head_root).map(|b| b.slot)?;
+    Some(PersistInputs {
+        head: Checkpoint::new(head_root, head_slot),
+        finalized: store.latest_finalized(),
+        post_state,
+    })
+}
+
+/// Captures a full [`PersistPlan`] (inputs + the already-signed `block`) from a
+/// locked store guard. Used by the import path, whose block is already signed
+/// when the plan is built; the produce path instead captures inputs first
+/// (see [`capture_persist_inputs`]) and signs before assembling the plan.
+///
+/// Returns `None` under the same conditions as [`capture_persist_inputs`].
 pub(super) fn capture_persist_plan(
     store: &Store,
     block_root: Bytes32,
     head_root: Bytes32,
     block: SignedBlockWithAttestation,
 ) -> Option<PersistPlan> {
-    let state = store.state(&block_root).cloned()?;
-    let head_slot = store.block(&head_root).map(|b| b.slot)?;
-    Some(PersistPlan {
+    let inputs = capture_persist_inputs(store, block_root, head_root)?;
+    Some(PersistPlan::new(
         block_root,
-        head: Checkpoint::new(head_root, head_slot),
-        finalized: store.latest_finalized(),
-        state,
+        inputs.head,
+        inputs.finalized,
+        inputs.post_state,
         block,
-    })
+    ))
 }
 
 #[cfg(test)]
