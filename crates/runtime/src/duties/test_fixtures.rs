@@ -29,7 +29,10 @@ use protocol::ValidatorIndex;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use super::signer::{validator_secret_path, LocalSigner};
+use protocol::Attestation;
+use types::Signature;
+
+use super::signer::{validator_secret_path, AttestationSigner, LocalSigner, SignError};
 
 /// The smallest active window that can sign epoch 0 — matching the crypto
 /// crate's own tests. Use this for load-only fixtures, which never sign.
@@ -38,6 +41,32 @@ pub const MIN_ACTIVE_EPOCHS: usize = 2;
 /// Fixed RNG seed: fixture key material is reproducible across runs, so a
 /// failure is replayable rather than dependent on entropy.
 const FIXTURE_SEED: u64 = 0x00C0_FFEE;
+
+/// An [`AttestationSigner`] that signs nothing: it returns a zero signature for
+/// every validator and holds no key material.
+///
+/// For tests whose subject is NOT the signature — block persistence, head
+/// movement, vote re-import, node lifecycle. Those need `produce_*` to succeed,
+/// not to produce verifiable bytes, and generating real `ProdScheme` keys for
+/// them costs enough CPU to force `#[ignore]`. Tests that assert on signature
+/// bytes must use [`signer_with_keys`] instead.
+///
+/// Unlike a real signer this has NO one-time-key watermark, so it accepts the
+/// same (validator, slot) twice. A test covering double-sign rejection therefore
+/// needs real key material.
+pub struct StubSigner;
+
+impl AttestationSigner for StubSigner {
+    fn sign_attestation(&mut self, _att: &Attestation) -> Result<Signature, SignError> {
+        Ok(Signature::zero())
+    }
+}
+
+/// A [`StubSigner`] wrapped for [`crate::chain::Service::with_signer`].
+#[must_use]
+pub fn stub_signer() -> Arc<Mutex<dyn AttestationSigner>> {
+    Arc::new(Mutex::new(StubSigner))
+}
 
 /// Writes a `validator_<i>.ssz` secret record for each of `indices` into `dir`
 /// (activation epoch 0), returning the matching public keys for verification.

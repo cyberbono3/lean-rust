@@ -89,11 +89,37 @@ pub enum SignError {
     Crypto(#[from] CryptoError),
 }
 
+/// Produces a validator's signature over one attestation.
+///
+/// The abstraction [`crate::chain::Service`] depends on, so the chain service is
+/// coupled to the ACT of signing rather than to leanSig key material: production
+/// injects [`LocalSigner`], tests inject a stub. Without this seam every test
+/// that merely produces a block has to generate real `ProdScheme` keys, which is
+/// CPU-heavy enough to force `#[ignore]`.
+///
+/// `&mut self` is load-bearing: a one-time-key implementation advances its
+/// watermark on each sign, and the borrow checker then prevents two signers
+/// sharing one key state.
+///
+/// `Send` is a supertrait so `dyn AttestationSigner` is `Send` — the chain
+/// service holds one behind an `Arc<Mutex<..>>` and must stay `Send + Sync`.
+pub trait AttestationSigner: Send {
+    /// Signs `att` for its own `validator_id`.
+    ///
+    /// # Errors
+    /// [`SignError`] if no key is loaded for the validator, the slot leaves the
+    /// signature scheme's epoch domain, or the underlying scheme rejects the
+    /// operation (including one-time-key reuse).
+    fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError>;
+}
+
 /// Holds the local validators' live signing keys, keyed by index.
 ///
 /// The map value is a [`crypto::ProdSigningKey`] (the pinned production scheme).
 /// The composition root builds this and hands it to the chain service; signing
 /// happens at the runtime boundary, outside the forkchoice store lock.
+///
+/// The production implementation of [`AttestationSigner`].
 pub struct LocalSigner {
     keys: BTreeMap<ValidatorIndex, ProdSigningKey>,
 }
@@ -142,7 +168,9 @@ impl LocalSigner {
         }
         Ok(Self { keys })
     }
+}
 
+impl AttestationSigner for LocalSigner {
     /// Signs `att` for its own `validator_id`: a leanSig signature over
     /// `hash_tree_root(att)` at epoch = `att.data.slot`.
     ///
@@ -156,7 +184,7 @@ impl LocalSigner {
     /// - [`SignError::EpochOverflow`] if `att.data.slot` exceeds `u32::MAX`.
     /// - [`SignError::Crypto`] on any leanSig failure (not-active / not-prepared /
     ///   reused).
-    pub(crate) fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
+    fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
         let validator_id = att.validator_id;
         let key = self
             .keys

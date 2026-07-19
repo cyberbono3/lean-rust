@@ -63,7 +63,7 @@
 use std::sync::Arc;
 
 use crate::chain::engine::{AttestationImportResult, BlockImportResult, Engine, PersistPlan};
-use crate::duties::LocalSigner;
+use crate::duties::{AttestationSigner, LocalSigner};
 use async_trait::async_trait;
 use lean_wire::Status;
 use parking_lot::Mutex;
@@ -97,12 +97,17 @@ use super::error::ChainError;
 pub struct Service {
     engine: Engine,
     store: Arc<dyn storage::Store>,
-    /// Local validators' signer. Interior-mutable because `produce_*` take
-    /// `&self` while `sign_attestation` needs `&mut LocalSigner` (the one-time-key
-    /// index advances). The `parking_lot` guard is held for the sign call ONLY and
-    /// dropped before any persist / `.await` — the crate `#![deny(clippy::await_holding_lock)]`
-    /// (top of this file) makes a crossing edit fail the build.
-    signer: Arc<Mutex<LocalSigner>>,
+    /// Local validators' signer, held as the [`AttestationSigner`] ABSTRACTION —
+    /// this service is coupled to the act of signing, not to leanSig key material.
+    /// Production injects [`LocalSigner`]; tests inject a stub and so do not pay
+    /// for `ProdScheme` keygen.
+    ///
+    /// Interior-mutable because `produce_*` take `&self` while `sign_attestation`
+    /// needs `&mut` (a one-time-key watermark advances). The `parking_lot` guard is
+    /// held for the sign call ONLY and dropped before any persist / `.await` — the
+    /// crate `#![deny(clippy::await_holding_lock)]` (top of this file) makes a
+    /// crossing edit fail the build.
+    signer: Arc<Mutex<dyn AttestationSigner>>,
 }
 
 impl Service {
@@ -115,15 +120,18 @@ impl Service {
         Self::with_signer(engine, store, Arc::new(Mutex::new(LocalSigner::empty())))
     }
 
-    /// Builds a SIGNING service: `signer` holds the local validators' secret keys
-    /// (loaded by the composition root from the genesis key material). The signer
-    /// is applied at this runtime boundary — never inside `forkchoice` or the
-    /// engine store lock.
+    /// Builds a SIGNING service: `signer` produces the local validators'
+    /// signatures (in production a [`LocalSigner`] the composition root loaded
+    /// from the genesis key material). The signer is applied at this runtime
+    /// boundary — never inside `forkchoice` or the engine store lock.
+    ///
+    /// Takes the [`AttestationSigner`] abstraction rather than a concrete signer,
+    /// so a caller may inject any implementation.
     #[must_use]
     pub fn with_signer(
         engine: Engine,
         store: Arc<dyn storage::Store>,
-        signer: Arc<Mutex<LocalSigner>>,
+        signer: Arc<Mutex<dyn AttestationSigner>>,
     ) -> Self {
         Self {
             engine,
