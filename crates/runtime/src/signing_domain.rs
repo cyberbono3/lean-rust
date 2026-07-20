@@ -1,6 +1,6 @@
 //! The leanSig signing domain for attestations: the `(epoch, message)` pair
-//! that BOTH the sign side ([`crate::duties::signer`]) and the verify side
-//! ([`crate::chain::engine`]) derive from an [`Attestation`].
+//! that BOTH the sign side ([`crate::duties::AttestationSigner`]) and the verify
+//! side ([`crate::chain::engine::Verifier`]) derive from an [`Attestation`].
 //!
 //! One home, one derivation. A signature is only valid when the verifier feeds
 //! leanSig byte-identical inputs to the ones the signer used, so deriving the

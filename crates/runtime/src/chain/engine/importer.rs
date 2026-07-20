@@ -80,8 +80,8 @@ impl Engine {
     /// and (unreachably) `None` if a post-accept invariant is violated — the
     /// caller maps that to a storage-layer error.
     ///
-    /// Runs the import-boundary signature verify gate (when a verifier is
-    /// injected and [`Engine::verify_signatures`] is on).
+    /// Runs the import-boundary signature verify gate — active exactly when a
+    /// verifier is injected via [`Engine::with_verifier`].
     pub(crate) fn import_block_capturing(
         &self,
         signed_block: SignedBlockWithAttestation,
