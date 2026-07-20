@@ -29,6 +29,7 @@ use tracing::{debug, info, warn};
 use types::Bytes32;
 
 use super::error::EngineError;
+use super::verify::Verifier;
 use crate::chain::metrics::ChainMetrics;
 
 /// Consensus execution boundary around a shared [`forkchoice::Store`].
@@ -41,6 +42,14 @@ pub struct Engine {
     /// Chain-tick trigger metrics. Default is a no-op; the composition root
     /// injects live handles via [`Engine::with_metrics`].
     metrics: ChainMetrics,
+    /// Import-boundary signature verifier — the single switch for the verify
+    /// gate. `None` (the default) makes the gate a no-op; the composition root
+    /// enables verification by injecting the leanSig-backed
+    /// [`super::verify::ProdVerifier`] via [`Engine::with_verifier`].
+    ///
+    /// Sync backfill does NOT go through this switch: it bypasses the gate by
+    /// entering through `import_block_synced` regardless of what is injected.
+    verifier: Option<Arc<dyn Verifier>>,
 }
 
 impl Engine {
@@ -144,6 +153,7 @@ impl Engine {
         Self {
             store: Arc::new(Mutex::new(store)),
             metrics: ChainMetrics::default(),
+            verifier: None,
         }
     }
 
@@ -156,9 +166,28 @@ impl Engine {
         self
     }
 
+    /// Injects the import-boundary signature verifier, enabling the verify gate
+    /// on the `import_block` path. Composition-root only; leaving it unset is
+    /// how the gate stays inert.
+    ///
+    /// This is the whole-engine switch — there is deliberately no separate
+    /// enable flag, so "verifier injected" and "gate enabled" cannot disagree.
+    /// It is also not the sync escape hatch: sync backfill skips the gate by
+    /// calling `import_block_synced`, whatever is injected here.
+    #[must_use]
+    pub fn with_verifier(mut self, verifier: Arc<dyn Verifier>) -> Self {
+        self.verifier = Some(verifier);
+        self
+    }
+
     /// Read-only borrow of the trigger metrics for the importer module.
     pub(crate) fn metrics(&self) -> &ChainMetrics {
         &self.metrics
+    }
+
+    /// Read-only borrow of the injected verifier for the importer module.
+    pub(crate) fn verifier(&self) -> Option<&dyn Verifier> {
+        self.verifier.as_deref()
     }
 
     /// Snapshots the canonical head root.

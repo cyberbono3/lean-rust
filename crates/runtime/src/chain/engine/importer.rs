@@ -9,23 +9,46 @@
 //!
 //! - `DuplicateBlock` / `MissingParent` return before any mutation; the store
 //!   is byte-equal to its pre-call state.
-//! - `Rejected` returns after [`protocol::State::state_transition`] but before
-//!   `track_block`. `state_transition` is transactional (it computes the
-//!   transition on a local clone and swaps only on success — see
-//!   `crates/protocol/src/state.rs:762`), and `track_block` is the only
-//!   subsequent mutator. So a `Rejected` arm also leaves the store byte-equal.
+//! - A `Rejected` from the signature verify gate returns BEFORE
+//!   [`protocol::State::state_transition`] runs (the gate is read-only over the
+//!   parent state), so the store is trivially byte-equal.
+//! - A `Rejected` from the state transition returns after
+//!   [`protocol::State::state_transition`] but before `track_block`.
+//!   `state_transition` is transactional (it computes the transition on a local
+//!   clone and swaps only on success — see `crates/protocol/src/state.rs:762`),
+//!   and `track_block` is the only subsequent mutator. So this `Rejected` arm
+//!   also leaves the store byte-equal.
 
 use std::time::Instant;
 
 use forkchoice::Store;
-use protocol::{SignedAttestation, SignedBlockWithAttestation, State};
+use protocol::{SignedAttestation, SignedBlockWithAttestation, State, Validators};
 use ssz::HashTreeRoot;
 use types::Bytes32;
 
 use super::error::EngineError;
 use super::handle::{capture_persist_plan, Engine, PersistPlan};
 use super::results::{AttestationImportResult, BlockImportResult};
+use super::verify::{verify_positional, VerifyError};
 use crate::chain::metrics::ChainMetrics;
+
+/// Whether an import entry point subjects the block to the import-boundary
+/// signature gate. Named rather than a bare `bool` so the two call sites read as
+/// a policy decision instead of a positional flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyPolicy {
+    /// Live gossip: run the gate (subject to verifier presence and the flag).
+    Enforce,
+    /// Sync backfill: skip the gate unconditionally.
+    Skip,
+}
+
+impl VerifyPolicy {
+    /// `true` only for [`VerifyPolicy::Enforce`].
+    fn enforces(self) -> bool {
+        matches!(self, Self::Enforce)
+    }
+}
 
 impl Engine {
     /// Validates `signed_block`, runs the full state transition, and tracks
@@ -56,9 +79,54 @@ impl Engine {
     /// is `Some` only on `Accepted`; it is `None` for the non-accept outcomes,
     /// and (unreachably) `None` if a post-accept invariant is violated — the
     /// caller maps that to a storage-layer error.
+    ///
+    /// Runs the import-boundary signature verify gate — active exactly when a
+    /// verifier is injected via [`Engine::with_verifier`].
     pub(crate) fn import_block_capturing(
         &self,
         signed_block: SignedBlockWithAttestation,
+    ) -> (BlockImportResult, Option<PersistPlan>) {
+        self.import_block_capturing_inner(signed_block, VerifyPolicy::Enforce)
+    }
+
+    /// Sync-backfill variant: SKIPS the signature verify gate; live gossip uses
+    /// [`Self::import_block_capturing`].
+    ///
+    /// `crate::chain::Service::import_block_synced` is the canonical statement
+    /// of the trust boundary this opens — read it before routing anything else
+    /// onto this entry.
+    pub(crate) fn import_block_synced_capturing(
+        &self,
+        signed_block: SignedBlockWithAttestation,
+    ) -> (BlockImportResult, Option<PersistPlan>) {
+        self.import_block_capturing_inner(signed_block, VerifyPolicy::Skip)
+    }
+
+    /// Runs the import-boundary signature gate over `signed_block` against the
+    /// parent post-state `validators`. A no-op (`Ok`) when no verifier is
+    /// injected — the one way the gate stays inert. Read-only: it never touches
+    /// the store.
+    fn run_verify_gate(
+        &self,
+        signed_block: &SignedBlockWithAttestation,
+        validators: &Validators,
+    ) -> Result<(), VerifyError> {
+        let Some(verifier) = self.verifier() else {
+            return Ok(());
+        };
+        verify_positional(
+            &signed_block.message.block.body.attestations,
+            &signed_block.message.proposer_attestation,
+            &signed_block.signature,
+            validators,
+            verifier,
+        )
+    }
+
+    fn import_block_capturing_inner(
+        &self,
+        signed_block: SignedBlockWithAttestation,
+        policy: VerifyPolicy,
     ) -> (BlockImportResult, Option<PersistPlan>) {
         let block_root: Bytes32 = signed_block.message.block.hash_tree_root().into();
         let parent_root = signed_block.message.block.parent_root;
@@ -79,6 +147,25 @@ impl Engine {
                 None,
             );
         };
+
+        // Signature gate — BEFORE any mutation. Read-only over borrowed data, so
+        // running it under the store lock is safe (no `&mut`, no `.await`); a
+        // rejection returns with the store byte-equal. Deliberate trade-off:
+        // leanSig verify is CPU-heavy and lengthens the write-serialization hold,
+        // but it needs `parent_state.validators` (already materialized under this
+        // lock) and the single-`Mutex` model already serializes importers.
+        if policy.enforces() {
+            if let Err(e) = self.run_verify_gate(&signed_block, &parent_state.validators) {
+                return (
+                    BlockImportResult::Rejected {
+                        block_root,
+                        parent_root,
+                        error: EngineError::Verify(e),
+                    },
+                    None,
+                );
+            }
+        }
 
         // Clone the block once for the plan before `transition_and_track`
         // consumes it; the clone is dropped on the rejected path.
@@ -191,7 +278,12 @@ mod tests {
         Checkpoint, Slot, ValidatorIndex,
     };
 
-    use super::super::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
+    use super::super::test_fixtures::{
+        engine_at_genesis, engine_at_genesis_with_validators, produce_signed_block,
+        ENGINE_VALIDATORS,
+    };
+    use super::super::verify::test_support::FakeVerifier;
+    use std::sync::Arc;
 
     /// Snapshot of store fields that must remain byte-equal across a
     /// no-mutation branch (`DuplicateBlock` / `MissingParent` / `Rejected`).
@@ -449,5 +541,115 @@ mod tests {
         assert!(produced.block.body.attestations.len() <= protocol::MAX_ATTESTATIONS);
         let recomputed: Bytes32 = produced.post_state.hash_tree_root().into();
         assert_eq!(produced.block.state_root, recomputed);
+    }
+
+    // -- import-boundary verify gate ---------------------------------------
+
+    /// A valid genesis-parented block at slot 1 whose `BlockSignatures` length
+    /// matches `body.attestations.len() + 1`, so the strict length gate passes
+    /// and every `(attestation, signature)` pair reaches the verifier. Returns
+    /// the block plus its element count (`= body.len() + 1`).
+    fn signed_block_len_matched() -> (SignedBlockWithAttestation, usize) {
+        let producer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        let elements = signed.message.block.body.attestations.len() + 1;
+        signed.signature = std::iter::repeat_with(types::Signature::zero)
+            .take(elements)
+            .collect();
+        (signed, elements)
+    }
+
+    /// An importer engine with a populated validator registry and `fake`
+    /// injected — injection is what enables the gate.
+    fn gated_engine(fake: &Arc<FakeVerifier>) -> Engine {
+        engine_at_genesis_with_validators(ENGINE_VALIDATORS).with_verifier(fake.clone())
+    }
+
+    #[test]
+    fn import_block_rejects_invalid_signature_when_verifier_injected() {
+        let (signed, elements) = signed_block_len_matched();
+
+        // The first element rejects → the gate short-circuits after one call.
+        let fake = Arc::new(FakeVerifier::reject_nth(elements, 0));
+        let importer = gated_engine(&fake);
+        let pre = StoreSnapshot::capture(&importer);
+
+        let outcome = importer.import_block(signed);
+        assert!(matches!(
+            outcome,
+            BlockImportResult::Rejected {
+                error: EngineError::Verify(_),
+                ..
+            }
+        ));
+        // The gate precedes state_transition → store byte-equal on rejection.
+        assert_eq!(pre, StoreSnapshot::capture(&importer));
+        assert_eq!(fake.call_count(), 1);
+    }
+
+    #[test]
+    fn import_block_synced_skips_verify() {
+        let (signed, elements) = signed_block_len_matched();
+
+        // Verifier is injected and would reject — yet the synced entry skips.
+        let fake = Arc::new(FakeVerifier::reject_nth(elements, 0));
+        let importer = gated_engine(&fake);
+
+        let (outcome, _plan) = importer.import_block_synced_capturing(signed);
+        assert!(matches!(outcome, BlockImportResult::Accepted { .. }));
+        assert_eq!(fake.call_count(), 0);
+    }
+
+    #[test]
+    fn import_block_with_none_verifier_ignores_signature_length() {
+        // PR-001 invariant: with NO verifier injected (the Engine default), the
+        // gate is a no-op even for a block whose signature-list length would fail
+        // the strict length check. Explicit guard so a future default-verifier
+        // change cannot silently reject production blocks before the full
+        // positional signature list is assembled (a later Part).
+        let producer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        // Deliberately mismatched vs body.len() + 1 (zero signatures).
+        signed.signature = BlockSignatures::default();
+
+        // No verifier injected — the Engine default.
+        let importer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        assert!(matches!(
+            importer.import_block(signed),
+            BlockImportResult::Accepted { .. }
+        ));
+    }
+
+    #[test]
+    fn import_block_accepts_invalid_signature_when_gate_inert() {
+        // The inert half of the #121 acceptance pair (the active half is
+        // `import_block_rejects_invalid_signature_when_verifier_injected`).
+        // Distinct from `import_block_with_none_verifier_ignores_signature_length`:
+        // here the list length is CORRECT, so the strict length check would pass
+        // and the block reaches the per-element verify. The signature bytes are
+        // all-zero and would fail a real verify — but with no verifier injected
+        // nothing ever inspects them, so the block is accepted.
+        let (signed, _elements) = signed_block_len_matched();
+
+        let importer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        assert!(matches!(
+            importer.import_block(signed),
+            BlockImportResult::Accepted { .. }
+        ));
+    }
+
+    #[test]
+    fn import_block_gossip_path_verifies_valid_signature() {
+        let (signed, elements) = signed_block_len_matched();
+
+        let fake = Arc::new(FakeVerifier::all_ok(elements));
+        let importer = gated_engine(&fake);
+
+        assert!(matches!(
+            importer.import_block(signed),
+            BlockImportResult::Accepted { .. }
+        ));
+        // The verifying path ran the gate once per positional element.
+        assert_eq!(fake.call_count(), elements);
     }
 }

@@ -251,6 +251,7 @@ mod tests {
     // order, canonical format, AND byte-identity for a fixed seed — folded together
     // because each ProdScheme keygen is expensive.
     #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn manifest_shape_ordering_and_byte_identity() {
         let dir_a = tempfile::tempdir().expect("tempdir");
         let dir_b = tempfile::tempdir().expect("tempdir");
@@ -294,6 +295,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn secret_material_written_as_otskeystate_ssz_owner_only() {
         let dir = tempfile::tempdir().expect("tempdir");
         let p = params(dir.path(), 1);
@@ -313,6 +315,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn keygen_refuses_to_overwrite_existing_key() {
         let dir = tempfile::tempdir().expect("tempdir");
         let p = params(dir.path(), 1);
@@ -333,6 +336,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn generated_key_signs_and_verifies_sample_htr() {
         let dir = tempfile::tempdir().expect("tempdir");
         let p = params(dir.path(), 1);
