@@ -5,8 +5,11 @@
 //! [`storage::Store`] before a signature is released, so an OTS leaf is never
 //! signed twice across a restart or a self-sync. The in-memory monotonic guard
 //! and the leanSig algorithm stay in `crypto`; the byte record stays in `types`;
-//! the durable KV stays in `storage`. This module owns only the reserve-then-
-//! persist-then-release ordering, keyed per [`ValidatorIndex`].
+//! the durable KV stays in `storage`. This module owns only the persist-before-
+//! release ordering (sign → advance the index → persist the record → release the
+//! signature), keyed per [`ValidatorIndex`]. The stronger reserve-before-sign
+//! ordering (persist the consumed index *before* the crypto sign) is the Part-3
+//! hardening — see [`OtsSigner::sign_own_duty`].
 //!
 //! Scope note: until Part 3 wires [`OtsSigner::sign_own_duty`] into the
 //! production sign sites (`produce_block` / `produce_attestation`), the whole
@@ -318,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_persists_reservation_before_return() {
+    fn sign_persists_advance_before_return() {
         let store = Arc::new(FakeStore::default());
         let mut signer = OtsSigner::new(
             Box::new(FakeSigner::new()),
