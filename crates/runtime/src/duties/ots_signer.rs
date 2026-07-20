@@ -177,6 +177,7 @@ mod tests {
     }
 
     impl FakeSigner {
+        /// A signer that signs every request and exposes a monotonic record.
         fn new() -> Self {
             Self {
                 signed: BTreeMap::new(),
@@ -185,6 +186,8 @@ mod tests {
             }
         }
 
+        /// Like [`Self::new`], but refuses a second sign for a validator it has
+        /// already signed — models one-time-key reuse.
         fn reject_repeats() -> Self {
             Self {
                 reject_repeats: true,
@@ -192,6 +195,9 @@ mod tests {
             }
         }
 
+        /// Like [`Self::new`], but `record_for` returns `None` after a successful
+        /// sign — models the invariant violation guarded by
+        /// [`OtsError::UnknownValidator`].
         fn without_record() -> Self {
             Self {
                 expose_record: false,
@@ -237,6 +243,8 @@ mod tests {
     }
 
     impl FakeStore {
+        /// A store whose `save_ots_key_state` always fails — models a persistence
+        /// failure (the crash-equivalent path).
         fn failing() -> Self {
             Self {
                 ots: Mutex::new(BTreeMap::new()),
@@ -300,6 +308,8 @@ mod tests {
         }
     }
 
+    /// A default attestation tagged with `validator` — the guard only reads
+    /// `validator_id`, so the remaining fields are left at their defaults.
     fn attestation(validator: u64) -> Attestation {
         Attestation {
             validator_id: ValidatorIndex::new(validator),

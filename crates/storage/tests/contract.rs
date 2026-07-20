@@ -61,6 +61,7 @@ fn sample_ots_key_state(seed: u8) -> types::OtsKeyState {
     }
 }
 
+/// A saved OTS key-state loads back byte-identical for the same validator.
 fn ots_key_state_round_trips(store: &impl Store) {
     let v = protocol::ValidatorIndex::new(3);
     let record = sample_ots_key_state(5);
@@ -68,6 +69,8 @@ fn ots_key_state_round_trips(store: &impl Store) {
     assert_eq!(store.load_ots_key_state(v).unwrap(), Some(record));
 }
 
+/// Records are keyed per validator: saving one validator's record never
+/// clobbers another's.
 fn ots_key_state_independent_per_validator(store: &impl Store) {
     let (v0, v1) = (
         protocol::ValidatorIndex::new(0),
@@ -81,6 +84,7 @@ fn ots_key_state_independent_per_validator(store: &impl Store) {
     assert_eq!(store.load_ots_key_state(v1).unwrap(), Some(r1));
 }
 
+/// Loading a validator that was never saved returns `Ok(None)`, not an error.
 fn ots_key_state_none_for_unknown_validator(store: &impl Store) {
     // Fresh store: absent is Ok(None), not an error (mirrors load_head).
     assert_eq!(
@@ -91,6 +95,8 @@ fn ots_key_state_none_for_unknown_validator(store: &impl Store) {
     );
 }
 
+/// A second save for the same validator replaces the prior record (the
+/// advanced-watermark update path).
 fn ots_key_state_overwrites_previous_record(store: &impl Store) {
     let v = protocol::ValidatorIndex::new(4);
     store
