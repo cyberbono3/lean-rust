@@ -621,6 +621,24 @@ mod tests {
     }
 
     #[test]
+    fn import_block_accepts_invalid_signature_when_gate_inert() {
+        // The inert half of the #121 acceptance pair (the active half is
+        // `import_block_rejects_invalid_signature_when_verifier_injected`).
+        // Distinct from `import_block_with_none_verifier_ignores_signature_length`:
+        // here the list length is CORRECT, so the strict length check would pass
+        // and the block reaches the per-element verify. The signature bytes are
+        // all-zero and would fail a real verify — but with no verifier injected
+        // nothing ever inspects them, so the block is accepted.
+        let (signed, _elements) = signed_block_len_matched();
+
+        let importer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        assert!(matches!(
+            importer.import_block(signed),
+            BlockImportResult::Accepted { .. }
+        ));
+    }
+
+    #[test]
     fn import_block_gossip_path_verifies_valid_signature() {
         let (signed, elements) = signed_block_len_matched();
 
