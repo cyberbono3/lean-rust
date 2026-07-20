@@ -142,6 +142,11 @@ pub(crate) fn route_gossipsub_message(
     }
 }
 
+/// Decodes one gossip payload and forwards it to `tx`, subject to the per-peer
+/// admission bound. Decode failures are dropped (`warn`); a payload from a peer already
+/// at its in-flight cap is dropped before enqueue; the admitted [`AdmitGuard`] rides the
+/// channel with the payload and releases the peer's slot when the consumer drops it
+/// (also released here if the channel is full and the `try_send` fails).
 fn forward<T>(
     peer: &PeerId,
     admission: &Arc<PeerAdmission>,

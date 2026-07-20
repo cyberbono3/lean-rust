@@ -88,6 +88,9 @@ impl PeerAdmission {
         })
     }
 
+    /// Releases one in-flight slot for `peer` (called from [`AdmitGuard`]'s `Drop`).
+    /// Decrements the peer's counter and removes the entry once it reaches zero, so
+    /// idle peers leave no residue in the map.
     fn release(&self, peer: &PeerId) {
         let mut map = self.in_flight.lock();
         if let Some(count) = map.get_mut(peer) {
