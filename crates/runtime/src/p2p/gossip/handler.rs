@@ -326,15 +326,16 @@ mod tests {
         let (block_tx, mut block_rx) = block_chan(1);
         let (vote_tx, _vote_rx) = vote_chan(8);
         let peer = source_peer();
+        let sync_peer = crate::sync::PeerId::new(peer.to_base58()).unwrap();
 
-        // Fill the channel with a directly-sent tuple so `forward`'s try_send fails.
-        let filler = adm
-            .try_admit(&crate::sync::PeerId::new(peer.to_base58()).unwrap())
-            .expect("admit filler");
+        // Fill the channel with a directly-sent tuple (holding one of this peer's slots)
+        // so `forward`'s `try_send` fails.
+        let filler = adm.try_admit(&sync_peer).expect("admit filler");
         block_tx
             .try_send((filler, SignedBlockWithAttestation::default()))
             .expect("channel accepts first");
-        let before = adm.tracked_peer_count();
+        // Exactly one slot held for this peer (the filler) before the failed forward.
+        assert_eq!(adm.in_flight_for(&sync_peer), 1);
 
         let payload = lean_wire::encode_gossip(&SignedBlockWithAttestation::default());
         route_gossipsub_message(
@@ -346,15 +347,25 @@ mod tests {
             &vote_tx,
         );
 
-        // The dropped message released its slot: the in-flight tally is unchanged from
-        // before the (failed) forward — only the filler's slot remains.
+        // The forward admitted a second slot then dropped it when `try_send` failed:
+        // the PER-PEER slot count is back to exactly the filler's one (a leak would
+        // leave it at 2 — the peer-entry count stays 1 either way, so it is asserted on
+        // the slot count, not the entry count).
+        assert_eq!(
+            adm.in_flight_for(&sync_peer),
+            1,
+            "failed send must release the admitted slot (no per-peer leak)"
+        );
+
+        // Draining the filler and dropping its guard frees the peer entirely.
+        let (filler_guard, _) = block_rx.recv().await.expect("filler delivered");
+        drop(filler_guard);
+        assert_eq!(adm.in_flight_for(&sync_peer), 0);
         assert_eq!(
             adm.tracked_peer_count(),
-            before,
-            "no slot leak on full channel"
+            0,
+            "entry pruned once no slots remain"
         );
-        // Draining the filler frees its slot entirely.
-        let _ = block_rx.recv().await;
     }
 
     #[tokio::test]

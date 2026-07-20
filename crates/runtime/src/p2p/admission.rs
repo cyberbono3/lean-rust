@@ -112,6 +112,14 @@ impl PeerAdmission {
     pub(crate) fn tracked_peer_count(&self) -> usize {
         self.in_flight.lock().len()
     }
+
+    /// The number of in-flight slots currently held for `peer` (0 if absent). Test-only
+    /// introspection to detect a per-peer slot leak, which the peer-entry count alone
+    /// cannot (a leaked slot leaves the entry at count 1+, still one tracked peer).
+    #[cfg(test)]
+    pub(crate) fn in_flight_for(&self, peer: &PeerId) -> usize {
+        self.in_flight.lock().get(peer).copied().unwrap_or(0)
+    }
 }
 
 /// RAII slot held from admission until the message is imported (and dropped). Rides the
