@@ -7,8 +7,12 @@
 //!
 //! ## Mutation invariants
 //!
-//! - `DuplicateBlock` / `MissingParent` return before any mutation; the store
-//!   is byte-equal to its pre-call state.
+//! - `DuplicateBlock` return before any mutation; the store is byte-equal to its
+//!   pre-call state.
+//! - A `Rejected` from the cheap over-cap gate returns before the parent-state
+//!   clone (so on the enforced path over-cap precedes `MissingParent`) and before
+//!   any mutation; the store is byte-equal.
+//! - `MissingParent` returns before any mutation; the store is byte-equal.
 //! - A `Rejected` from the signature verify gate returns BEFORE
 //!   [`protocol::State::state_transition`] runs (the gate is read-only over the
 //!   parent state), so the store is trivially byte-equal.
@@ -29,7 +33,7 @@ use types::Bytes32;
 use super::error::EngineError;
 use super::handle::{capture_persist_plan, Engine, PersistPlan};
 use super::results::{AttestationImportResult, BlockImportResult};
-use super::verify::{verify_positional, VerifyError};
+use super::verify::{pre_check_over_cap, verify_positional, VerifyError};
 use crate::chain::metrics::ChainMetrics;
 
 /// Whether an import entry point subjects the block to the import-boundary
@@ -135,6 +139,27 @@ impl Engine {
         if store.has_block(&block_root) {
             return (BlockImportResult::DuplicateBlock { block_root }, None);
         }
+
+        // Cheapest structural reject FIRST — the O(1) over-cap gate needs no parent
+        // state, so it precedes the deep parent-state clone below (and any verify).
+        // Runs regardless of verifier presence (the active-today untrusted-peer bound);
+        // read-only, before any mutation, so a rejection leaves the store byte-equal.
+        if policy.enforces() {
+            if let Err(e) = pre_check_over_cap(
+                &signed_block.signature,
+                &signed_block.message.block.body.attestations,
+            ) {
+                return (
+                    BlockImportResult::Rejected {
+                        block_root,
+                        parent_root,
+                        error: EngineError::Verify(e),
+                    },
+                    None,
+                );
+            }
+        }
+
         // Deep-clone the parent post-state: the state transition mutates an
         // owned copy. (The post-state *capture* for persistence is the cheap
         // Arc bump; this parent clone is inherent to running the STF.)
@@ -148,12 +173,12 @@ impl Engine {
             );
         };
 
-        // Signature gate — BEFORE any mutation. Read-only over borrowed data, so
-        // running it under the store lock is safe (no `&mut`, no `.await`); a
-        // rejection returns with the store byte-equal. Deliberate trade-off:
-        // leanSig verify is CPU-heavy and lengthens the write-serialization hold,
-        // but it needs `parent_state.validators` (already materialized under this
-        // lock) and the single-`Mutex` model already serializes importers.
+        // leanSig verify gate — BEFORE any mutation. Read-only over borrowed data, so
+        // running it under the store lock is safe (no `&mut`, no `.await`); a rejection
+        // returns with the store byte-equal. It needs `parent_state.validators` (just
+        // materialized under this lock), so it follows the clone. Inert while no
+        // verifier is injected; runs the full positional length/index/crypto check once
+        // a verifier is wired (a later Part).
         if policy.enforces() {
             if let Err(e) = self.run_verify_gate(&signed_block, &parent_state.validators) {
                 return (
@@ -275,8 +300,9 @@ mod tests {
     use forkchoice::ForkchoiceError;
     use protocol::{
         Attestation, AttestationData, Block, BlockBody, BlockSignatures, BlockWithAttestation,
-        Checkpoint, Slot, ValidatorIndex,
+        Checkpoint, Slot, ValidatorIndex, MAX_ATTESTATIONS,
     };
+    use types::Signature;
 
     use super::super::test_fixtures::{
         engine_at_genesis, engine_at_genesis_with_validators, produce_signed_block,
@@ -326,6 +352,68 @@ mod tests {
             signature: BlockSignatures::default(),
         }
     }
+
+    /// A within-cap signature list of `n` zero signatures.
+    fn sigs(n: usize) -> BlockSignatures {
+        core::iter::repeat_with(Signature::zero).take(n).collect()
+    }
+
+    // -- import_block: over-cap DoS pre-check --------------------------------
+
+    #[test]
+    fn over_cap_block_rejected_before_verify() {
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
+        let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        // Bloat the signature list past the cap; the inner block (and thus block_root
+        // / parent) is untouched, so the block clears the missing-parent guard and
+        // reaches the over-cap gate.
+        signed.signature = sigs(MAX_ATTESTATIONS + 1);
+
+        // Spy verifier scripted for ZERO calls: any invocation panics the fake.
+        let fake = Arc::new(FakeVerifier::all_ok(0));
+        let importer = engine_at_genesis(ENGINE_VALIDATORS).with_verifier(fake.clone());
+        let before = StoreSnapshot::capture(&importer);
+
+        let outcome = importer.import_block(signed);
+        assert!(matches!(
+            outcome,
+            BlockImportResult::Rejected {
+                error: EngineError::Verify(VerifyError::OverCap {
+                    cap: MAX_ATTESTATIONS,
+                    ..
+                }),
+                ..
+            }
+        ));
+        // Over-cap short-circuits before any leanSig verify, and mutates nothing.
+        assert_eq!(fake.call_count(), 0);
+        assert_eq!(StoreSnapshot::capture(&importer), before);
+    }
+
+    #[test]
+    fn over_cap_rejected_without_verifier() {
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
+        let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        signed.signature = sigs(MAX_ATTESTATIONS + 1);
+
+        // Default engine: NO verifier injected — the over-cap gate is still active.
+        let importer = engine_at_genesis(ENGINE_VALIDATORS);
+        let before = StoreSnapshot::capture(&importer);
+
+        assert!(matches!(
+            importer.import_block(signed),
+            BlockImportResult::Rejected {
+                error: EngineError::Verify(VerifyError::OverCap { .. }),
+                ..
+            }
+        ));
+        assert_eq!(StoreSnapshot::capture(&importer), before);
+    }
+
+    // Note: that a within-cap, length-matched block clears the over-cap gate and
+    // reaches the per-element verify is already proven by
+    // `import_block_gossip_path_verifies_valid_signature` (which now also exercises the
+    // over-cap gate on its accept path) — no separate over-cap-LSP test is needed.
 
     // -- import_block: happy path + duplicate -------------------------------
 

@@ -13,7 +13,7 @@
 //! that touch `crypto`.
 
 use crypto::{CryptoError, ProdScheme, MESSAGE_LENGTH};
-use protocol::{Attestation, Validators};
+use protocol::{Attestation, Validators, MAX_ATTESTATIONS};
 use types::{PublicKey, Signature};
 
 use crate::signing_domain::{attestation_signing_inputs, EpochOverflow};
@@ -49,6 +49,45 @@ pub enum VerifyError {
     /// bytes, or epoch out of the scheme lifetime).
     #[error("leanSig verification failed")]
     Crypto(#[from] CryptoError),
+    /// A signature or body-attestation list exceeds the registry cap
+    /// ([`protocol::MAX_ATTESTATIONS`]). Rejected by the cheap over-cap pre-check
+    /// BEFORE any leanSig verify. Defense-in-depth: the gossip SSZ decode already
+    /// caps the list, so this fires for internally-assembled / test-injected lists.
+    #[error("list length {len} exceeds cap {cap}")]
+    OverCap {
+        /// The offending list length (signatures or body attestations).
+        len: usize,
+        /// [`protocol::MAX_ATTESTATIONS`].
+        cap: usize,
+    },
+}
+
+/// Cheap O(1) over-cap gate over the positional block inputs — NO verifier needed,
+/// so it runs at the import boundary regardless of verifier presence. Both the
+/// signature list and the body-attestation list are bounded by
+/// [`protocol::MAX_ATTESTATIONS`].
+///
+/// Note for the aggregation-assembly Part: the positional signature list is
+/// `body.attestations.len() + 1` long, but this gate (and the SSZ `BlockSignatures`
+/// decoder) cap it at `MAX_ATTESTATIONS`, not `MAX_ATTESTATIONS + 1`. At the maximum
+/// validator count a maximally-full body is therefore unrepresentable — the aggregation
+/// Part must account for that when assembling the full positional list.
+///
+/// # Errors
+/// [`VerifyError::OverCap`] when either list exceeds the cap.
+pub(crate) fn pre_check_over_cap(
+    signatures: &[Signature],
+    body_attestations: &[Attestation],
+) -> Result<(), VerifyError> {
+    for len in [signatures.len(), body_attestations.len()] {
+        if len > MAX_ATTESTATIONS {
+            return Err(VerifyError::OverCap {
+                len,
+                cap: MAX_ATTESTATIONS,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The verify port: one leanSig verification of `message` for `epoch` under
@@ -256,6 +295,34 @@ mod tests {
 
     fn zero_sigs(n: usize) -> Vec<Signature> {
         vec![Signature::zero(); n]
+    }
+
+    #[test]
+    fn over_cap_positional_rejected() {
+        // Signature list over the cap → OverCap (body empty, under cap).
+        let over_sigs = zero_sigs(MAX_ATTESTATIONS + 1);
+        let empty_body: Vec<Attestation> = Vec::new();
+        assert!(matches!(
+            pre_check_over_cap(&over_sigs, &empty_body),
+            Err(VerifyError::OverCap {
+                len,
+                cap: MAX_ATTESTATIONS
+            }) if len == MAX_ATTESTATIONS + 1
+        ));
+
+        // Body-attestation list over the cap → OverCap (sigs empty, under cap).
+        let over_body = vec![att(0, 1); MAX_ATTESTATIONS + 1];
+        let empty_sigs: Vec<Signature> = Vec::new();
+        assert!(matches!(
+            pre_check_over_cap(&empty_sigs, &over_body),
+            Err(VerifyError::OverCap {
+                len,
+                cap: MAX_ATTESTATIONS
+            }) if len == MAX_ATTESTATIONS + 1
+        ));
+
+        // Within-cap pair → Ok.
+        assert!(pre_check_over_cap(&zero_sigs(3), &vec![att(0, 1), att(1, 2)]).is_ok());
     }
 
     #[test]

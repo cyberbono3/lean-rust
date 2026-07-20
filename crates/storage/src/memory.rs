@@ -5,11 +5,11 @@
 //! writers exclude. All operations are infallible — the adapter never
 //! returns [`StorageError`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use parking_lot::RwLock;
-use protocol::{SignedBlockWithAttestation, State};
-use types::Bytes32;
+use protocol::{SignedBlockWithAttestation, State, ValidatorIndex};
+use types::{Bytes32, OtsKeyState};
 
 use crate::error::StorageError;
 use crate::store::{HeadInfo, Store};
@@ -26,6 +26,9 @@ struct Inner {
     blocks: HashMap<Bytes32, SignedBlockWithAttestation>,
     states: HashMap<Bytes32, State>,
     head: Option<HeadInfo>,
+    // One OTS key-state per validator; `BTreeMap` matches the local signer's
+    // keyset ordering and keeps records independent across validators.
+    ots_key_states: BTreeMap<ValidatorIndex, OtsKeyState>,
 }
 
 impl MemoryStore {
@@ -102,5 +105,21 @@ impl Store for MemoryStore {
 
     fn load_head(&self) -> Result<Option<HeadInfo>, StorageError> {
         Ok(self.inner.read().head)
+    }
+
+    fn save_ots_key_state(
+        &self,
+        validator: ValidatorIndex,
+        record: OtsKeyState,
+    ) -> Result<(), StorageError> {
+        self.inner.write().ots_key_states.insert(validator, record);
+        Ok(())
+    }
+
+    fn load_ots_key_state(
+        &self,
+        validator: ValidatorIndex,
+    ) -> Result<Option<OtsKeyState>, StorageError> {
+        Ok(self.inner.read().ots_key_states.get(&validator).cloned())
     }
 }
