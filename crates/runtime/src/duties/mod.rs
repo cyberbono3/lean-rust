@@ -13,6 +13,13 @@
 mod config;
 mod error;
 mod genesis_pubkeys;
+// Part 15: until Part 3 wires `sign_own_duty` into `produce_*`, the guard cluster
+// is reachable only from `#[cfg(test)]`, so the non-test `--lib` build would fail
+// `-D warnings` with `dead_code`. `allow` (NOT `expect` — the cluster IS used in
+// the cfg(test) build, so `expect(dead_code)` would misfire) keeps standalone Part
+// 2 green. REMOVE this attribute in Part 3 once the production sign sites call it.
+#[allow(dead_code)]
+pub(crate) mod ots_signer;
 mod proposer;
 mod signer;
 #[cfg(any(test, feature = "test-fixtures"))]
