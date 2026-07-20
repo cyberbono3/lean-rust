@@ -24,6 +24,8 @@
 //! — gossipsub mesh replay covers transient loss, and the decode error
 //! path is non-fatal (peers may publish junk).
 
+use std::sync::Arc;
+
 use lean_wire::NetworkingError;
 use libp2p::gossipsub;
 use protocol::{SignedAttestation, SignedBlockWithAttestation};
@@ -31,7 +33,9 @@ use ssz::Decode;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+use crate::p2p::admission::{AdmitGuard, PeerAdmission};
 use crate::p2p::host::behaviour::take_decompressed_for;
+use crate::sync::PeerId;
 
 /// Inbound channel for decoded gossipsub payloads of a single type.
 ///
@@ -71,12 +75,13 @@ impl<T> GossipReceiver<T> {
 }
 
 /// Inbound channel for [`SignedBlockWithAttestation`] payloads received on
-/// [`lean_wire::BLOCK_TOPIC_V1`].
-pub type BlockReceiver = GossipReceiver<SignedBlockWithAttestation>;
+/// [`lean_wire::BLOCK_TOPIC_V1`]. Each payload carries the [`AdmitGuard`] that
+/// admitted it, released when the consumer drops the tuple after import.
+pub type BlockReceiver = GossipReceiver<(AdmitGuard, SignedBlockWithAttestation)>;
 
 /// Inbound channel for [`SignedAttestation`] payloads received on
-/// [`lean_wire::VOTE_TOPIC_V1`].
-pub type VoteReceiver = GossipReceiver<SignedAttestation>;
+/// [`lean_wire::VOTE_TOPIC_V1`]. Carries its [`AdmitGuard`] alongside the payload.
+pub type VoteReceiver = GossipReceiver<(AdmitGuard, SignedAttestation)>;
 
 /// Routes an inbound `gossipsub::Message` to the matching per-topic
 /// sender after SSZ + Snappy decode.
@@ -92,11 +97,20 @@ pub type VoteReceiver = GossipReceiver<SignedAttestation>;
 /// are logged at `warn` and dropped. Full receivers log at `warn` and
 /// drop the message — gossipsub mesh replay covers transient loss.
 pub(crate) fn route_gossipsub_message(
+    propagation_source: &libp2p::PeerId,
+    admission: &Arc<PeerAdmission>,
     message_id: &gossipsub::MessageId,
     msg: &gossipsub::Message,
-    block_tx: &mpsc::Sender<SignedBlockWithAttestation>,
-    vote_tx: &mpsc::Sender<SignedAttestation>,
+    block_tx: &mpsc::Sender<(AdmitGuard, SignedBlockWithAttestation)>,
+    vote_tx: &mpsc::Sender<(AdmitGuard, SignedAttestation)>,
 ) {
+    // Convert the libp2p peer id to the runtime's `libp2p`-free `sync::PeerId` once at
+    // the boundary. Base-58 is non-empty, but drop (not panic) on the defensive empty
+    // case — mirrors `sync::PeerId::new` usage in the sync loop.
+    let Ok(peer) = PeerId::new(propagation_source.to_base58()) else {
+        warn!("empty gossip source peer id; dropping message");
+        return;
+    };
     // Drain the cache exactly once per message regardless of topic —
     // keeps the populate-by-`gossipsub_message_id` ↔ consume-here
     // lifetime symmetric and prevents an unknown-topic entry from
@@ -105,19 +119,35 @@ pub(crate) fn route_gossipsub_message(
     let topic_str = msg.topic.as_str();
     match topic_str {
         lean_wire::BLOCK_TOPIC_V1 => {
-            forward::<SignedBlockWithAttestation>(&msg.data, cached.as_deref(), block_tx, "block");
+            forward::<SignedBlockWithAttestation>(
+                &peer,
+                admission,
+                &msg.data,
+                cached.as_deref(),
+                block_tx,
+                "block",
+            );
         }
         lean_wire::VOTE_TOPIC_V1 => {
-            forward::<SignedAttestation>(&msg.data, cached.as_deref(), vote_tx, "vote");
+            forward::<SignedAttestation>(
+                &peer,
+                admission,
+                &msg.data,
+                cached.as_deref(),
+                vote_tx,
+                "vote",
+            );
         }
         _ => debug!(topic = %topic_str, "unknown gossip topic"),
     }
 }
 
 fn forward<T>(
+    peer: &PeerId,
+    admission: &Arc<PeerAdmission>,
     data: &[u8],
     cached_decompressed: Option<&[u8]>,
-    tx: &mpsc::Sender<T>,
+    tx: &mpsc::Sender<(AdmitGuard, T)>,
     kind: &'static str,
 ) where
     T: Decode,
@@ -128,13 +158,23 @@ fn forward<T>(
         // Cache miss: run the full snappy + SSZ decode.
         None => lean_wire::decode_gossip::<T>(data),
     };
-    match decoded {
-        Ok(value) => {
-            if tx.try_send(value).is_err() {
-                warn!(kind, "gossip receiver lagging; dropping message");
-            }
+    let value = match decoded {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(%err, kind, "gossip decode failed");
+            return;
         }
-        Err(err) => warn!(%err, kind, "gossip decode failed"),
+    };
+    // Per-peer admission BEFORE enqueue — a peer at its cap has its excess dropped
+    // (mesh replay covers legitimate loss), bounding its share of the ingress.
+    let Some(guard) = admission.try_admit(peer) else {
+        warn!(%peer, kind, "peer inbound cap reached; dropping message");
+        return;
+    };
+    // On a full channel the guard drops here → the slot is released; the message never
+    // entered the queue.
+    if tx.try_send((guard, value)).is_err() {
+        warn!(kind, "gossip receiver lagging; dropping message");
     }
 }
 
@@ -142,7 +182,32 @@ fn forward<T>(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::p2p::admission::AdmissionConfig;
     use libp2p::gossipsub::{IdentTopic, Message};
+
+    type BlockChan = (
+        mpsc::Sender<(AdmitGuard, SignedBlockWithAttestation)>,
+        mpsc::Receiver<(AdmitGuard, SignedBlockWithAttestation)>,
+    );
+    type VoteChan = (
+        mpsc::Sender<(AdmitGuard, SignedAttestation)>,
+        mpsc::Receiver<(AdmitGuard, SignedAttestation)>,
+    );
+
+    fn block_chan(cap: usize) -> BlockChan {
+        mpsc::channel(cap)
+    }
+    fn vote_chan(cap: usize) -> VoteChan {
+        mpsc::channel(cap)
+    }
+
+    fn source_peer() -> libp2p::PeerId {
+        libp2p::PeerId::random()
+    }
+
+    fn admission() -> Arc<PeerAdmission> {
+        PeerAdmission::new(AdmissionConfig::default())
+    }
 
     fn synth_message(topic: &str, data: Vec<u8>) -> Message {
         Message {
@@ -164,38 +229,146 @@ mod tests {
 
     #[tokio::test]
     async fn routes_valid_block_to_block_receiver() {
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
-        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
+        let (block_tx, mut block_rx) = block_chan(8);
+        let (vote_tx, mut vote_rx) = vote_chan(8);
 
         let block = SignedBlockWithAttestation::default();
         let payload = lean_wire::encode_gossip(&block);
         route_gossipsub_message(
+            &source_peer(),
+            &admission(),
             &dummy_id(),
             &synth_message(lean_wire::BLOCK_TOPIC_V1, payload),
             &block_tx,
             &vote_tx,
         );
 
-        let got = block_rx.recv().await.expect("block must be forwarded");
+        let (_admit, got) = block_rx.recv().await.expect("block must be forwarded");
         assert_eq!(got, block);
         assert!(vote_rx.try_recv().is_err(), "vote channel must stay empty");
     }
 
     #[tokio::test]
+    async fn routes_carry_admit_guard() {
+        let (block_tx, mut block_rx) = block_chan(8);
+        let (vote_tx, _vote_rx) = vote_chan(8);
+        let peer = source_peer();
+        let adm = admission();
+
+        let payload = lean_wire::encode_gossip(&SignedBlockWithAttestation::default());
+        route_gossipsub_message(
+            &peer,
+            &adm,
+            &dummy_id(),
+            &synth_message(lean_wire::BLOCK_TOPIC_V1, payload),
+            &block_tx,
+            &vote_tx,
+        );
+
+        // The forwarded tuple carries the guard for the source peer; the slot is held
+        // until the consumer drops it.
+        let (admit, _block) = block_rx.recv().await.expect("block forwarded");
+        let expected =
+            crate::sync::PeerId::new(peer.to_base58()).expect("non-empty base58 peer id");
+        assert_eq!(admit.peer(), &expected);
+        assert_eq!(adm.tracked_peer_count(), 1, "slot held while guard is live");
+        drop(admit);
+        assert_eq!(adm.tracked_peer_count(), 0, "slot released on drop");
+    }
+
+    #[tokio::test]
+    async fn over_cap_peer_message_dropped() {
+        // Cap of 1: the first message is admitted, the second (same peer) is dropped.
+        let adm = PeerAdmission::new(AdmissionConfig::new(
+            core::num::NonZeroUsize::new(1).unwrap(),
+        ));
+        let (block_tx, mut block_rx) = block_chan(8);
+        let (vote_tx, _vote_rx) = vote_chan(8);
+        let peer = source_peer();
+
+        let payload = || lean_wire::encode_gossip(&SignedBlockWithAttestation::default());
+        route_gossipsub_message(
+            &peer,
+            &adm,
+            &dummy_id(),
+            &synth_message(lean_wire::BLOCK_TOPIC_V1, payload()),
+            &block_tx,
+            &vote_tx,
+        );
+        // First message admitted and queued (its guard still held → slot occupied).
+        let (_first_admit, _first) = block_rx.recv().await.expect("first admitted");
+
+        // Second message from the same peer while the first slot is still held → dropped.
+        route_gossipsub_message(
+            &peer,
+            &adm,
+            &dummy_id(),
+            &synth_message(lean_wire::BLOCK_TOPIC_V1, payload()),
+            &block_tx,
+            &vote_tx,
+        );
+        assert!(
+            block_rx.try_recv().is_err(),
+            "over-cap message must be dropped, not queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn slot_released_on_channel_full() {
+        // Channel capacity 1, already full → try_send fails → the guard drops and the
+        // peer's slot is released (no leak). PR-202.
+        let adm = admission();
+        let (block_tx, mut block_rx) = block_chan(1);
+        let (vote_tx, _vote_rx) = vote_chan(8);
+        let peer = source_peer();
+
+        // Fill the channel with a directly-sent tuple so `forward`'s try_send fails.
+        let filler = adm
+            .try_admit(&crate::sync::PeerId::new(peer.to_base58()).unwrap())
+            .expect("admit filler");
+        block_tx
+            .try_send((filler, SignedBlockWithAttestation::default()))
+            .expect("channel accepts first");
+        let before = adm.tracked_peer_count();
+
+        let payload = lean_wire::encode_gossip(&SignedBlockWithAttestation::default());
+        route_gossipsub_message(
+            &peer,
+            &adm,
+            &dummy_id(),
+            &synth_message(lean_wire::BLOCK_TOPIC_V1, payload),
+            &block_tx,
+            &vote_tx,
+        );
+
+        // The dropped message released its slot: the in-flight tally is unchanged from
+        // before the (failed) forward — only the filler's slot remains.
+        assert_eq!(
+            adm.tracked_peer_count(),
+            before,
+            "no slot leak on full channel"
+        );
+        // Draining the filler frees its slot entirely.
+        let _ = block_rx.recv().await;
+    }
+
+    #[tokio::test]
     async fn routes_valid_vote_to_vote_receiver() {
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
-        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
+        let (block_tx, mut block_rx) = block_chan(8);
+        let (vote_tx, mut vote_rx) = vote_chan(8);
 
         let vote = SignedAttestation::default();
         let payload = lean_wire::encode_gossip(&vote);
         route_gossipsub_message(
+            &source_peer(),
+            &admission(),
             &dummy_id(),
             &synth_message(lean_wire::VOTE_TOPIC_V1, payload),
             &block_tx,
             &vote_tx,
         );
 
-        let got = vote_rx.recv().await.expect("vote must be forwarded");
+        let (_admit, got) = vote_rx.recv().await.expect("vote must be forwarded");
         assert_eq!(got, vote);
         assert!(
             block_rx.try_recv().is_err(),
@@ -205,10 +378,12 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_topic_is_ignored() {
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
-        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
+        let (block_tx, mut block_rx) = block_chan(8);
+        let (vote_tx, mut vote_rx) = vote_chan(8);
 
         route_gossipsub_message(
+            &source_peer(),
+            &admission(),
             &dummy_id(),
             &synth_message("/lean/unknown", vec![0xDE, 0xAD]),
             &block_tx,
@@ -221,13 +396,15 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_block_payload_drops_silently() {
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
-        let (vote_tx, _vote_rx) = mpsc::channel::<SignedAttestation>(8);
+        let (block_tx, mut block_rx) = block_chan(8);
+        let (vote_tx, _vote_rx) = vote_chan(8);
 
         // Valid snappy frame, but the decompressed bytes are too short
         // to be a SignedBlockWithAttestation — decode_gossip returns NetworkingError::Ssz.
         let payload = lean_wire::encode_gossip_data(&[0_u8; 4]);
         route_gossipsub_message(
+            &source_peer(),
+            &admission(),
             &dummy_id(),
             &synth_message(lean_wire::BLOCK_TOPIC_V1, payload),
             &block_tx,
@@ -249,8 +426,8 @@ mod tests {
         //    possible because the cache supplied the SSZ bytes.
         use crate::p2p::host::behaviour::gossipsub_message_id;
 
-        let (block_tx, mut block_rx) = mpsc::channel::<SignedBlockWithAttestation>(8);
-        let (vote_tx, mut vote_rx) = mpsc::channel::<SignedAttestation>(8);
+        let (block_tx, mut block_rx) = block_chan(8);
+        let (vote_tx, mut vote_rx) = vote_chan(8);
 
         let block = SignedBlockWithAttestation::default();
         let payload = lean_wire::encode_gossip(&block);
@@ -260,9 +437,9 @@ mod tests {
         // Corrupt the raw snappy bytes; a fallback would now fail.
         msg.data.fill(0xFF);
 
-        route_gossipsub_message(&id, &msg, &block_tx, &vote_tx);
+        route_gossipsub_message(&source_peer(), &admission(), &id, &msg, &block_tx, &vote_tx);
 
-        let got = block_rx
+        let (_admit, got) = block_rx
             .recv()
             .await
             .expect("cache must deliver the block despite the corrupted raw payload");

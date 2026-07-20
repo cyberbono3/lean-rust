@@ -426,17 +426,24 @@ impl Runner {
     /// warn-logged and dropped. Each sweep is bounded by the inbound gossip
     /// channel capacity (the p2p side `try_send`-drops on a full channel), so
     /// a flood cannot extend a single tick unboundedly.
+    ///
+    /// Each payload arrives paired with the `AdmitGuard` that admitted it at the
+    /// p2p ingress. The guard is bound to a NAMED local (a bare `_` would drop it
+    /// immediately and free the peer's slot before the import runs) so the per-peer
+    /// admission slot is released only after the inline import completes.
     async fn drain_gossip(&mut self) {
-        while let Ok(block) = self.block_rx.try_recv() {
+        while let Ok((admit, block)) = self.block_rx.try_recv() {
             let slot = block.message.block.slot.get();
             if let Err(err) = self.chain.import_block(block).await {
-                warn!(%err, slot, "gossip block import failed; continuing");
+                warn!(%err, slot, peer = %admit.peer(), "gossip block import failed; continuing");
             }
+            drop(admit); // release the peer's admission slot after import
         }
-        while let Ok(vote) = self.vote_rx.try_recv() {
+        while let Ok((admit, vote)) = self.vote_rx.try_recv() {
             if let Err(err) = self.chain.import_attestation(vote).await {
-                warn!(%err, "gossip vote import failed; continuing");
+                warn!(%err, peer = %admit.peer(), "gossip vote import failed; continuing");
             }
+            drop(admit); // release the peer's admission slot after import
         }
     }
 

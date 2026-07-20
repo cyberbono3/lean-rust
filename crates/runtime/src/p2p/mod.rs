@@ -23,6 +23,7 @@
 //!   [`RpcProvider::NoOp`] variant keeps the lifecycle tests free of a
 //!   storage backend.
 
+mod admission;
 mod devnet;
 mod error;
 pub mod gossip;
@@ -33,6 +34,9 @@ pub mod rpc;
 mod service;
 mod wiring;
 
+// Only `AdmitGuard` leaks to consumers (it rides the public `BlockReceiver` /
+// `VoteReceiver` aliases); the config + bound are crate-internal.
+pub use admission::AdmitGuard;
 pub use devnet::DevnetHost;
 pub use error::{HostError, HostResult};
 pub use gossip::{BlockReceiver, GossipReceiver, MessageId, PublishError, Topic, VoteReceiver};
