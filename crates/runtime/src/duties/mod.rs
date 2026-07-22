@@ -34,11 +34,14 @@ pub use proposer::LocalProposers;
 // implementation and passes it in.
 // `validator_secret_path` is `pub` so the offline keygen (`lean-cli`, which
 // depends on this crate) writes the same file names this loader reads.
-// `OtsSigner` / `OtsError` are `pub` because the composition root (`node`)
-// wraps the production `LocalSigner` in the durable one-time-signature guard
-// before injecting it into the chain service.
-pub use ots_signer::{OtsError, OtsSigner};
+// `OtsSigner` is `pub` because the composition root (`node`) wraps the
+// production `LocalSigner` in the durable one-time-signature guard before
+// injecting it into the chain service; `PersistableSigner` appears in
+// `OtsSigner::new`'s signature (the requirement the guard places on its inner
+// signer).
+pub use ots_signer::OtsSigner;
 pub use signer::{
-    validator_secret_path, AttestationSigner, LocalSigner, SignError, SignerLoadError,
+    validator_secret_path, AttestationSigner, LocalSigner, PersistableSigner, SignError,
+    SignerLoadError,
 };
 pub use validators::ValidatorAssignments;

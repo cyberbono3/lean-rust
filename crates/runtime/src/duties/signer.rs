@@ -144,16 +144,20 @@ pub trait AttestationSigner: Send {
     /// signature scheme's epoch domain, or the underlying scheme rejects the
     /// operation (including one-time-key reuse).
     fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError>;
+}
 
+/// A signer whose one-time key state can be snapshotted for persistence.
+///
+/// The requirement the durable guard (`duties::ots_signer`) places on its INNER
+/// signer, split off [`AttestationSigner`] so the chain-facing seam stays
+/// sign-only and a signer with no persistable key state (the test stubs) cannot
+/// be wrapped in the guard by accident — the guard would then sign but never
+/// persist a watermark.
+pub trait PersistableSigner: AttestationSigner {
     /// Snapshots the crypto-free persistable record for `validator` after a
-    /// sign, or `None` if the implementation holds no persistable key state for
-    /// it. Backed by `crypto::SigningKey::to_record` in production
-    /// ([`LocalSigner`]); the default suits stubs whose keys have no watermark
-    /// worth persisting.
-    fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState> {
-        let _ = validator;
-        None
-    }
+    /// sign, or `None` if no key is loaded for it. Backed by
+    /// `crypto::SigningKey::to_record` in production ([`LocalSigner`]).
+    fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState>;
 }
 
 /// Holds the local validators' live signing keys, keyed by index.
@@ -194,18 +198,7 @@ impl LocalSigner {
         secrets_dir: &Path,
         local_indices: impl IntoIterator<Item = ValidatorIndex>,
     ) -> Result<Self, SignerLoadError> {
-        let mut keys = BTreeMap::new();
-        for index in local_indices {
-            let record = read_secret_record(secrets_dir, index)?;
-            let key = ProdSigningKey::from_record(&record).map_err(|source| {
-                SignerLoadError::KeyRestore {
-                    index: index.get(),
-                    source,
-                }
-            })?;
-            keys.insert(index, key);
-        }
-        Ok(Self { keys })
+        Self::load_with(secrets_dir, local_indices, |_, record| Ok(record))
     }
 
     /// Like [`load`](Self::load), but additionally consults `store` for each
@@ -229,16 +222,36 @@ impl LocalSigner {
         local_indices: impl IntoIterator<Item = ValidatorIndex>,
         store: &dyn storage::Store,
     ) -> Result<Self, SignerLoadError> {
+        Self::load_with(secrets_dir, local_indices, |index, file_record| {
+            let stored = store.load_ots_key_state(index).map_err(|source| {
+                SignerLoadError::KeyStateLoad {
+                    index: index.get(),
+                    source,
+                }
+            })?;
+            resolve_record(index, file_record, stored)
+        })
+    }
+
+    /// The one load loop both constructors share: reads + decodes each
+    /// validator's secret record, lets `resolve` pick the record to restore
+    /// from (identity for [`load`](Self::load), the store merge for
+    /// [`load_resuming`](Self::load_resuming)), and restores the signing key.
+    fn load_with(
+        secrets_dir: &Path,
+        local_indices: impl IntoIterator<Item = ValidatorIndex>,
+        mut resolve: impl FnMut(ValidatorIndex, OtsKeyState) -> Result<OtsKeyState, SignerLoadError>,
+    ) -> Result<Self, SignerLoadError> {
         let mut keys = BTreeMap::new();
         for index in local_indices {
-            let idx = index.get();
             let file_record = read_secret_record(secrets_dir, index)?;
-            let stored = store
-                .load_ots_key_state(index)
-                .map_err(|source| SignerLoadError::KeyStateLoad { index: idx, source })?;
-            let record = resolve_record(index, file_record, stored)?;
-            let key = ProdSigningKey::from_record(&record)
-                .map_err(|source| SignerLoadError::KeyRestore { index: idx, source })?;
+            let record = resolve(index, file_record)?;
+            let key = ProdSigningKey::from_record(&record).map_err(|source| {
+                SignerLoadError::KeyRestore {
+                    index: index.get(),
+                    source,
+                }
+            })?;
             keys.insert(index, key);
         }
         Ok(Self { keys })
@@ -277,10 +290,7 @@ fn resolve_record(
     let Some(stored) = stored else {
         return Ok(file);
     };
-    let same_key = stored.seed == file.seed
-        && stored.activation_epoch == file.activation_epoch
-        && stored.num_active_epochs == file.num_active_epochs;
-    if !same_key {
+    if !stored.same_key(&file) {
         return Err(SignerLoadError::KeyStateMismatch { index: index.get() });
     }
     Ok(if stored.next_index > file.next_index {
@@ -320,7 +330,9 @@ impl AttestationSigner for LocalSigner {
         let signature = key.sign(epoch, &message)?;
         Ok(signature)
     }
+}
 
+impl PersistableSigner for LocalSigner {
     /// Exposes the persistable record for `validator` — the durable-guard seam
     /// (`duties::ots_signer`) snapshots this after each sign to persist the
     /// advanced watermark.
