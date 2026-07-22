@@ -13,7 +13,7 @@ use protocol::{
 use runtime::api::{HttpService, MetricsService, Recorder};
 use runtime::chain::{ChainMetrics, Service as ChainService};
 use runtime::core::{Node, NodeConfig};
-use runtime::duties::LocalSigner;
+use runtime::duties::{LocalSigner, OtsSigner};
 use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
 use storage::{HeadInfo, MemoryStore, RedbStore, Store};
@@ -44,19 +44,25 @@ pub type Result<T> = anyhow::Result<T>;
 /// validator MUST have a loadable key; a missing dir or key is a fatal
 /// misconfiguration (fail fast, never sign a placeholder). This extends the
 /// optional-path convention but is intentionally stricter for secret keys.
+///
+/// Loads via [`LocalSigner::load_resuming`]: the keygen-written secret file
+/// carries `next_index = 0` forever, while the runtime persists each advanced
+/// watermark through the [`OtsSigner`] guard — resuming from the
+/// further-advanced record is what makes the one-time-key guard hold across a
+/// restart. Returns the concrete signer; the caller wraps it in the guard.
 fn build_local_signer(
     local: &[ValidatorIndex],
     secrets_dir: Option<&Path>,
-) -> Result<Arc<Mutex<LocalSigner>>> {
-    let signer = if local.is_empty() {
-        LocalSigner::empty()
-    } else {
-        let dir = secrets_dir.context(
-            "--validator-secrets-dir is required for a validating node (local validators are configured)",
-        )?;
-        LocalSigner::load(dir, local.iter().copied()).context("load validator secret keys")?
-    };
-    Ok(Arc::new(Mutex::new(signer)))
+    store: &dyn Store,
+) -> Result<LocalSigner> {
+    if local.is_empty() {
+        return Ok(LocalSigner::empty());
+    }
+    let dir = secrets_dir.context(
+        "--validator-secrets-dir is required for a validating node (local validators are configured)",
+    )?;
+    LocalSigner::load_resuming(dir, local.iter().copied(), store)
+        .context("load validator secret keys")
 }
 
 /// Selects the persistence backend for the devnet node.
@@ -179,8 +185,19 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     let (local_validators, total_validators) = resolve_local_validators(&duties)?;
     // Build the local validator signer at the composition root. Observer node
     // (no local validators) → empty signer; validating node → load its own
-    // secret keys (a configured validator with no key is a fatal misconfig).
-    let signer = build_local_signer(&local_validators, validator_secrets_dir.as_deref())?;
+    // secret keys (a configured validator with no key is a fatal misconfig),
+    // resuming each one-time watermark from the store. The signer is wrapped in
+    // the durable OTS guard so every production sign persists its advanced
+    // watermark before the signature is released (persist-before-release).
+    let local_signer = build_local_signer(
+        &local_validators,
+        validator_secrets_dir.as_deref(),
+        store.as_ref(),
+    )?;
+    let signer = Arc::new(Mutex::new(OtsSigner::new(
+        Box::new(local_signer),
+        Arc::clone(&store),
+    )));
     let chain = Arc::new(ChainService::with_signer(
         engine.with_metrics(chain_metrics),
         Arc::clone(&store),
@@ -396,6 +413,65 @@ mod tests {
             .unwrap_or(Duration::ZERO)
             .as_secs();
         GenesisTimeUnix::new(now + 60)
+    }
+
+    /// `build_local_signer` branch coverage — the keygen-free branches only
+    /// (a real key load is exercised by the `new_devnet_*` ignored tests).
+    mod build_local_signer_branches {
+        use super::*;
+        use runtime::duties::AttestationSigner;
+
+        #[test]
+        fn empty_local_set_builds_observer_signer_without_secrets_dir() {
+            let store = MemoryStore::default();
+            let mut signer = build_local_signer(&[], None, &store).expect("observer signer");
+            // The observer signer holds no keys: any sign attempt is refused.
+            let err = signer
+                .sign_attestation(&Attestation {
+                    validator_id: ValidatorIndex::new(0),
+                    ..Default::default()
+                })
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                runtime::duties::SignError::UnknownValidator { validator_id: 0 }
+            ));
+        }
+
+        #[test]
+        fn validating_node_without_secrets_dir_is_refused() {
+            let store = MemoryStore::default();
+            // `let Err(..) else`: the Ok type holds secret keys and is
+            // deliberately not `Debug`, so `unwrap_err()` cannot be used.
+            let Err(err) = build_local_signer(&[ValidatorIndex::new(0)], None, &store) else {
+                panic!("build must fail without a secrets dir");
+            };
+            assert!(err.to_string().contains("--validator-secrets-dir"));
+        }
+
+        #[test]
+        fn validating_node_with_missing_key_file_is_refused() {
+            let store = MemoryStore::default();
+            let dir = tempfile::tempdir().expect("tempdir");
+            let Err(err) = build_local_signer(&[ValidatorIndex::new(0)], Some(dir.path()), &store)
+            else {
+                panic!("build must fail on a missing key file");
+            };
+            // The context chain surfaces the load failure, not a partial signer.
+            assert!(format!("{err:#}").contains("load validator secret keys"));
+        }
+
+        #[test]
+        fn validating_node_with_corrupt_key_record_is_refused() {
+            let store = MemoryStore::default();
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::write(dir.path().join("validator_0.ssz"), b"garbage").expect("write");
+            let Err(err) = build_local_signer(&[ValidatorIndex::new(0)], Some(dir.path()), &store)
+            else {
+                panic!("build must fail on a corrupt key record");
+            };
+            assert!(format!("{err:#}").contains("load validator secret keys"));
+        }
     }
 
     fn validators_path() -> PathBuf {

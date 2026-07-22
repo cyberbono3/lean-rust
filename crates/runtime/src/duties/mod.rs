@@ -13,13 +13,7 @@
 mod config;
 mod error;
 mod genesis_pubkeys;
-// Part 15: until Part 3 wires `sign_own_duty` into `produce_*`, the guard cluster
-// is reachable only from `#[cfg(test)]`, so the non-test `--lib` build would fail
-// `-D warnings` with `dead_code`. `allow` (NOT `expect` — the cluster IS used in
-// the cfg(test) build, so `expect(dead_code)` would misfire) keeps standalone Part
-// 2 green. REMOVE this attribute in Part 3 once the production sign sites call it.
-#[allow(dead_code)]
-pub(crate) mod ots_signer;
+mod ots_signer;
 mod proposer;
 mod signer;
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -40,6 +34,10 @@ pub use proposer::LocalProposers;
 // implementation and passes it in.
 // `validator_secret_path` is `pub` so the offline keygen (`lean-cli`, which
 // depends on this crate) writes the same file names this loader reads.
+// `OtsSigner` / `OtsError` are `pub` because the composition root (`node`)
+// wraps the production `LocalSigner` in the durable one-time-signature guard
+// before injecting it into the chain service.
+pub use ots_signer::{OtsError, OtsSigner};
 pub use signer::{
     validator_secret_path, AttestationSigner, LocalSigner, SignError, SignerLoadError,
 };

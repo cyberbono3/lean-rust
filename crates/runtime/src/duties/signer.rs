@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crypto::{CryptoError, OtsKeyState, OtsKeyStateDecodeError, ProdSigningKey};
 use protocol::{Attestation, ValidatorIndex};
+use storage::StorageError;
 use types::Signature;
 
 use crate::signing_domain::{attestation_signing_inputs, EpochOverflow};
@@ -65,6 +66,29 @@ pub enum SignerLoadError {
         #[source]
         source: CryptoError,
     },
+    /// The durable store could not be read while resuming the one-time-key
+    /// watermark ([`LocalSigner::load_resuming`]).
+    #[error("load persisted OTS key-state for validator {index}")]
+    KeyStateLoad {
+        /// Validator index whose persisted record could not be read.
+        index: u64,
+        /// Underlying storage failure.
+        #[source]
+        source: StorageError,
+    },
+    /// The persisted record and the on-disk secret record describe DIFFERENT
+    /// keys (seed or activation window mismatch). Merging watermarks across
+    /// different keys is meaningless, and silently preferring either side risks
+    /// one-time-key reuse — the operator must reconcile (delete the stale side)
+    /// before the node will sign.
+    #[error(
+        "persisted OTS key-state for validator {index} does not match the secret record \
+         (seed or activation window differs); reconcile the store and the secrets dir"
+    )]
+    KeyStateMismatch {
+        /// Validator index whose two records disagree.
+        index: u64,
+    },
 }
 
 /// Errors raised while SIGNING at the runtime production boundary.
@@ -85,6 +109,17 @@ pub enum SignError {
     /// swallowed, so a double-sign is a visible error, not a silent placeholder.
     #[error("leanSig signing failed")]
     Crypto(#[from] CryptoError),
+    /// Persisting the advanced one-time watermark failed, so the signature was
+    /// withheld (persist-before-release — see `duties::ots_signer`). No key
+    /// material leaked and no index was durably burned; the caller may retry.
+    #[error("persist OTS key-state for validator {validator_id}")]
+    Persist {
+        /// Validator whose advanced record could not be persisted.
+        validator_id: u64,
+        /// Underlying storage failure.
+        #[source]
+        source: StorageError,
+    },
 }
 
 /// Produces a validator's signature over one attestation.
@@ -109,6 +144,16 @@ pub trait AttestationSigner: Send {
     /// signature scheme's epoch domain, or the underlying scheme rejects the
     /// operation (including one-time-key reuse).
     fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError>;
+
+    /// Snapshots the crypto-free persistable record for `validator` after a
+    /// sign, or `None` if the implementation holds no persistable key state for
+    /// it. Backed by `crypto::SigningKey::to_record` in production
+    /// ([`LocalSigner`]); the default suits stubs whose keys have no watermark
+    /// worth persisting.
+    fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState> {
+        let _ = validator;
+        None
+    }
 }
 
 /// Holds the local validators' live signing keys, keyed by index.
@@ -151,21 +196,98 @@ impl LocalSigner {
     ) -> Result<Self, SignerLoadError> {
         let mut keys = BTreeMap::new();
         for index in local_indices {
-            let idx = index.get();
-            let path = validator_secret_path(secrets_dir, idx);
-            let bytes = std::fs::read(&path).map_err(|source| SignerLoadError::SecretFileRead {
-                index: idx,
-                path: path.clone(),
-                source,
+            let record = read_secret_record(secrets_dir, index)?;
+            let key = ProdSigningKey::from_record(&record).map_err(|source| {
+                SignerLoadError::KeyRestore {
+                    index: index.get(),
+                    source,
+                }
             })?;
-            let record = OtsKeyState::from_ssz_bytes(&bytes)
-                .map_err(|source| SignerLoadError::KeyStateDecode { index: idx, source })?;
+            keys.insert(index, key);
+        }
+        Ok(Self { keys })
+    }
+
+    /// Like [`load`](Self::load), but additionally consults `store` for each
+    /// validator's persisted one-time watermark and resumes from whichever
+    /// record — file or store — has advanced further.
+    ///
+    /// The keygen-written file carries `next_index = 0` forever (nothing
+    /// rewrites it), while the runtime persists the advanced record on every
+    /// sign (`duties::ots_signer`). Resuming from the file alone would rewind
+    /// the watermark to fresh-keygen state and re-enable one-time-key reuse
+    /// after a restart; taking the further-advanced record is fail-safe in both
+    /// directions — worst case it skips unused leaves, it never reuses one.
+    ///
+    /// # Errors
+    /// Everything [`load`](Self::load) raises, plus
+    /// [`SignerLoadError::KeyStateLoad`] if the store read fails and
+    /// [`SignerLoadError::KeyStateMismatch`] if the two records describe
+    /// different keys (seed / activation window disagree).
+    pub fn load_resuming(
+        secrets_dir: &Path,
+        local_indices: impl IntoIterator<Item = ValidatorIndex>,
+        store: &dyn storage::Store,
+    ) -> Result<Self, SignerLoadError> {
+        let mut keys = BTreeMap::new();
+        for index in local_indices {
+            let idx = index.get();
+            let file_record = read_secret_record(secrets_dir, index)?;
+            let stored = store
+                .load_ots_key_state(index)
+                .map_err(|source| SignerLoadError::KeyStateLoad { index: idx, source })?;
+            let record = resolve_record(index, file_record, stored)?;
             let key = ProdSigningKey::from_record(&record)
                 .map_err(|source| SignerLoadError::KeyRestore { index: idx, source })?;
             keys.insert(index, key);
         }
         Ok(Self { keys })
     }
+}
+
+/// Reads and decodes `<secrets_dir>/validator_<i>.ssz` for one validator.
+fn read_secret_record(
+    secrets_dir: &Path,
+    index: ValidatorIndex,
+) -> Result<OtsKeyState, SignerLoadError> {
+    let idx = index.get();
+    let path = validator_secret_path(secrets_dir, idx);
+    let bytes = std::fs::read(&path).map_err(|source| SignerLoadError::SecretFileRead {
+        index: idx,
+        path: path.clone(),
+        source,
+    })?;
+    OtsKeyState::from_ssz_bytes(&bytes)
+        .map_err(|source| SignerLoadError::KeyStateDecode { index: idx, source })
+}
+
+/// Picks the record to resume from: the further-advanced of the on-disk secret
+/// record and the store-persisted one.
+///
+/// Both records must describe the SAME key (equal seed and activation window);
+/// otherwise the merge is refused loudly — silently preferring either side of a
+/// mismatched pair risks resurrecting a stale key or rewinding a watermark.
+/// With no stored record (first boot, or an in-memory store), the file record
+/// stands alone.
+fn resolve_record(
+    index: ValidatorIndex,
+    file: OtsKeyState,
+    stored: Option<OtsKeyState>,
+) -> Result<OtsKeyState, SignerLoadError> {
+    let Some(stored) = stored else {
+        return Ok(file);
+    };
+    let same_key = stored.seed == file.seed
+        && stored.activation_epoch == file.activation_epoch
+        && stored.num_active_epochs == file.num_active_epochs;
+    if !same_key {
+        return Err(SignerLoadError::KeyStateMismatch { index: index.get() });
+    }
+    Ok(if stored.next_index > file.next_index {
+        stored
+    } else {
+        file
+    })
 }
 
 impl AttestationSigner for LocalSigner {
@@ -197,6 +319,13 @@ impl AttestationSigner for LocalSigner {
         key.prepare(epoch)?;
         let signature = key.sign(epoch, &message)?;
         Ok(signature)
+    }
+
+    /// Exposes the persistable record for `validator` — the durable-guard seam
+    /// (`duties::ots_signer`) snapshots this after each sign to persist the
+    /// advanced watermark.
+    fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState> {
+        self.keys.get(&validator).map(ProdSigningKey::to_record)
     }
 }
 
@@ -314,5 +443,75 @@ mod tests {
             signer.sign_attestation(&attestation(0, 0)),
             Err(SignError::UnknownValidator { validator_id: 0 })
         ));
+    }
+
+    /// `resolve_record` merge rules — pure record selection, no keygen.
+    mod resolve_record {
+        use super::super::resolve_record;
+        use super::*;
+
+        fn record(seed_byte: u8, next_index: u64) -> OtsKeyState {
+            OtsKeyState {
+                seed: [seed_byte; 32],
+                activation_epoch: 0,
+                num_active_epochs: 1_024,
+                next_index,
+            }
+        }
+
+        #[test]
+        fn no_stored_record_uses_file() {
+            let got = resolve_record(ValidatorIndex::new(0), record(1, 0), None).unwrap();
+            assert_eq!(got.next_index, 0);
+        }
+
+        #[test]
+        fn stored_ahead_of_file_wins() {
+            // The restart case: the file is frozen at keygen (0), the store
+            // carries the advance. Resuming from the store is what prevents
+            // one-time-key reuse.
+            let got =
+                resolve_record(ValidatorIndex::new(0), record(1, 0), Some(record(1, 5))).unwrap();
+            assert_eq!(got.next_index, 5);
+        }
+
+        #[test]
+        fn file_ahead_of_stored_wins() {
+            // Symmetric: never rewind, whichever side is behind.
+            let got =
+                resolve_record(ValidatorIndex::new(0), record(1, 7), Some(record(1, 3))).unwrap();
+            assert_eq!(got.next_index, 7);
+        }
+
+        #[test]
+        fn equal_watermarks_are_fine() {
+            let got =
+                resolve_record(ValidatorIndex::new(0), record(1, 4), Some(record(1, 4))).unwrap();
+            assert_eq!(got.next_index, 4);
+        }
+
+        #[test]
+        fn seed_mismatch_is_refused() {
+            // A stored record from a DIFFERENT key (rotated seed) must not be
+            // merged — fail loud, never silently pick a side.
+            let err = resolve_record(ValidatorIndex::new(3), record(1, 0), Some(record(2, 5)))
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                SignerLoadError::KeyStateMismatch { index: 3 }
+            ));
+        }
+
+        #[test]
+        fn window_mismatch_is_refused() {
+            let mut stored = record(1, 5);
+            stored.num_active_epochs = 2_048;
+            let err =
+                resolve_record(ValidatorIndex::new(0), record(1, 0), Some(stored)).unwrap_err();
+            assert!(matches!(
+                err,
+                SignerLoadError::KeyStateMismatch { index: 0 }
+            ));
+        }
     }
 }

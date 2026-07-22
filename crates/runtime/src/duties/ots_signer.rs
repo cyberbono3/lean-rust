@@ -1,20 +1,22 @@
 //! Durable one-time-signature guard at the runtime sign boundary (Part 15).
 //!
-//! [`OtsSigner`] wraps the local signer behind the narrow [`AttestationSigner`]
-//! seam and persists each validator's advanced watermark through
-//! [`storage::Store`] before a signature is released, so an OTS leaf is never
-//! signed twice across a restart or a self-sync. The in-memory monotonic guard
-//! and the leanSig algorithm stay in `crypto`; the byte record stays in `types`;
-//! the durable KV stays in `storage`. This module owns only the persist-before-
-//! release ordering (sign → advance the index → persist the record → release the
+//! [`OtsSigner`] wraps the local signer behind the [`AttestationSigner`] seam
+//! and persists each validator's advanced watermark through [`storage::Store`]
+//! before a signature is released, so an OTS leaf is never signed twice across
+//! a restart or a self-sync. The in-memory monotonic guard and the leanSig
+//! algorithm stay in `crypto`; the byte record stays in `types`; the durable KV
+//! stays in `storage`. This module owns only the persist-before-release
+//! ordering (sign → advance the index → persist the record → release the
 //! signature), keyed per [`ValidatorIndex`]. The stronger reserve-before-sign
-//! ordering (persist the consumed index *before* the crypto sign) is the Part-3
-//! hardening — see [`OtsSigner::sign_own_duty`].
+//! ordering (persist the consumed index *before* the crypto sign) remains a
+//! later hardening — see [`OtsSigner::sign_own_duty`].
 //!
-//! Scope note: until Part 3 wires [`OtsSigner::sign_own_duty`] into the
-//! production sign sites (`produce_block` / `produce_attestation`), the whole
-//! guard cluster is reachable only from tests — see the `#[allow(dead_code)]` on
-//! the `mod ots_signer;` declaration in `duties/mod.rs`, which Part 3 removes.
+//! Wiring: the composition root (`node::devnet`) constructs
+//! `OtsSigner::new(Box::new(local_signer), store)` and injects it as the chain
+//! service's [`AttestationSigner`], so every production sign
+//! (`produce_block` / `produce_attestation`) flows through the guard. The
+//! matching read side is `LocalSigner::load_resuming`, which resumes the
+//! watermark from the store at startup.
 
 use std::sync::Arc;
 
@@ -22,64 +24,12 @@ use protocol::{Attestation, ValidatorIndex};
 use storage::{StorageError, Store};
 use types::{OtsKeyState, Signature};
 
-// NOTE (Part-13 decoupling): the seam speaks the Part-15-owned [`SignRejected`]
-// rather than Part 13's `SignError`, so this module compiles + tests on a base
-// that does not yet carry `duties::signer`. Part 3's `impl AttestationSigner for
-// LocalSigner` projects `SignError` onto `SignRejected` (add `impl
-// From<SignError> for SignRejected` there). Do NOT import the Part-13 module here.
-
-/// Part-15-owned sign-failure surface for the [`AttestationSigner`] seam.
-///
-/// Decouples the guard from Part 13's `SignError`: the reuse / backward / other
-/// failures the inner signer detects are projected onto these variants at the
-/// seam boundary (Part 3). Reuse stays a first-class variant so a reuse test can
-/// assert it without the Part-13 type.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub(crate) enum SignRejected {
-    /// The inner signer refused a one-time-key reuse / backward epoch for this
-    /// validator (projected from `CryptoError::EpochReused` / `EpochNotActive`).
-    #[error("one-time-key reuse or backward epoch for validator {validator}")]
-    Reuse {
-        /// Validator whose sign was refused for reuse / backward epoch.
-        validator: u64,
-    },
-    /// Any other inner-sign failure (unknown validator, epoch overflow, leanSig
-    /// error), carried as an opaque message so the seam stays Part-13-agnostic.
-    ///
-    /// SECURITY (Part 3): when `impl From<SignError> for SignRejected` populates
-    /// this `message` by projecting the inner signer's error, it MUST NEVER embed
-    /// key material (seed / secret bytes) — the string flows into `OtsError`'s
-    /// `Debug`/`Display`. Preserve `OtsKeyState`'s redaction discipline at the seam.
-    #[error("sign refused: {message}")]
-    Other {
-        /// Message projected from the inner signer's error.
-        message: String,
-    },
-}
-
-/// The narrow signing seam [`OtsSigner`] wraps.
-///
-/// Production impl: Part 13's `LocalSigner` (real leanSig, advances the in-memory
-/// one-time index and rejects reuse / backward, mapped to [`SignRejected`]). Test
-/// impl: a hand-written fake (no `ProdScheme` keygen) — the persist-ordering
-/// logic is exercised entirely through this trait.
-pub(crate) trait AttestationSigner {
-    /// Signs `att` for its own `validator_id`, advancing the in-memory one-time
-    /// index. Mirrors `LocalSigner::sign_attestation`, projected to
-    /// [`SignRejected`].
-    fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignRejected>;
-
-    /// Snapshots the crypto-free persistable record for `validator` after a sign,
-    /// or `None` if no key is loaded for it. Backed by
-    /// `crypto::SigningKey::to_record` in production.
-    fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState>;
-}
+use super::signer::{AttestationSigner, SignError};
 
 /// Errors raised while signing-with-persistence at the runtime boundary.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub(crate) enum OtsError {
+pub enum OtsError {
     /// Persisting the advanced watermark failed; no signature is returned, so a
     /// crash-equivalent never leaks a used-but-unpersisted index.
     #[error("persist OTS key-state for validator {validator}")]
@@ -90,11 +40,11 @@ pub(crate) enum OtsError {
         #[source]
         source: StorageError,
     },
-    /// The inner signer refused — includes one-time-key reuse and backward-epoch
-    /// (projected via [`SignRejected`]), so a double-sign is a visible error,
-    /// never a silent second index burn.
+    /// The inner signer refused — includes one-time-key reuse
+    /// ([`crypto::CryptoError::EpochReused`] via [`SignError::Crypto`]), so a
+    /// double-sign is a visible error, never a silent second index burn.
     #[error(transparent)]
-    Sign(#[from] SignRejected),
+    Sign(#[from] SignError),
     /// The signer produced a signature but exposed no record for the validator
     /// (invariant violation: a loaded key must yield a record).
     #[error("no OTS key-state record for validator {validator}")]
@@ -104,10 +54,30 @@ pub(crate) enum OtsError {
     },
 }
 
+impl From<OtsError> for SignError {
+    /// Projects the guard's failure surface onto the chain service's
+    /// [`SignError`], so [`OtsSigner`] can sit behind the
+    /// [`AttestationSigner`] seam without widening it. Inner sign failures
+    /// pass through unchanged; the two guard-specific failures map onto
+    /// [`SignError::Persist`] and [`SignError::UnknownValidator`].
+    fn from(err: OtsError) -> Self {
+        match err {
+            OtsError::Sign(inner) => inner,
+            OtsError::Persist { validator, source } => Self::Persist {
+                validator_id: validator,
+                source,
+            },
+            OtsError::UnknownValidator { validator } => Self::UnknownValidator {
+                validator_id: validator,
+            },
+        }
+    }
+}
+
 /// Signs own-duty attestations and persists the advanced one-time index before
 /// releasing the signature. Constructed at the composition root with the local
 /// signer and the durable store; keyed per [`ValidatorIndex`] via the record home.
-pub(crate) struct OtsSigner {
+pub struct OtsSigner {
     inner: Box<dyn AttestationSigner + Send>,
     store: Arc<dyn Store>,
 }
@@ -115,7 +85,8 @@ pub(crate) struct OtsSigner {
 impl OtsSigner {
     /// Builds the guard over `inner` (the local signer) and `store` (the durable
     /// persistence sink).
-    pub(crate) fn new(inner: Box<dyn AttestationSigner + Send>, store: Arc<dyn Store>) -> Self {
+    #[must_use]
+    pub fn new(inner: Box<dyn AttestationSigner + Send>, store: Arc<dyn Store>) -> Self {
         Self { inner, store }
     }
 
@@ -123,21 +94,19 @@ impl OtsSigner {
     /// the signature is returned.
     ///
     /// Order (shape-(a) baseline — see plan OQ6): the in-memory sign advances the
-    /// one-time index (and rejects reuse / backward via [`SignRejected`]); the
+    /// one-time index (and rejects reuse / backward via [`SignError`]); the
     /// advanced record is then persisted; only on a successful persist is the
     /// signature released. A persist failure returns [`OtsError::Persist`] and no
     /// signature.
     ///
-    /// Part-3 hardening (`NEEDS_VALIDATION`): reserve-before-sign — persist
-    /// `next_index = epoch + 1` before the crypto sign — once the Part-13
-    /// `SigningKey` surface is on this branch (plan OQ6 shape (b)). Parts 1–2
-    /// alone do NOT provide cross-restart reuse safety.
+    /// Later hardening (`NEEDS_VALIDATION`): reserve-before-sign — persist
+    /// `next_index = epoch + 1` before the crypto sign (plan OQ6 shape (b)).
     ///
     /// # Errors
     /// - [`OtsError::Sign`] on any inner-sign failure (reuse / backward / other).
     /// - [`OtsError::Persist`] if the advanced record cannot be persisted.
     /// - [`OtsError::UnknownValidator`] if the signer exposes no record post-sign.
-    pub(crate) fn sign_own_duty(&mut self, att: &Attestation) -> Result<Signature, OtsError> {
+    pub fn sign_own_duty(&mut self, att: &Attestation) -> Result<Signature, OtsError> {
         let validator = att.validator_id;
         let signature = self.inner.sign_attestation(att)?;
         let record = self
@@ -156,6 +125,24 @@ impl OtsSigner {
     }
 }
 
+impl AttestationSigner for OtsSigner {
+    /// Signs via [`sign_own_duty`](Self::sign_own_duty), so every sign that
+    /// flows through the [`AttestationSigner`] seam persists its advanced
+    /// watermark before the signature is released. This is what makes the
+    /// guard hold on the production paths: the chain service holds the seam,
+    /// the composition root injects [`OtsSigner`], and neither knows about
+    /// persistence.
+    fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
+        self.sign_own_duty(att).map_err(SignError::from)
+    }
+
+    /// Delegates to the wrapped signer — the guard adds persistence, not key
+    /// state of its own.
+    fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState> {
+        self.inner.record_for(validator)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -163,6 +150,7 @@ mod tests {
 
     use std::collections::BTreeMap;
 
+    use crypto::CryptoError;
     use parking_lot::Mutex;
     use protocol::{SignedBlockWithAttestation, State};
     use storage::HeadInfo;
@@ -210,12 +198,13 @@ mod tests {
     }
 
     impl AttestationSigner for FakeSigner {
-        fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignRejected> {
+        fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
             let validator = att.validator_id;
             if self.reject_repeats && self.signed.contains_key(&validator) {
-                return Err(SignRejected::Reuse {
-                    validator: validator.get(),
-                });
+                return Err(SignError::Crypto(CryptoError::EpochReused {
+                    epoch: 0,
+                    last_signed: 0,
+                }));
             }
             *self.signed.entry(validator).or_insert(0) += 1;
             Ok(Signature::zero())
@@ -391,7 +380,7 @@ mod tests {
         let err = signer.sign_own_duty(&attestation(0)).unwrap_err();
         assert!(matches!(
             err,
-            OtsError::Sign(SignRejected::Reuse { validator: 0 })
+            OtsError::Sign(SignError::Crypto(CryptoError::EpochReused { .. }))
         ));
 
         // The rejected reuse did not persist a second, advanced record.
@@ -430,5 +419,89 @@ mod tests {
                 .next_index,
             1
         );
+    }
+
+    #[test]
+    fn seam_sign_flows_through_guard_and_projects_errors() {
+        // Through the `AttestationSigner` seam (as the chain service calls it):
+        // the sign persists, and guard failures surface as `SignError`.
+        let store = Arc::new(FakeStore::default());
+        let mut signer = OtsSigner::new(
+            Box::new(FakeSigner::new()),
+            Arc::clone(&store) as Arc<dyn Store>,
+        );
+        let seam: &mut dyn AttestationSigner = &mut signer;
+
+        seam.sign_attestation(&attestation(0)).unwrap();
+        assert_eq!(
+            store
+                .load_ots_key_state(ValidatorIndex::new(0))
+                .unwrap()
+                .unwrap()
+                .next_index,
+            1
+        );
+
+        // Persist failure projects onto `SignError::Persist` at the seam.
+        let store = Arc::new(FakeStore::failing());
+        let mut signer = OtsSigner::new(
+            Box::new(FakeSigner::new()),
+            Arc::clone(&store) as Arc<dyn Store>,
+        );
+        let seam: &mut dyn AttestationSigner = &mut signer;
+        let err = seam.sign_attestation(&attestation(0)).unwrap_err();
+        assert!(matches!(
+            err,
+            SignError::Persist {
+                validator_id: 0,
+                ..
+            }
+        ));
+    }
+
+    /// Full restart round-trip over REAL leanSig keys: sign through the guard,
+    /// "restart" by reloading the signer via `load_resuming` against the same
+    /// store, and confirm the watermark survived — the same epoch is refused,
+    /// the next epoch signs.
+    #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
+    fn restart_resumes_watermark_from_store() {
+        use super::super::signer::LocalSigner;
+        use super::super::test_fixtures::{write_validator_secrets, MIN_ACTIVE_EPOCHS};
+        use protocol::{AttestationData, Slot};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = write_validator_secrets(dir.path(), &[0], MIN_ACTIVE_EPOCHS);
+        let store: Arc<dyn Store> = Arc::new(FakeStore::default());
+
+        let att = |slot: u64| Attestation {
+            validator_id: ValidatorIndex::new(0),
+            data: AttestationData {
+                slot: Slot::new(slot),
+                ..Default::default()
+            },
+        };
+
+        // First run: sign epoch 0 through the guard; the advance persists.
+        let local = LocalSigner::load(dir.path(), [ValidatorIndex::new(0)]).unwrap();
+        let mut signer = OtsSigner::new(Box::new(local), Arc::clone(&store));
+        signer.sign_own_duty(&att(0)).unwrap();
+
+        // "Restart": the secrets file still says next_index = 0, but the store
+        // carries the advance — load_resuming takes the further-advanced record.
+        let local =
+            LocalSigner::load_resuming(dir.path(), [ValidatorIndex::new(0)], store.as_ref())
+                .unwrap();
+        let mut signer = OtsSigner::new(Box::new(local), Arc::clone(&store));
+
+        // Same epoch again → refused as reuse (the watermark survived the restart).
+        let err = signer.sign_own_duty(&att(0)).unwrap_err();
+        assert!(matches!(
+            err,
+            OtsError::Sign(SignError::Crypto(CryptoError::EpochReused { .. }))
+        ));
+
+        // The next epoch is fresh and signs.
+        signer.sign_own_duty(&att(1)).unwrap();
     }
 }
