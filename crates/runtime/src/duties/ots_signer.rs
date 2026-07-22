@@ -178,6 +178,7 @@ mod tests {
     struct FakeStore {
         ots: Mutex<BTreeMap<ValidatorIndex, OtsWatermark>>,
         fail_save: bool,
+        fail_load: bool,
     }
 
     impl FakeStore {
@@ -185,8 +186,17 @@ mod tests {
         /// failure (the crash-equivalent path).
         fn failing() -> Self {
             Self {
-                ots: Mutex::new(BTreeMap::new()),
                 fail_save: true,
+                ..Self::default()
+            }
+        }
+
+        /// A store whose `load_ots_key_state` always fails — models a store-read
+        /// failure while resuming the watermark at startup.
+        fn failing_load() -> Self {
+            Self {
+                fail_load: true,
+                ..Self::default()
             }
         }
     }
@@ -210,6 +220,11 @@ mod tests {
             &self,
             validator: ValidatorIndex,
         ) -> Result<Option<OtsWatermark>, StorageError> {
+            if self.fail_load {
+                return Err(StorageError::Backend {
+                    message: "forced load failure".to_owned(),
+                });
+            }
             Ok(self.ots.lock().get(&validator).cloned())
         }
 
@@ -374,6 +389,36 @@ mod tests {
                 .next_index,
             1
         );
+    }
+
+    #[test]
+    fn load_resuming_surfaces_store_read_failure() {
+        use super::super::signer::{validator_secret_path, LocalSigner, SignerLoadError};
+        use types::OtsKeyState;
+
+        // A SYNTHETIC secret record (no keygen): `read_secret_record` decodes it,
+        // then the failing store read short-circuits before any key
+        // regeneration, so this exercises the `KeyStateLoad` path cheaply.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = OtsKeyState {
+            seed: [1u8; 32],
+            activation_epoch: 0,
+            num_active_epochs: 1_024,
+            next_index: 0,
+        };
+        std::fs::write(validator_secret_path(dir.path(), 0), record.to_ssz_bytes())
+            .expect("write synthetic secret");
+
+        let store = FakeStore::failing_load();
+        // `let Err(..) else`: the Ok type holds secret keys and is not `Debug`.
+        let Err(err) = LocalSigner::load_resuming(dir.path(), [ValidatorIndex::new(0)], &store)
+        else {
+            panic!("a store read failure while resuming must surface");
+        };
+        assert!(matches!(
+            err,
+            SignerLoadError::KeyStateLoad { index: 0, .. }
+        ));
     }
 
     /// Full restart round-trip over REAL leanSig keys: sign through the guard,

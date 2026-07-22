@@ -35,6 +35,7 @@ pub fn validator_secret_path(secrets_dir: &Path, index: u64) -> PathBuf {
 /// startup. A load failure is fatal: a node configured to run a validator it has
 /// no key for is misconfigured and must fail fast, never sign a placeholder.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SignerLoadError {
     /// The `validator_<i>.ssz` secret record could not be read from disk.
     #[error("read secret key for validator {index} at {path:?}")]
@@ -93,6 +94,7 @@ pub enum SignerLoadError {
 
 /// Errors raised while SIGNING at the runtime production boundary.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SignError {
     /// No secret key is loaded for the requested validator.
     #[error("no signing key loaded for validator {validator_id}")]
@@ -111,7 +113,10 @@ pub enum SignError {
     Crypto(#[from] CryptoError),
     /// Persisting the advanced one-time watermark failed, so the signature was
     /// withheld (persist-before-release — see `duties::ots_signer`). No key
-    /// material leaked and no index was durably burned; the caller may retry.
+    /// material leaked and no index was durably burned. Note the in-memory
+    /// watermark HAS advanced, so re-signing the same epoch in-process surfaces
+    /// [`CryptoError::EpochReused`], not a fresh signature; recovery is a restart
+    /// + `load_resuming`, which resumes the older durable watermark.
     #[error("persist OTS key-state for validator {validator_id}")]
     Persist {
         /// Validator whose advanced record could not be persisted.
