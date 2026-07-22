@@ -284,6 +284,22 @@ fn validate_state_limits(state: &State, chain_config: &ChainConfig) -> Result<()
         state.config.num_validators,
         config::VALIDATOR_REGISTRY_LIMIT,
     );
+    // Bound the REGISTRY length itself, not only the scalar count: the two are
+    // coupled by construction (`synthesize_state` debug-asserts it), but that
+    // assert compiles out in release — this is the release-mode enforcement.
+    // An empty registry is the accepted compat path (no pubkey manifest).
+    let registry_len = u64::try_from(state.validators.len())
+        .context("genesis state validator-registry length does not fit in u64")?;
+    ensure!(
+        registry_len <= chain_config.validator_registry_limit,
+        "genesis state registry holds {registry_len} validators, exceeding genesis config validator_registry_limit {}",
+        chain_config.validator_registry_limit,
+    );
+    ensure!(
+        registry_len == 0 || registry_len == state.config.num_validators,
+        "genesis state registry holds {registry_len} validators but num_validators is {}; a populated registry must match the scalar count",
+        state.config.num_validators,
+    );
     let historical_roots = u64::try_from(state.historical_block_hashes.len())
         .context("genesis state historical root count does not fit in u64")?;
     ensure!(
@@ -377,6 +393,45 @@ mod tests {
         let loaded = load_state(&path).expect("load state");
 
         assert_eq!(loaded, state);
+    }
+
+    #[test]
+    fn validate_state_limits_rejects_registry_scalar_mismatch() {
+        // A populated registry whose LENGTH disagrees with the scalar
+        // `num_validators` is refused in release builds — the release-mode
+        // counterpart of `synthesize_state`'s debug_assert.
+        let mut state = synthesize_state(4, dummy_registry(4), 1_700_000_000);
+        state.validators.pop(); // registry len 3, but num_validators stays 4
+        let err = validate_state_limits(&state, &ChainConfig::default())
+            .expect_err("registry/scalar mismatch must be refused");
+        assert!(
+            err.to_string().contains("must match the scalar count"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_state_limits_rejects_registry_over_limit() {
+        // The registry length itself is bounded, not only the scalar count:
+        // `num_validators` stays within the limit (scalar check passes) while
+        // the registry runs one past it, so the registry-length bound is what
+        // fires.
+        let mut state = synthesize_state(3, dummy_registry(3), 1_700_000_000);
+        state.validators.push(Validator {
+            pubkey: PublicKey::new([3u8; PublicKey::LEN]),
+            index: ValidatorIndex::new(3),
+        });
+        let chain_config = ChainConfig {
+            validator_registry_limit: 3,
+            ..ChainConfig::default()
+        };
+        let err = validate_state_limits(&state, &chain_config)
+            .expect_err("over-limit registry must be refused");
+        assert!(
+            err.to_string()
+                .contains("exceeding genesis config validator_registry_limit"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

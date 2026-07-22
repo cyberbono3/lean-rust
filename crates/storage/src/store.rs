@@ -2,7 +2,7 @@
 
 use protocol::{Checkpoint, SignedBlockWithAttestation, State, ValidatorIndex};
 use thiserror::Error;
-use types::{Bytes32, OtsKeyState};
+use types::{Bytes32, OtsWatermark};
 
 use crate::error::StorageError;
 
@@ -189,34 +189,36 @@ pub trait Store: Send + Sync {
     /// `Ok(None)` before the first `save_head` call.
     fn load_head(&self) -> Result<Option<HeadInfo>, StorageError>;
 
-    /// Persists the crypto-free OTS key-state `record` for `validator`.
+    /// Persists the crypto-free OTS `watermark` for `validator`.
     ///
     /// One record per validator: a later save overwrites the prior record for
     /// that same validator and leaves every other validator's record untouched.
-    /// The payload is a `types`-owned byte blob ([`OtsKeyState`]) — no adapter
-    /// links `crypto`, so this method never crosses the `storage`/`crypto`
-    /// boundary.
+    /// The payload is a `types`-owned byte blob ([`OtsWatermark`]) — a seed-free
+    /// commitment plus the `next_index` watermark, so NO key material ever
+    /// reaches the store (the seed stays in the operator's `0o600` secret file).
+    /// No adapter links `crypto`, so this method never crosses the
+    /// `storage`/`crypto` boundary.
     ///
     /// # Errors
     /// Backend-specific failures via [`StorageError`].
     fn save_ots_key_state(
         &self,
         validator: ValidatorIndex,
-        record: OtsKeyState,
+        watermark: OtsWatermark,
     ) -> Result<(), StorageError>;
 
-    /// Resolves the persisted OTS key-state for `validator`, or `Ok(None)` when
+    /// Resolves the persisted OTS watermark for `validator`, or `Ok(None)` when
     /// none was ever written (a fresh datadir — the normal first-boot path).
     ///
     /// Absent is not an error, mirroring [`Self::load_head`].
     ///
     /// # Errors
     /// Backend-specific failures via [`StorageError`], including a stored record
-    /// that fails [`OtsKeyState`] decode.
+    /// that fails [`OtsWatermark`] decode.
     fn load_ots_key_state(
         &self,
         validator: ValidatorIndex,
-    ) -> Result<Option<OtsKeyState>, StorageError>;
+    ) -> Result<Option<OtsWatermark>, StorageError>;
 }
 
 #[cfg(test)]
