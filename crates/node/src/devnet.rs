@@ -80,6 +80,18 @@ impl Default for StorageKind {
     }
 }
 
+impl StorageKind {
+    /// Whether the backend survives a process restart. A validating node
+    /// REQUIRES durability: the OTS one-time-key guard resumes its watermark
+    /// from the store on restart, and an in-memory store loses that watermark on
+    /// exit — resetting a restarted node to fresh-keygen state and re-enabling
+    /// one-time-key reuse. See the gate in [`new_devnet`].
+    #[must_use]
+    pub const fn is_durable(&self) -> bool {
+        matches!(self, Self::Persistent(_))
+    }
+}
+
 /// Devnet service wiring inputs.
 ///
 /// Existing runtime crates own validation for their domain-specific
@@ -183,6 +195,16 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     // single time here) and share it between the signer and the consensus-loop
     // proposer schedule.
     let (local_validators, total_validators) = resolve_local_validators(&duties)?;
+    // A validating node MUST run on a durable backend: the OTS guard resumes its
+    // one-time-key watermark from the store on restart, and the in-memory store
+    // loses that watermark on exit — a restarted node would reset to fresh-keygen
+    // state and re-enable one-time-key reuse (key disclosure). Refuse the unsafe
+    // combination at the composition root rather than signing into it silently.
+    // An observer (no local validators) never signs, so any backend is fine.
+    anyhow::ensure!(
+        local_validators.is_empty() || storage.is_durable(),
+        "a validating node requires a durable --storage-path: the in-memory backend loses the OTS watermark on restart, which would re-enable one-time-key reuse",
+    );
     // Build the local validator signer at the composition root. Observer node
     // (no local validators) → empty signer; validating node → load its own
     // secret keys (a configured validator with no key is a fatal misconfig),
@@ -474,6 +496,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn validating_node_on_memory_backend_is_refused() {
+        // The durability gate fires BEFORE any key load, so this needs no
+        // keygen: a validating node (local validators resolved from the duties
+        // YAML) on the in-memory backend is refused at the composition root,
+        // because a restart would lose the OTS watermark and re-enable reuse.
+        let identity_dir = tempfile::tempdir().unwrap();
+        let p2p = HostOptions::try_new(
+            "/ip4/127.0.0.1/udp/0/quic-v1",
+            "test/0.1.0",
+            &identity_dir.path().join("identity.pb"),
+            None,
+        )
+        .unwrap();
+        let duties = runtime::duties::Config::default()
+            .with_validators_path(validators_path())
+            .unwrap()
+            .with_genesis_time_unix(future_genesis());
+        let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
+        let config = Config {
+            node: NodeConfig::default(),
+            p2p,
+            duties,
+            http_addr: loopback(),
+            metrics_addr: loopback(),
+            genesis_state,
+            genesis_block,
+            storage: StorageKind::Memory,
+            // Never read: the gate rejects before the signer loads any key.
+            validator_secrets_dir: Some(identity_dir.path().join("secrets")),
+        };
+
+        // `let Err(..) else`: the Ok type (`Node`) is not `Debug`, so
+        // `expect_err` cannot be used.
+        let Err(err) = new_devnet(config) else {
+            panic!("validating node on memory must be refused");
+        };
+        assert!(
+            format!("{err:#}").contains("durable"),
+            "unexpected error: {err:#}"
+        );
+    }
+
     fn validators_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join(VALIDATORS_PATH)
     }
@@ -507,7 +572,11 @@ mod tests {
             metrics_addr: loopback(),
             genesis_state,
             genesis_block,
-            storage: StorageKind::Memory,
+            // A durable backend: `build_config` builds a VALIDATING node (ream
+            // secrets above), which `new_devnet` requires run on a persistent
+            // store so the OTS watermark survives a restart. The redb file lives
+            // under the persistent identity dir. The resume test overrides this.
+            storage: StorageKind::Persistent(identity_dir.join("store.redb")),
             validator_secrets_dir: Some(secrets_dir),
         }
     }

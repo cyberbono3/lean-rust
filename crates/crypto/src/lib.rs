@@ -67,6 +67,7 @@ pub(crate) mod verify;
 
 pub use error::CryptoError;
 pub use key_state::SigningKey;
+pub use record::seed_commitment;
 pub use scheme::{generate, ProdScheme, ProdSigningKey, SchemeWire, PROD_LIFETIME};
 pub use verify::verify;
 
@@ -87,4 +88,4 @@ pub use types::Signature;
 /// The crypto-free, persistable OTS key-state record and its decode error (SA5).
 /// Re-exported from `types` — consumers reach the record through this crate
 /// alongside the key types and the [`SigningKey::to_record`] / `from_record` pair.
-pub use types::{OtsKeyState, OtsKeyStateDecodeError};
+pub use types::{OtsKeyState, OtsKeyStateDecodeError, OtsWatermark};

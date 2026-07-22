@@ -7,9 +7,11 @@
 //! algorithm stay in `crypto`; the byte record stays in `types`; the durable KV
 //! stays in `storage`. This module owns only the persist-before-release
 //! ordering (sign → advance the index → persist the record → release the
-//! signature), keyed per validator index. The stronger reserve-before-sign
-//! ordering (persist the consumed index *before* the crypto sign) remains a
-//! later hardening — see the [`AttestationSigner`] impl on [`OtsSigner`].
+//! signature), keyed per validator index. Only the seed-free [`OtsWatermark`]
+//! is persisted, so key material never reaches the store. The stronger
+//! reserve-before-sign ordering (persist the consumed index *before* the crypto
+//! sign) remains a later hardening — see the [`AttestationSigner`] impl on
+//! [`OtsSigner`].
 //!
 //! Wiring: the composition root (`node::devnet`) constructs
 //! `OtsSigner::new(Box::new(local_signer), store)` and injects it as the chain
@@ -51,32 +53,32 @@ impl AttestationSigner for OtsSigner {
     /// production paths: the chain service holds the seam, the composition root
     /// injects [`OtsSigner`], and neither knows about persistence.
     ///
-    /// Order (shape-(a) baseline — see plan OQ6): the in-memory sign advances the
-    /// one-time index (and rejects reuse / backward via [`SignError`]); the
-    /// advanced record is then persisted; only on a successful persist is the
+    /// Order (persist-after-sign): the in-memory sign advances the one-time
+    /// index (and rejects reuse / backward via [`SignError`]); the advanced,
+    /// seed-free watermark is then persisted; only on a successful persist is the
     /// signature released. A persist failure returns [`SignError::Persist`] and
     /// no signature, so a crash-equivalent never leaks a used-but-unpersisted
     /// index.
     ///
     /// Later hardening (`NEEDS_VALIDATION`): reserve-before-sign — persist
-    /// `next_index = epoch + 1` before the crypto sign (plan OQ6 shape (b)).
+    /// `next_index = epoch + 1` before the crypto sign.
     ///
     /// # Errors
     /// - Any inner-sign failure, unchanged (reuse / backward / other).
-    /// - [`SignError::Persist`] if the advanced record cannot be persisted.
-    /// - [`SignError::UnknownValidator`] if the signer exposes no record
-    ///   post-sign (invariant violation: a loaded key must yield a record).
+    /// - [`SignError::Persist`] if the advanced watermark cannot be persisted.
+    /// - [`SignError::UnknownValidator`] if the signer exposes no watermark
+    ///   post-sign (invariant violation: a loaded key must yield one).
     fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
         let validator = att.validator_id;
         let signature = self.inner.sign_attestation(att)?;
-        let record = self
+        let watermark = self
             .inner
-            .record_for(validator)
+            .watermark_for(validator)
             .ok_or(SignError::UnknownValidator {
                 validator_id: validator.get(),
             })?;
         self.store
-            .save_ots_key_state(validator, record)
+            .save_ots_key_state(validator, watermark)
             .map_err(|source| SignError::Persist {
                 validator_id: validator.get(),
                 source,
@@ -96,15 +98,15 @@ mod tests {
     use parking_lot::Mutex;
     use protocol::{SignedBlockWithAttestation, State, ValidatorIndex};
     use storage::{HeadInfo, StorageError};
-    use types::{Bytes32, OtsKeyState};
+    use types::{Bytes32, OtsWatermark};
 
     /// In-test signer: advances a per-validator sign count (which drives the
-    /// exposed record's `next_index`) and optionally refuses a repeat sign to
+    /// exposed watermark's `next_index`) and optionally refuses a repeat sign to
     /// model one-time-key reuse. No `ProdScheme` keygen.
     struct FakeSigner {
         signed: BTreeMap<ValidatorIndex, u64>,
         reject_repeats: bool,
-        // When false, `record_for` returns `None` even after a successful sign —
+        // When false, `watermark_for` returns `None` even after a successful sign —
         // models the invariant-violation path guarded by `SignError::UnknownValidator`.
         expose_record: bool,
     }
@@ -128,8 +130,8 @@ mod tests {
             }
         }
 
-        /// Like [`Self::new`], but `record_for` returns `None` after a successful
-        /// sign — models the invariant violation guarded by
+        /// Like [`Self::new`], but `watermark_for` returns `None` after a
+        /// successful sign — models the invariant violation guarded by
         /// [`SignError::UnknownValidator`].
         fn without_record() -> Self {
             Self {
@@ -154,12 +156,12 @@ mod tests {
     }
 
     impl PersistableSigner for FakeSigner {
-        fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState> {
+        fn watermark_for(&self, validator: ValidatorIndex) -> Option<OtsWatermark> {
             if !self.expose_record {
                 return None;
             }
-            self.signed.get(&validator).map(|&n| OtsKeyState {
-                seed: [0u8; 32],
+            self.signed.get(&validator).map(|&n| OtsWatermark {
+                key_commitment: [0u8; 32],
                 // Exact window values are immaterial to these tests; `262_144` is
                 // 2^18, the resolved activation epoch, kept for realism.
                 activation_epoch: 262_144,
@@ -174,7 +176,7 @@ mod tests {
     /// (never exercised by these tests); `save_accepted` uses the trait default.
     #[derive(Default)]
     struct FakeStore {
-        ots: Mutex<BTreeMap<ValidatorIndex, OtsKeyState>>,
+        ots: Mutex<BTreeMap<ValidatorIndex, OtsWatermark>>,
         fail_save: bool,
     }
 
@@ -193,21 +195,21 @@ mod tests {
         fn save_ots_key_state(
             &self,
             validator: ValidatorIndex,
-            record: OtsKeyState,
+            watermark: OtsWatermark,
         ) -> Result<(), StorageError> {
             if self.fail_save {
                 return Err(StorageError::Backend {
                     message: "forced save failure".to_owned(),
                 });
             }
-            self.ots.lock().insert(validator, record);
+            self.ots.lock().insert(validator, watermark);
             Ok(())
         }
 
         fn load_ots_key_state(
             &self,
             validator: ValidatorIndex,
-        ) -> Result<Option<OtsKeyState>, StorageError> {
+        ) -> Result<Option<OtsWatermark>, StorageError> {
             Ok(self.ots.lock().get(&validator).cloned())
         }
 

@@ -49,19 +49,19 @@ pub fn run_store_contract<S: Store>(factory: impl Fn() -> S) {
     ots_key_state_overwrites_previous_record(&factory());
 }
 
-/// Builds a distinct `OtsKeyState` per `seed` byte so records are comparable.
+/// Builds a distinct `OtsWatermark` per `seed` byte so records are comparable.
 /// The exact window values are immaterial to the round-trip assertions;
 /// `262_144` is 2^18 (the resolved activation epoch), kept for realism.
-fn sample_ots_key_state(seed: u8) -> types::OtsKeyState {
-    types::OtsKeyState {
-        seed: [seed; 32],
+fn sample_ots_key_state(seed: u8) -> types::OtsWatermark {
+    types::OtsWatermark {
+        key_commitment: [seed; 32],
         activation_epoch: 262_144,
         num_active_epochs: 1_024,
         next_index: u64::from(seed),
     }
 }
 
-/// A saved OTS key-state loads back byte-identical for the same validator.
+/// A saved OTS watermark loads back byte-identical for the same validator.
 fn ots_key_state_round_trips(store: &impl Store) {
     let v = protocol::ValidatorIndex::new(3);
     let record = sample_ots_key_state(5);
@@ -298,15 +298,15 @@ impl Store for FailingStateStore {
     fn save_ots_key_state(
         &self,
         validator: protocol::ValidatorIndex,
-        record: types::OtsKeyState,
+        watermark: types::OtsWatermark,
     ) -> Result<(), storage::StorageError> {
-        self.inner.save_ots_key_state(validator, record)
+        self.inner.save_ots_key_state(validator, watermark)
     }
 
     fn load_ots_key_state(
         &self,
         validator: protocol::ValidatorIndex,
-    ) -> Result<Option<types::OtsKeyState>, storage::StorageError> {
+    ) -> Result<Option<types::OtsWatermark>, storage::StorageError> {
         self.inner.load_ots_key_state(validator)
     }
     // Uses the default `save_accepted` (block → state → head).

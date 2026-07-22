@@ -12,10 +12,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crypto::{CryptoError, OtsKeyState, OtsKeyStateDecodeError, ProdSigningKey};
+use crypto::{seed_commitment, CryptoError, OtsKeyState, OtsKeyStateDecodeError, ProdSigningKey};
 use protocol::{Attestation, ValidatorIndex};
 use storage::StorageError;
-use types::Signature;
+use types::{OtsWatermark, Signature};
 
 use crate::signing_domain::{attestation_signing_inputs, EpochOverflow};
 
@@ -146,7 +146,7 @@ pub trait AttestationSigner: Send {
     fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError>;
 }
 
-/// A signer whose one-time key state can be snapshotted for persistence.
+/// A signer whose one-time watermark can be snapshotted for persistence.
 ///
 /// The requirement the durable guard (`duties::ots_signer`) places on its INNER
 /// signer, split off [`AttestationSigner`] so the chain-facing seam stays
@@ -154,10 +154,11 @@ pub trait AttestationSigner: Send {
 /// be wrapped in the guard by accident — the guard would then sign but never
 /// persist a watermark.
 pub trait PersistableSigner: AttestationSigner {
-    /// Snapshots the crypto-free persistable record for `validator` after a
-    /// sign, or `None` if no key is loaded for it. Backed by
-    /// `crypto::SigningKey::to_record` in production ([`LocalSigner`]).
-    fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState>;
+    /// Snapshots the crypto-free, **seed-free** [`OtsWatermark`] for `validator`
+    /// after a sign, or `None` if no key is loaded for it. Backed by
+    /// `crypto::SigningKey::to_watermark` in production ([`LocalSigner`]); the
+    /// guard persists it, so no key material reaches the store.
+    fn watermark_for(&self, validator: ValidatorIndex) -> Option<OtsWatermark>;
 }
 
 /// Holds the local validators' live signing keys, keyed by index.
@@ -274,29 +275,38 @@ fn read_secret_record(
         .map_err(|source| SignerLoadError::KeyStateDecode { index: idx, source })
 }
 
-/// Picks the record to resume from: the further-advanced of the on-disk secret
-/// record and the store-persisted one.
+/// Merges the on-disk secret record with the store-persisted watermark, keeping
+/// the seed from the file and the further-advanced `next_index`.
 ///
-/// Both records must describe the SAME key (equal seed and activation window);
-/// otherwise the merge is refused loudly — silently preferring either side of a
-/// mismatched pair risks resurrecting a stale key or rewinding a watermark.
-/// With no stored record (first boot, or an in-memory store), the file record
-/// stands alone.
+/// The seed lives ONLY in the file record; the store holds a seed-free
+/// [`OtsWatermark`]. The two must describe the SAME key — the file seed's
+/// [`seed_commitment`] must equal the stored commitment, and the activation
+/// windows must agree — otherwise the merge is refused loudly, since silently
+/// preferring either side of a mismatched pair risks resurrecting a stale key or
+/// rewinding a watermark. The returned record always carries the FILE seed (so
+/// `from_record` regenerates the real key) with `next_index` advanced to the
+/// higher of the two watermarks: fail-safe in both directions — worst case it
+/// skips unused leaves, it never reuses one. With no stored watermark (first
+/// boot, or an in-memory store), the file record stands alone.
 fn resolve_record(
     index: ValidatorIndex,
     file: OtsKeyState,
-    stored: Option<OtsKeyState>,
+    stored: Option<OtsWatermark>,
 ) -> Result<OtsKeyState, SignerLoadError> {
     let Some(stored) = stored else {
         return Ok(file);
     };
-    if !stored.same_key(&file) {
+    let same_key = stored.identifies(
+        &seed_commitment(file.seed),
+        file.activation_epoch,
+        file.num_active_epochs,
+    );
+    if !same_key {
         return Err(SignerLoadError::KeyStateMismatch { index: index.get() });
     }
-    Ok(if stored.next_index > file.next_index {
-        stored
-    } else {
-        file
+    Ok(OtsKeyState {
+        next_index: file.next_index.max(stored.next_index),
+        ..file
     })
 }
 
@@ -333,11 +343,11 @@ impl AttestationSigner for LocalSigner {
 }
 
 impl PersistableSigner for LocalSigner {
-    /// Exposes the persistable record for `validator` — the durable-guard seam
+    /// Exposes the seed-free watermark for `validator` — the durable-guard seam
     /// (`duties::ots_signer`) snapshots this after each sign to persist the
-    /// advanced watermark.
-    fn record_for(&self, validator: ValidatorIndex) -> Option<OtsKeyState> {
-        self.keys.get(&validator).map(ProdSigningKey::to_record)
+    /// advanced watermark without ever writing key material to the store.
+    fn watermark_for(&self, validator: ValidatorIndex) -> Option<OtsWatermark> {
+        self.keys.get(&validator).map(ProdSigningKey::to_watermark)
     }
 }
 
@@ -461,10 +471,24 @@ mod tests {
     mod resolve_record {
         use super::super::resolve_record;
         use super::*;
+        use crypto::seed_commitment;
+        use types::OtsWatermark;
 
+        /// A file (secret) record — carries the raw seed.
         fn record(seed_byte: u8, next_index: u64) -> OtsKeyState {
             OtsKeyState {
                 seed: [seed_byte; 32],
+                activation_epoch: 0,
+                num_active_epochs: 1_024,
+                next_index,
+            }
+        }
+
+        /// A stored watermark for the key generated from `[seed_byte; 32]`
+        /// (its commitment), matching `record`'s window.
+        fn watermark(seed_byte: u8, next_index: u64) -> OtsWatermark {
+            OtsWatermark {
+                key_commitment: seed_commitment([seed_byte; 32]),
                 activation_epoch: 0,
                 num_active_epochs: 1_024,
                 next_index,
@@ -482,31 +506,33 @@ mod tests {
             // The restart case: the file is frozen at keygen (0), the store
             // carries the advance. Resuming from the store is what prevents
             // one-time-key reuse.
-            let got =
-                resolve_record(ValidatorIndex::new(0), record(1, 0), Some(record(1, 5))).unwrap();
+            let got = resolve_record(ValidatorIndex::new(0), record(1, 0), Some(watermark(1, 5)))
+                .unwrap();
             assert_eq!(got.next_index, 5);
+            // The regenerated key uses the FILE seed, never the store's bytes.
+            assert_eq!(got.seed, [1u8; 32]);
         }
 
         #[test]
         fn file_ahead_of_stored_wins() {
             // Symmetric: never rewind, whichever side is behind.
-            let got =
-                resolve_record(ValidatorIndex::new(0), record(1, 7), Some(record(1, 3))).unwrap();
+            let got = resolve_record(ValidatorIndex::new(0), record(1, 7), Some(watermark(1, 3)))
+                .unwrap();
             assert_eq!(got.next_index, 7);
         }
 
         #[test]
         fn equal_watermarks_are_fine() {
-            let got =
-                resolve_record(ValidatorIndex::new(0), record(1, 4), Some(record(1, 4))).unwrap();
+            let got = resolve_record(ValidatorIndex::new(0), record(1, 4), Some(watermark(1, 4)))
+                .unwrap();
             assert_eq!(got.next_index, 4);
         }
 
         #[test]
         fn seed_mismatch_is_refused() {
-            // A stored record from a DIFFERENT key (rotated seed) must not be
-            // merged — fail loud, never silently pick a side.
-            let err = resolve_record(ValidatorIndex::new(3), record(1, 0), Some(record(2, 5)))
+            // A stored watermark from a DIFFERENT key (rotated seed → different
+            // commitment) must not be merged — fail loud, never silently pick a side.
+            let err = resolve_record(ValidatorIndex::new(3), record(1, 0), Some(watermark(2, 5)))
                 .unwrap_err();
             assert!(matches!(
                 err,
@@ -516,7 +542,7 @@ mod tests {
 
         #[test]
         fn window_mismatch_is_refused() {
-            let mut stored = record(1, 5);
+            let mut stored = watermark(1, 5);
             stored.num_active_epochs = 2_048;
             let err =
                 resolve_record(ValidatorIndex::new(0), record(1, 0), Some(stored)).unwrap_err();

@@ -60,6 +60,7 @@ pub mod byte_arrays;
 pub mod bytes;
 pub mod error;
 pub mod ots_key_state;
+pub mod ots_watermark;
 pub mod uint;
 
 pub use basispt::{BasisPoint, MAX_BASIS_POINT};
@@ -69,4 +70,5 @@ pub use byte_arrays::{ByteVector, Bytes32, PublicKey, Signature};
 pub use bytes::{ByteList, ByteListLimit};
 pub use error::TypesError;
 pub use ots_key_state::{OtsKeyState, OtsKeyStateDecodeError, OTS_KEY_STATE_SSZ_LEN};
+pub use ots_watermark::{OtsWatermark, OtsWatermarkDecodeError, OTS_WATERMARK_SSZ_LEN};
 pub use uint::{decode_u16_le, decode_u32_le, decode_u64_le, decode_u8_le, U128, U256};

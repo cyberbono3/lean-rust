@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 
 use protocol::{Checkpoint, SignedBlockWithAttestation, State, ValidatorIndex};
 use redb::{Database, TableDefinition};
-use types::{Bytes32, OtsKeyState};
+use types::{Bytes32, OtsWatermark};
 
 use crate::error::StorageError;
 use crate::store::{HeadInfo, Store};
@@ -27,7 +27,7 @@ const BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 const STATES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("states");
 /// Singleton canonical-head record: `HEAD_KEY -> SSZ(head) ++ SSZ(finalized)`.
 const HEAD: TableDefinition<&[u8], &[u8]> = TableDefinition::new("head");
-/// Per-validator OTS key-state: `ValidatorIndex -> OtsKeyState::to_ssz_bytes()`.
+/// Per-validator OTS watermark: `ValidatorIndex -> OtsWatermark::to_ssz_bytes()`.
 /// One row per validator (keyed by the `u64` index), NOT a single fixed key.
 const OTS_KEY_STATE: TableDefinition<u64, &[u8]> = TableDefinition::new("ots_key_state");
 
@@ -266,12 +266,12 @@ impl Store for RedbStore {
     fn save_ots_key_state(
         &self,
         validator: ValidatorIndex,
-        record: OtsKeyState,
+        watermark: OtsWatermark,
     ) -> Result<(), StorageError> {
-        // `OtsKeyState` is not an `ssz`-derive type; its bytes come from the
+        // `OtsWatermark` is not an `ssz`-derive type; its bytes come from the
         // record's own fixed-width codec, NOT the `ssz::encode` path used for
         // blocks/states.
-        let bytes = record.to_ssz_bytes();
+        let bytes = watermark.to_ssz_bytes();
         self.in_write_txn(|txn| {
             let mut table = txn.open_table(OTS_KEY_STATE).map_err(backend)?;
             table
@@ -284,15 +284,15 @@ impl Store for RedbStore {
     fn load_ots_key_state(
         &self,
         validator: ValidatorIndex,
-    ) -> Result<Option<OtsKeyState>, StorageError> {
+    ) -> Result<Option<OtsWatermark>, StorageError> {
         self.in_read_txn(|txn| {
             let table = txn.open_table(OTS_KEY_STATE).map_err(backend)?;
             match table.get(validator.get()).map_err(backend)? {
-                // `backend` maps any Display error — including OtsKeyStateDecodeError
+                // `backend` maps any Display error — including OtsWatermarkDecodeError
                 // — to StorageError::Backend, matching how decode_head surfaces a
                 // corrupt on-disk record.
                 Some(guard) => Ok(Some(
-                    OtsKeyState::from_ssz_bytes(guard.value()).map_err(backend)?,
+                    OtsWatermark::from_ssz_bytes(guard.value()).map_err(backend)?,
                 )),
                 None => Ok(None),
             }

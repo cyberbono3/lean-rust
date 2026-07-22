@@ -70,18 +70,6 @@ pub enum OtsKeyStateDecodeError {
 }
 
 impl OtsKeyState {
-    /// True when `other` describes the SAME one-time key: equal seed and
-    /// activation window. The `next_index` watermark is deliberately excluded —
-    /// two snapshots of one key differ only there. Callers merging records
-    /// (e.g. the runtime's resume-from-store loader) use this to refuse a merge
-    /// across different keys.
-    #[must_use]
-    pub fn same_key(&self, other: &Self) -> bool {
-        self.seed == other.seed
-            && self.activation_epoch == other.activation_epoch
-            && self.num_active_epochs == other.num_active_epochs
-    }
-
     /// Encodes to the fixed SSZ container layout:
     /// `seed || activation_epoch || num_active_epochs || next_index`, each
     /// integer little-endian.
@@ -161,31 +149,6 @@ mod tests {
                 actual: 10,
             }
         );
-    }
-
-    #[test]
-    fn same_key_ignores_watermark() {
-        let a = sample();
-        let mut b = sample();
-        b.next_index = a.next_index + 40;
-        assert!(a.same_key(&b), "watermark must not affect key identity");
-    }
-
-    #[test]
-    fn same_key_rejects_identity_mismatch() {
-        let a = sample();
-
-        let mut seed_differs = sample();
-        seed_differs.seed = [8u8; 32];
-        assert!(!a.same_key(&seed_differs));
-
-        let mut activation_differs = sample();
-        activation_differs.activation_epoch += 1;
-        assert!(!a.same_key(&activation_differs));
-
-        let mut window_differs = sample();
-        window_differs.num_active_epochs += 1;
-        assert!(!a.same_key(&window_differs));
     }
 
     #[test]
