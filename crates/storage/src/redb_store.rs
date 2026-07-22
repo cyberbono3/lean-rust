@@ -19,7 +19,7 @@ use redb::{Database, TableDefinition};
 use types::{Bytes32, OtsWatermark};
 
 use crate::error::StorageError;
-use crate::store::{HeadInfo, Store};
+use crate::store::{HeadInfo, Store, WatermarkStore};
 
 /// `root -> SSZ(SignedBlockWithAttestation)`.
 const BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
@@ -262,7 +262,9 @@ impl Store for RedbStore {
             None => Ok(None),
         }
     }
+}
 
+impl WatermarkStore for RedbStore {
     fn save_ots_key_state(
         &self,
         validator: ValidatorIndex,

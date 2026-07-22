@@ -12,7 +12,7 @@ use protocol::{SignedBlockWithAttestation, State, ValidatorIndex};
 use types::{Bytes32, OtsWatermark};
 
 use crate::error::StorageError;
-use crate::store::{HeadInfo, Store};
+use crate::store::{HeadInfo, Store, WatermarkStore};
 
 /// In-memory persistence adapter. Construct with [`Self::new`] or
 /// [`Default::default`]; share across services via `Arc<MemoryStore>` or
@@ -106,7 +106,9 @@ impl Store for MemoryStore {
     fn load_head(&self) -> Result<Option<HeadInfo>, StorageError> {
         Ok(self.inner.read().head)
     }
+}
 
+impl WatermarkStore for MemoryStore {
     fn save_ots_key_state(
         &self,
         validator: ValidatorIndex,

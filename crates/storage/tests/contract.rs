@@ -295,6 +295,10 @@ impl Store for FailingStateStore {
         self.inner.load_head()
     }
 
+    // Uses the default `save_accepted` (block → state → head).
+}
+
+impl storage::WatermarkStore for FailingStateStore {
     fn save_ots_key_state(
         &self,
         validator: protocol::ValidatorIndex,
@@ -309,7 +313,6 @@ impl Store for FailingStateStore {
     ) -> Result<Option<types::OtsWatermark>, storage::StorageError> {
         self.inner.load_ots_key_state(validator)
     }
-    // Uses the default `save_accepted` (block → state → head).
 }
 
 #[test]

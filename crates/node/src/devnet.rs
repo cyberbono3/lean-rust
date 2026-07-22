@@ -16,7 +16,7 @@ use runtime::core::{Node, NodeConfig};
 use runtime::duties::{LocalSigner, OtsSigner};
 use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
-use storage::{HeadInfo, MemoryStore, RedbStore, Store};
+use storage::{HeadInfo, MemoryStore, RedbStore, Store, WatermarkStore};
 use types::Bytes32;
 
 use crate::consensus_loop::{resolve_local_validators, ConsensusLoop};
@@ -53,7 +53,7 @@ pub type Result<T> = anyhow::Result<T>;
 fn build_local_signer(
     local: &[ValidatorIndex],
     secrets_dir: Option<&Path>,
-    store: &dyn Store,
+    store: &dyn WatermarkStore,
 ) -> Result<LocalSigner> {
     if local.is_empty() {
         return Ok(LocalSigner::empty());
@@ -218,7 +218,9 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     )?;
     let signer = Arc::new(Mutex::new(OtsSigner::new(
         Box::new(local_signer),
-        Arc::clone(&store),
+        // Upcast to the narrow watermark seam the guard consumes (ISP): the
+        // guard never needs the chain-store surface.
+        Arc::clone(&store) as Arc<dyn WatermarkStore>,
     )));
     let chain = Arc::new(ChainService::with_signer(
         engine.with_metrics(chain_metrics),
