@@ -156,41 +156,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     let mut recorder = Recorder::new();
     let chain_metrics = register_chain_histograms(&mut recorder)?;
 
-    // Restart-continue: if the store already holds a head (persistent backend,
-    // prior run), re-anchor the engine there and skip re-persisting the anchor.
-    // Otherwise anchor at genesis and seed the store as before.
-    let engine = if let Some((head_root, state, block)) = resume_anchor(store.as_ref())? {
-        // Resume: trust the persisted head as its own justified+finalized anchor
-        // so the fork-choice head walk starts from a tracked root. Plain
-        // `from_anchor` would seed justified from the state (an ancestor absent
-        // from the anchor-only block map) and break the first head recompute.
-        let engine = runtime::chain::engine::Engine::from_trusted_head(state, block)?;
-        // Defense-in-depth: `from_trusted_head` re-derives the anchor root from
-        // the block, so a corrupt/tampered store whose head-keyed block roots
-        // elsewhere would silently anchor at a different block than `load_head`
-        // reported. Refuse to resume from such an inconsistent on-disk view.
-        anyhow::ensure!(
-            engine.head() == head_root,
-            "persisted head block does not root to the recorded head; refusing to resume from an inconsistent store",
-        );
-        engine
-    } else {
-        let anchor_slot = genesis_block.slot;
-        let anchor_state = genesis_state.clone();
-        let signed_anchor = signed_block_envelope(genesis_block.clone());
-        let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
-        let anchor_root = engine.head();
-        let finalized = engine.latest_finalized();
-        persist_anchor(
-            store.as_ref(),
-            anchor_root,
-            anchor_slot,
-            finalized,
-            signed_anchor,
-            anchor_state,
-        )?;
-        engine
-    };
+    let engine = build_engine(store.as_ref(), genesis_state, genesis_block)?;
     // Resolve this node's local validator set ONCE (the assignment YAML is read a
     // single time here) and share it between the signer and the consensus-loop
     // proposer schedule.
@@ -345,6 +311,51 @@ fn register_chain_histograms(recorder: &mut Recorder) -> Result<ChainMetrics> {
         fork_choice_block_processing,
         state_transition,
     ))
+}
+
+/// Builds the fork-choice engine: resumes from the store's persisted head when
+/// one exists (persistent backend, prior run), otherwise anchors at genesis and
+/// seeds the store with the anchor.
+///
+/// Extracted from [`new_devnet`] so the composition root stays the flat wiring
+/// list its doc claims; this owns the resume-vs-genesis branch and its two
+/// store-consistency safety checks.
+fn build_engine(
+    store: &dyn Store,
+    genesis_state: State,
+    genesis_block: Block,
+) -> Result<runtime::chain::engine::Engine> {
+    if let Some((head_root, state, block)) = resume_anchor(store)? {
+        // Resume: trust the persisted head as its own justified+finalized anchor
+        // so the fork-choice head walk starts from a tracked root. Plain
+        // `from_anchor` would seed justified from the state (an ancestor absent
+        // from the anchor-only block map) and break the first head recompute.
+        let engine = runtime::chain::engine::Engine::from_trusted_head(state, block)?;
+        // Defense-in-depth: `from_trusted_head` re-derives the anchor root from
+        // the block, so a corrupt/tampered store whose head-keyed block roots
+        // elsewhere would silently anchor at a different block than `load_head`
+        // reported. Refuse to resume from such an inconsistent on-disk view.
+        anyhow::ensure!(
+            engine.head() == head_root,
+            "persisted head block does not root to the recorded head; refusing to resume from an inconsistent store",
+        );
+        return Ok(engine);
+    }
+    let anchor_slot = genesis_block.slot;
+    let anchor_state = genesis_state.clone();
+    let signed_anchor = signed_block_envelope(genesis_block.clone());
+    let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
+    let anchor_root = engine.head();
+    let finalized = engine.latest_finalized();
+    persist_anchor(
+        store,
+        anchor_root,
+        anchor_slot,
+        finalized,
+        signed_anchor,
+        anchor_state,
+    )?;
+    Ok(engine)
 }
 
 /// Builds the selected `Store` backend as an `Arc<dyn Store>`.
