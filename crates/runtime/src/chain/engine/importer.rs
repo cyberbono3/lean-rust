@@ -142,22 +142,23 @@ impl Engine {
 
         // Cheapest structural reject FIRST — the O(1) over-cap gate needs no parent
         // state, so it precedes the deep parent-state clone below (and any verify).
-        // Runs regardless of verifier presence (the active-today untrusted-peer bound);
-        // read-only, before any mutation, so a rejection leaves the store byte-equal.
-        if policy.enforces() {
-            if let Err(e) = pre_check_over_cap(
-                &signed_block.signature,
-                &signed_block.message.block.body.attestations,
-            ) {
-                return (
-                    BlockImportResult::Rejected {
-                        block_root,
-                        parent_root,
-                        error: EngineError::Verify(e),
-                    },
-                    None,
-                );
-            }
+        // Runs on EVERY import policy, not only `Enforce`: it is verifier-independent
+        // defense-in-depth, and the sync-backfill entry must not become the one
+        // ingress that skips it (the policy gates only the expensive signature
+        // verify below). Read-only, before any mutation, so a rejection leaves the
+        // store byte-equal.
+        if let Err(e) = pre_check_over_cap(
+            &signed_block.signature,
+            &signed_block.message.block.body.attestations,
+        ) {
+            return (
+                BlockImportResult::Rejected {
+                    block_root,
+                    parent_root,
+                    error: EngineError::Verify(e),
+                },
+                None,
+            );
         }
 
         // Deep-clone the parent post-state: the state transition mutates an
@@ -686,6 +687,30 @@ mod tests {
         let (outcome, _plan) = importer.import_block_synced_capturing(signed);
         assert!(matches!(outcome, BlockImportResult::Accepted { .. }));
         assert_eq!(fake.call_count(), 0);
+    }
+
+    #[test]
+    fn import_block_synced_rejects_over_cap() {
+        // The synced entry skips only the SIGNATURE verify — the O(1) over-cap
+        // structural bound runs on every import policy, so the sync-backfill
+        // ingress is not the one path an over-cap block can slip through.
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
+        let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        signed.signature = sigs(MAX_ATTESTATIONS + 1);
+
+        let importer = engine_at_genesis(ENGINE_VALIDATORS);
+        let before = StoreSnapshot::capture(&importer);
+
+        let (outcome, plan) = importer.import_block_synced_capturing(signed);
+        assert!(matches!(
+            outcome,
+            BlockImportResult::Rejected {
+                error: EngineError::Verify(VerifyError::OverCap { .. }),
+                ..
+            }
+        ));
+        assert!(plan.is_none());
+        assert_eq!(StoreSnapshot::capture(&importer), before);
     }
 
     #[test]

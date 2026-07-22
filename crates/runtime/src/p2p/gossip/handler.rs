@@ -142,11 +142,20 @@ pub(crate) fn route_gossipsub_message(
     }
 }
 
-/// Decodes one gossip payload and forwards it to `tx`, subject to the per-peer
-/// admission bound. Decode failures are dropped (`warn`); a payload from a peer already
-/// at its in-flight cap is dropped before enqueue; the admitted [`AdmitGuard`] rides the
-/// channel with the payload and releases the peer's slot when the consumer drops it
-/// (also released here if the channel is full and the `try_send` fails).
+/// Admits, then decodes, then forwards one gossip payload to `tx`.
+///
+/// Per-peer admission runs BEFORE the decode: the decode work (SSZ, plus snappy
+/// on the cache-miss fallback) is the very cost the bound exists to protect, so
+/// a peer at its in-flight cap has its excess dropped before any of it is spent
+/// (mesh replay covers legitimate loss). The [`AdmitGuard`] is RAII: it releases
+/// the peer's slot automatically on every early return — decode failure, full
+/// channel — and otherwise rides the channel with the payload until the consumer
+/// drops it.
+///
+/// Bound scope, honestly: the snappy decompression performed inside
+/// `gossipsub_message_id` (which populates `cached_decompressed`) happens
+/// upstream in gossipsub before this router runs and cannot be gated here; the
+/// admission bound covers the SSZ decode and the full snappy+SSZ fallback.
 fn forward<T>(
     peer: &PeerId,
     admission: &Arc<PeerAdmission>,
@@ -157,6 +166,11 @@ fn forward<T>(
 ) where
     T: Decode,
 {
+    // Admission FIRST — before any decode work is spent on this peer's payload.
+    let Some(guard) = admission.try_admit(peer) else {
+        warn!(%peer, kind, "peer inbound cap reached; dropping message");
+        return;
+    };
     let decoded: Result<T, NetworkingError> = match cached_decompressed {
         // Cache hit: snappy already done by `gossipsub_message_id`.
         Some(bytes) => ssz::decode(bytes).map_err(Into::into),
@@ -166,15 +180,10 @@ fn forward<T>(
     let value = match decoded {
         Ok(value) => value,
         Err(err) => {
+            // `guard` drops here → the slot is released immediately.
             warn!(%err, kind, "gossip decode failed");
             return;
         }
-    };
-    // Per-peer admission BEFORE enqueue — a peer at its cap has its excess dropped
-    // (mesh replay covers legitimate loss), bounding its share of the ingress.
-    let Some(guard) = admission.try_admit(peer) else {
-        warn!(%peer, kind, "peer inbound cap reached; dropping message");
-        return;
     };
     // On a full channel the guard drops here → the slot is released; the message never
     // entered the queue.

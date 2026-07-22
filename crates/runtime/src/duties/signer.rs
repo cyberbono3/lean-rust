@@ -69,7 +69,7 @@ pub enum SignerLoadError {
     },
     /// The durable store could not be read while resuming the one-time-key
     /// watermark ([`LocalSigner::load_resuming`]).
-    #[error("load persisted OTS key-state for validator {index}")]
+    #[error("load persisted OTS watermark for validator {index}")]
     KeyStateLoad {
         /// Validator index whose persisted record could not be read.
         index: u64,
@@ -117,7 +117,7 @@ pub enum SignError {
     /// watermark HAS advanced, so re-signing the same epoch in-process surfaces
     /// [`CryptoError::EpochReused`], not a fresh signature; recovery is a restart
     /// + `load_resuming`, which resumes the older durable watermark.
-    #[error("persist OTS key-state for validator {validator_id}")]
+    #[error("persist OTS watermark for validator {validator_id}")]
     Persist {
         /// Validator whose advanced record could not be persisted.
         validator_id: u64,
