@@ -184,9 +184,12 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     )?;
     let signer = Arc::new(Mutex::new(OtsSigner::new(
         Box::new(local_signer),
-        // Upcast to the narrow watermark seam the guard consumes (ISP): the
-        // guard never needs the chain-store surface.
-        Arc::clone(&store) as Arc<dyn WatermarkStore>,
+        // Method-call clone (not `Arc::clone(&store)`): the parameter type is
+        // `Arc<dyn WatermarkStore>`, and the UFCS form lets that expectation
+        // drive `T` inference into a dead end before the supertrait upcast can
+        // apply; receiver syntax pins `T = dyn Store` first, and the upcast
+        // coercion to the narrow watermark seam (ISP) then fires implicitly.
+        store.clone(),
     )));
     let chain = Arc::new(ChainService::with_signer(
         engine.with_metrics(chain_metrics),
