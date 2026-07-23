@@ -1,11 +1,12 @@
 //! Durable one-time-signature guard at the runtime sign boundary (Part 15).
 //!
 //! [`OtsSigner`] wraps the local signer behind the [`AttestationSigner`] seam
-//! and persists each validator's advanced watermark through [`storage::Store`]
-//! before a signature is released, so an OTS leaf is never signed twice across
-//! a restart or a self-sync. The in-memory monotonic guard and the leanSig
-//! algorithm stay in `crypto`; the byte record stays in `types`; the durable KV
-//! stays in `storage`. This module owns only the persist-before-release
+//! and persists each validator's advanced watermark through the narrow
+//! [`storage::WatermarkStore`] seam (the guard never touches the full
+//! `storage::Store` surface) before a signature is released, so an OTS leaf is
+//! never signed twice across a restart or a self-sync. The in-memory monotonic
+//! guard and the leanSig algorithm stay in `crypto`; the byte record stays in
+//! `types`; the durable KV stays in `storage`. This module owns only the persist-before-release
 //! ordering (sign → advance the index → persist the record → release the
 //! signature), keyed per validator index. Only the seed-free [`OtsWatermark`]
 //! is persisted, so key material never reaches the store. The stronger
