@@ -1,11 +1,12 @@
 //! Durable one-time-signature guard at the runtime sign boundary (Part 15).
 //!
 //! [`OtsSigner`] wraps the local signer behind the [`AttestationSigner`] seam
-//! and persists each validator's advanced watermark through [`storage::Store`]
-//! before a signature is released, so an OTS leaf is never signed twice across
-//! a restart or a self-sync. The in-memory monotonic guard and the leanSig
-//! algorithm stay in `crypto`; the byte record stays in `types`; the durable KV
-//! stays in `storage`. This module owns only the persist-before-release
+//! and persists each validator's advanced watermark through the narrow
+//! [`storage::WatermarkStore`] seam (the guard never touches the full
+//! `storage::Store` surface) before a signature is released, so an OTS leaf is
+//! never signed twice across a restart or a self-sync. The in-memory monotonic
+//! guard and the leanSig algorithm stay in `crypto`; the byte record stays in
+//! `types`; the durable KV stays in `storage`. This module owns only the persist-before-release
 //! ordering (sign → advance the index → persist the record → release the
 //! signature), keyed per validator index. Only the seed-free [`OtsWatermark`]
 //! is persisted, so key material never reaches the store. The stronger
@@ -23,7 +24,7 @@
 use std::sync::Arc;
 
 use protocol::Attestation;
-use storage::Store;
+use storage::WatermarkStore;
 use types::Signature;
 
 use super::signer::{AttestationSigner, PersistableSigner, SignError};
@@ -33,7 +34,7 @@ use super::signer::{AttestationSigner, PersistableSigner, SignError};
 /// signer and the durable store; keyed per validator index via the record home.
 pub struct OtsSigner {
     inner: Box<dyn PersistableSigner>,
-    store: Arc<dyn Store>,
+    store: Arc<dyn WatermarkStore>,
 }
 
 impl OtsSigner {
@@ -42,7 +43,7 @@ impl OtsSigner {
     /// signer with no persistable key state cannot be wrapped, so the guard can
     /// never sign without a watermark to persist.
     #[must_use]
-    pub fn new(inner: Box<dyn PersistableSigner>, store: Arc<dyn Store>) -> Self {
+    pub fn new(inner: Box<dyn PersistableSigner>, store: Arc<dyn WatermarkStore>) -> Self {
         Self { inner, store }
     }
 }
@@ -96,9 +97,9 @@ mod tests {
 
     use crypto::CryptoError;
     use parking_lot::Mutex;
-    use protocol::{SignedBlockWithAttestation, State, ValidatorIndex};
-    use storage::{HeadInfo, StorageError};
-    use types::{Bytes32, OtsWatermark};
+    use protocol::ValidatorIndex;
+    use storage::StorageError;
+    use types::OtsWatermark;
 
     /// In-test signer: advances a per-validator sign count (which drives the
     /// exposed watermark's `next_index`) and optionally refuses a repeat sign to
@@ -171,9 +172,9 @@ mod tests {
         }
     }
 
-    /// In-test store: a real per-validator OTS map plus a `fail_save` switch to
-    /// model a persistence failure. Every other `Store` method is a trivial stub
-    /// (never exercised by these tests); `save_accepted` uses the trait default.
+    /// In-test store: a real per-validator OTS map plus fail switches to model
+    /// persistence failures. Implements only the narrow [`WatermarkStore`] seam
+    /// the guard consumes — no chain-store stubs needed.
     #[derive(Default)]
     struct FakeStore {
         ots: Mutex<BTreeMap<ValidatorIndex, OtsWatermark>>,
@@ -201,7 +202,7 @@ mod tests {
         }
     }
 
-    impl Store for FakeStore {
+    impl WatermarkStore for FakeStore {
         fn save_ots_key_state(
             &self,
             validator: ValidatorIndex,
@@ -227,38 +228,6 @@ mod tests {
             }
             Ok(self.ots.lock().get(&validator).cloned())
         }
-
-        fn save_block(
-            &self,
-            _root: Bytes32,
-            _block: SignedBlockWithAttestation,
-        ) -> Result<(), StorageError> {
-            Ok(())
-        }
-        fn save_state(&self, _root: Bytes32, _state: State) -> Result<(), StorageError> {
-            Ok(())
-        }
-        fn save_head(&self, _info: HeadInfo) -> Result<(), StorageError> {
-            Ok(())
-        }
-        fn has_block(&self, _root: &Bytes32) -> Result<bool, StorageError> {
-            Ok(false)
-        }
-        fn has_state(&self, _root: &Bytes32) -> Result<bool, StorageError> {
-            Ok(false)
-        }
-        fn load_block(
-            &self,
-            _root: &Bytes32,
-        ) -> Result<Option<SignedBlockWithAttestation>, StorageError> {
-            Ok(None)
-        }
-        fn load_state(&self, _root: &Bytes32) -> Result<Option<State>, StorageError> {
-            Ok(None)
-        }
-        fn load_head(&self) -> Result<Option<HeadInfo>, StorageError> {
-            Ok(None)
-        }
     }
 
     /// A default attestation tagged with `validator` — the guard only reads
@@ -275,7 +244,7 @@ mod tests {
         let store = Arc::new(FakeStore::default());
         let mut signer = OtsSigner::new(
             Box::new(FakeSigner::new()),
-            Arc::clone(&store) as Arc<dyn Store>,
+            Arc::clone(&store) as Arc<dyn WatermarkStore>,
         );
 
         let sig = signer.sign_attestation(&attestation(0)).unwrap();
@@ -295,7 +264,7 @@ mod tests {
         let store = Arc::new(FakeStore::failing());
         let mut signer = OtsSigner::new(
             Box::new(FakeSigner::new()),
-            Arc::clone(&store) as Arc<dyn Store>,
+            Arc::clone(&store) as Arc<dyn WatermarkStore>,
         );
 
         // A crash-equivalent: the in-memory index advanced, but persistence
@@ -321,7 +290,7 @@ mod tests {
         let store = Arc::new(FakeStore::default());
         let mut signer = OtsSigner::new(
             Box::new(FakeSigner::without_record()),
-            Arc::clone(&store) as Arc<dyn Store>,
+            Arc::clone(&store) as Arc<dyn WatermarkStore>,
         );
 
         // Fail-closed: a signer that produces a signature but exposes no record
@@ -343,7 +312,7 @@ mod tests {
         let store = Arc::new(FakeStore::default());
         let mut signer = OtsSigner::new(
             Box::new(FakeSigner::reject_repeats()),
-            Arc::clone(&store) as Arc<dyn Store>,
+            Arc::clone(&store) as Arc<dyn WatermarkStore>,
         );
 
         signer.sign_attestation(&attestation(0)).unwrap();
@@ -366,7 +335,7 @@ mod tests {
         let store = Arc::new(FakeStore::default());
         let mut signer = OtsSigner::new(
             Box::new(FakeSigner::new()),
-            Arc::clone(&store) as Arc<dyn Store>,
+            Arc::clone(&store) as Arc<dyn WatermarkStore>,
         );
 
         signer.sign_attestation(&attestation(0)).unwrap();
@@ -434,7 +403,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let _ = write_validator_secrets(dir.path(), &[0], MIN_ACTIVE_EPOCHS);
-        let store: Arc<dyn Store> = Arc::new(FakeStore::default());
+        let store: Arc<dyn WatermarkStore> = Arc::new(FakeStore::default());
 
         let att = |slot: u64| Attestation {
             validator_id: ValidatorIndex::new(0),

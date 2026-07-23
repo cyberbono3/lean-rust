@@ -134,6 +134,18 @@ impl Engine {
     ) -> (BlockImportResult, Option<PersistPlan>) {
         let block_root: Bytes32 = signed_block.message.block.hash_tree_root().into();
         let parent_root = signed_block.message.block.parent_root;
+        // One shape for every verify-stage rejection: gates below return through
+        // this instead of re-spelling the (Rejected, None) pair.
+        let reject = |error: VerifyError| {
+            (
+                BlockImportResult::Rejected {
+                    block_root,
+                    parent_root,
+                    error: EngineError::Verify(error),
+                },
+                None,
+            )
+        };
         let mut store = self.lock();
 
         if store.has_block(&block_root) {
@@ -151,14 +163,7 @@ impl Engine {
             &signed_block.signature,
             &signed_block.message.block.body.attestations,
         ) {
-            return (
-                BlockImportResult::Rejected {
-                    block_root,
-                    parent_root,
-                    error: EngineError::Verify(e),
-                },
-                None,
-            );
+            return reject(e);
         }
 
         // Deep-clone the parent post-state: the state transition mutates an
@@ -182,14 +187,7 @@ impl Engine {
         // a verifier is wired (a later Part).
         if policy.enforces() {
             if let Err(e) = self.run_verify_gate(&signed_block, &parent_state.validators) {
-                return (
-                    BlockImportResult::Rejected {
-                        block_root,
-                        parent_root,
-                        error: EngineError::Verify(e),
-                    },
-                    None,
-                );
+                return reject(e);
             }
         }
 

@@ -82,6 +82,9 @@ impl Store for CountingStore {
     fn load_head(&self) -> Result<Option<HeadInfo>, StorageError> {
         self.inner.load_head()
     }
+}
+
+impl storage::WatermarkStore for CountingStore {
     fn save_ots_key_state(
         &self,
         validator: ValidatorIndex,

@@ -83,7 +83,7 @@ pub enum SignerLoadError {
     /// one-time-key reuse — the operator must reconcile (delete the stale side)
     /// before the node will sign.
     #[error(
-        "persisted OTS key-state for validator {index} does not match the secret record \
+        "persisted OTS watermark for validator {index} does not match the secret record \
          (seed or activation window differs); reconcile the store and the secrets dir"
     )]
     KeyStateMismatch {
@@ -226,7 +226,7 @@ impl LocalSigner {
     pub fn load_resuming(
         secrets_dir: &Path,
         local_indices: impl IntoIterator<Item = ValidatorIndex>,
-        store: &dyn storage::Store,
+        store: &dyn storage::WatermarkStore,
     ) -> Result<Self, SignerLoadError> {
         Self::load_with(secrets_dir, local_indices, |index, file_record| {
             let stored = store.load_ots_key_state(index).map_err(|source| {
