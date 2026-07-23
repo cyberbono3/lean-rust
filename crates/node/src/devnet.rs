@@ -1,23 +1,25 @@
 //! Devnet composition entry point.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
+use parking_lot::Mutex;
 use protocol::{
     Attestation, Block, BlockSignatures, BlockWithAttestation, Checkpoint,
-    SignedBlockWithAttestation, Slot, State,
+    SignedBlockWithAttestation, Slot, State, ValidatorIndex,
 };
 use runtime::api::{HttpService, MetricsService, Recorder};
 use runtime::chain::{ChainMetrics, Service as ChainService};
 use runtime::core::{Node, NodeConfig};
+use runtime::duties::{LocalSigner, OtsSigner};
 use runtime::p2p::{DevnetHost, HostOptions, RpcProvider};
 use runtime::sync::{Config as SyncConfig, Loop as SyncLoop};
-use storage::{HeadInfo, MemoryStore, RedbStore, Store};
+use storage::{HeadInfo, MemoryStore, RedbStore, Store, WatermarkStore};
 use types::Bytes32;
 
-use crate::consensus_loop::ConsensusLoop;
+use crate::consensus_loop::{resolve_local_validators, ConsensusLoop};
 
 /// Wraps an unsigned [`Block`] into a [`SignedBlockWithAttestation`] with a
 /// default proposer attestation and an empty signature list. Anchor/genesis and
@@ -35,6 +37,34 @@ fn signed_block_envelope(block: Block) -> SignedBlockWithAttestation {
 /// Result type returned by node composition.
 pub type Result<T> = anyhow::Result<T>;
 
+/// Builds the [`LocalSigner`] for this node's local validators.
+///
+/// Observer node (empty local set) → [`LocalSigner::empty`], no secrets dir
+/// needed. Validating node → the secrets dir is REQUIRED and every local
+/// validator MUST have a loadable key; a missing dir or key is a fatal
+/// misconfiguration (fail fast, never sign a placeholder). This extends the
+/// optional-path convention but is intentionally stricter for secret keys.
+///
+/// Loads via [`LocalSigner::load_resuming`]: the keygen-written secret file
+/// carries `next_index = 0` forever, while the runtime persists each advanced
+/// watermark through the [`OtsSigner`] guard — resuming from the
+/// further-advanced record is what makes the one-time-key guard hold across a
+/// restart. Returns the concrete signer; the caller wraps it in the guard.
+fn build_local_signer(
+    local: &[ValidatorIndex],
+    secrets_dir: Option<&Path>,
+    store: &dyn WatermarkStore,
+) -> Result<LocalSigner> {
+    if local.is_empty() {
+        return Ok(LocalSigner::empty());
+    }
+    let dir = secrets_dir.context(
+        "--validator-secrets-dir is required for a validating node (local validators are configured)",
+    )?;
+    LocalSigner::load_resuming(dir, local.iter().copied(), store)
+        .context("load validator secret keys")
+}
+
 /// Selects the persistence backend for the devnet node.
 #[derive(Debug, Clone)]
 pub enum StorageKind {
@@ -47,6 +77,18 @@ pub enum StorageKind {
 impl Default for StorageKind {
     fn default() -> Self {
         Self::Memory
+    }
+}
+
+impl StorageKind {
+    /// Whether the backend survives a process restart. A validating node
+    /// REQUIRES durability: the OTS one-time-key guard resumes its watermark
+    /// from the store on restart, and an in-memory store loses that watermark on
+    /// exit — resetting a restarted node to fresh-keygen state and re-enabling
+    /// one-time-key reuse. See the gate in [`new_devnet`].
+    #[must_use]
+    pub const fn is_durable(&self) -> bool {
+        matches!(self, Self::Persistent(_))
     }
 }
 
@@ -74,6 +116,10 @@ pub struct Config {
     pub genesis_block: Block,
     /// Persistence backend selector. Defaults to in-memory.
     pub storage: StorageKind,
+    /// Directory holding this node's per-validator secret key records
+    /// (`validator_<i>.ssz`). Required when the node runs local validators;
+    /// `None` for an observer (no local validators).
+    pub validator_secrets_dir: Option<PathBuf>,
 }
 
 /// Builds a devnet [`Node`] with concrete runtime services.
@@ -99,6 +145,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         genesis_state,
         genesis_block,
         storage,
+        validator_secrets_dir,
     } = config;
 
     let store = build_store(&storage)?;
@@ -109,44 +156,45 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     let mut recorder = Recorder::new();
     let chain_metrics = register_chain_histograms(&mut recorder)?;
 
-    // Restart-continue: if the store already holds a head (persistent backend,
-    // prior run), re-anchor the engine there and skip re-persisting the anchor.
-    // Otherwise anchor at genesis and seed the store as before.
-    let engine = if let Some((head_root, state, block)) = resume_anchor(store.as_ref())? {
-        // Resume: trust the persisted head as its own justified+finalized anchor
-        // so the fork-choice head walk starts from a tracked root. Plain
-        // `from_anchor` would seed justified from the state (an ancestor absent
-        // from the anchor-only block map) and break the first head recompute.
-        let engine = runtime::chain::engine::Engine::from_trusted_head(state, block)?;
-        // Defense-in-depth: `from_trusted_head` re-derives the anchor root from
-        // the block, so a corrupt/tampered store whose head-keyed block roots
-        // elsewhere would silently anchor at a different block than `load_head`
-        // reported. Refuse to resume from such an inconsistent on-disk view.
-        anyhow::ensure!(
-            engine.head() == head_root,
-            "persisted head block does not root to the recorded head; refusing to resume from an inconsistent store",
-        );
-        engine
-    } else {
-        let anchor_slot = genesis_block.slot;
-        let anchor_state = genesis_state.clone();
-        let signed_anchor = signed_block_envelope(genesis_block.clone());
-        let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
-        let anchor_root = engine.head();
-        let finalized = engine.latest_finalized();
-        persist_anchor(
-            store.as_ref(),
-            anchor_root,
-            anchor_slot,
-            finalized,
-            signed_anchor,
-            anchor_state,
-        )?;
-        engine
-    };
-    let chain = Arc::new(ChainService::new(
+    let engine = build_engine(store.as_ref(), genesis_state, genesis_block)?;
+    // Resolve this node's local validator set ONCE (the assignment YAML is read a
+    // single time here) and share it between the signer and the consensus-loop
+    // proposer schedule.
+    let (local_validators, total_validators) = resolve_local_validators(&duties)?;
+    // A validating node MUST run on a durable backend: the OTS guard resumes its
+    // one-time-key watermark from the store on restart, and the in-memory store
+    // loses that watermark on exit — a restarted node would reset to fresh-keygen
+    // state and re-enable one-time-key reuse (key disclosure). Refuse the unsafe
+    // combination at the composition root rather than signing into it silently.
+    // An observer (no local validators) never signs, so any backend is fine.
+    anyhow::ensure!(
+        local_validators.is_empty() || storage.is_durable(),
+        "a validating node requires a durable --storage-path: the in-memory backend loses the OTS watermark on restart, which would re-enable one-time-key reuse",
+    );
+    // Build the local validator signer at the composition root. Observer node
+    // (no local validators) → empty signer; validating node → load its own
+    // secret keys (a configured validator with no key is a fatal misconfig),
+    // resuming each one-time watermark from the store. The signer is wrapped in
+    // the durable OTS guard so every production sign persists its advanced
+    // watermark before the signature is released (persist-before-release).
+    let local_signer = build_local_signer(
+        &local_validators,
+        validator_secrets_dir.as_deref(),
+        store.as_ref(),
+    )?;
+    let signer = Arc::new(Mutex::new(OtsSigner::new(
+        Box::new(local_signer),
+        // Method-call clone (not `Arc::clone(&store)`): the parameter type is
+        // `Arc<dyn WatermarkStore>`, and the UFCS form lets that expectation
+        // drive `T` inference into a dead end before the supertrait upcast can
+        // apply; receiver syntax pins `T = dyn Store` first, and the upcast
+        // coercion to the narrow watermark seam (ISP) then fires implicitly.
+        store.clone(),
+    )));
+    let chain = Arc::new(ChainService::with_signer(
         engine.with_metrics(chain_metrics),
         Arc::clone(&store),
+        signer,
     ));
 
     let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
@@ -163,12 +211,15 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     ));
 
     // Self-driving consensus loop in the duties slot: it owns engine advance,
-    // propose, attest, gossip drain, and publish.
+    // propose, attest, gossip drain, and publish. Reuses the already-resolved
+    // local validator set (no second assignment-YAML read).
     let driver = Arc::new(ConsensusLoop::new(
         Arc::clone(&chain),
         Arc::clone(&p2p),
         Arc::clone(&sync),
         &duties,
+        local_validators,
+        total_validators,
     )?);
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));
@@ -265,6 +316,51 @@ fn register_chain_histograms(recorder: &mut Recorder) -> Result<ChainMetrics> {
     ))
 }
 
+/// Builds the fork-choice engine: resumes from the store's persisted head when
+/// one exists (persistent backend, prior run), otherwise anchors at genesis and
+/// seeds the store with the anchor.
+///
+/// Extracted from [`new_devnet`] so the composition root stays the flat wiring
+/// list its doc claims; this owns the resume-vs-genesis branch and its two
+/// store-consistency safety checks.
+fn build_engine(
+    store: &dyn Store,
+    genesis_state: State,
+    genesis_block: Block,
+) -> Result<runtime::chain::engine::Engine> {
+    if let Some((head_root, state, block)) = resume_anchor(store)? {
+        // Resume: trust the persisted head as its own justified+finalized anchor
+        // so the fork-choice head walk starts from a tracked root. Plain
+        // `from_anchor` would seed justified from the state (an ancestor absent
+        // from the anchor-only block map) and break the first head recompute.
+        let engine = runtime::chain::engine::Engine::from_trusted_head(state, block)?;
+        // Defense-in-depth: `from_trusted_head` re-derives the anchor root from
+        // the block, so a corrupt/tampered store whose head-keyed block roots
+        // elsewhere would silently anchor at a different block than `load_head`
+        // reported. Refuse to resume from such an inconsistent on-disk view.
+        anyhow::ensure!(
+            engine.head() == head_root,
+            "persisted head block does not root to the recorded head; refusing to resume from an inconsistent store",
+        );
+        return Ok(engine);
+    }
+    let anchor_slot = genesis_block.slot;
+    let anchor_state = genesis_state.clone();
+    let signed_anchor = signed_block_envelope(genesis_block.clone());
+    let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
+    let anchor_root = engine.head();
+    let finalized = engine.latest_finalized();
+    persist_anchor(
+        store,
+        anchor_root,
+        anchor_slot,
+        finalized,
+        signed_anchor,
+        anchor_state,
+    )?;
+    Ok(engine)
+}
+
 /// Builds the selected `Store` backend as an `Arc<dyn Store>`.
 fn build_store(kind: &StorageKind) -> Result<Arc<dyn Store>> {
     match kind {
@@ -331,11 +427,19 @@ fn persist_anchor(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use runtime::duties::test_fixtures::{stub_signer, write_validator_secrets, MIN_ACTIVE_EPOCHS};
     use runtime::duties::GenesisTimeUnix;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     const VALIDATORS_PATH: &str = "../runtime/tests/duties_fixtures/validators.yaml";
+
+    /// The `ream` group's local validators (`build_config`'s default group).
+    /// Only the `new_devnet_*` tests need these: they drive composition through
+    /// [`new_devnet`], which loads REAL key material off disk. The tests that
+    /// assemble a [`ChainService`] directly inject [`stub_signer`] instead —
+    /// their subject is node lifecycle and forkchoice resume, not signatures.
+    const REAM_VALIDATORS: &[u64] = &[0, 3, 6, 9, 12, 15, 18, 21, 24, 27];
 
     fn loopback() -> SocketAddr {
         "127.0.0.1:0".parse().unwrap()
@@ -347,6 +451,108 @@ mod tests {
             .unwrap_or(Duration::ZERO)
             .as_secs();
         GenesisTimeUnix::new(now + 60)
+    }
+
+    /// `build_local_signer` branch coverage — the keygen-free branches only
+    /// (a real key load is exercised by the `new_devnet_*` ignored tests).
+    mod build_local_signer_branches {
+        use super::*;
+        use runtime::duties::AttestationSigner;
+
+        #[test]
+        fn empty_local_set_builds_observer_signer_without_secrets_dir() {
+            let store = MemoryStore::default();
+            let mut signer = build_local_signer(&[], None, &store).expect("observer signer");
+            // The observer signer holds no keys: any sign attempt is refused.
+            let err = signer
+                .sign_attestation(&Attestation {
+                    validator_id: ValidatorIndex::new(0),
+                    ..Default::default()
+                })
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                runtime::duties::SignError::UnknownValidator { validator_id: 0 }
+            ));
+        }
+
+        #[test]
+        fn validating_node_without_secrets_dir_is_refused() {
+            let store = MemoryStore::default();
+            // `let Err(..) else`: the Ok type holds secret keys and is
+            // deliberately not `Debug`, so `unwrap_err()` cannot be used.
+            let Err(err) = build_local_signer(&[ValidatorIndex::new(0)], None, &store) else {
+                panic!("build must fail without a secrets dir");
+            };
+            assert!(err.to_string().contains("--validator-secrets-dir"));
+        }
+
+        #[test]
+        fn validating_node_with_missing_key_file_is_refused() {
+            let store = MemoryStore::default();
+            let dir = tempfile::tempdir().expect("tempdir");
+            let Err(err) = build_local_signer(&[ValidatorIndex::new(0)], Some(dir.path()), &store)
+            else {
+                panic!("build must fail on a missing key file");
+            };
+            // The context chain surfaces the load failure, not a partial signer.
+            assert!(format!("{err:#}").contains("load validator secret keys"));
+        }
+
+        #[test]
+        fn validating_node_with_corrupt_key_record_is_refused() {
+            let store = MemoryStore::default();
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::write(dir.path().join("validator_0.ssz"), b"garbage").expect("write");
+            let Err(err) = build_local_signer(&[ValidatorIndex::new(0)], Some(dir.path()), &store)
+            else {
+                panic!("build must fail on a corrupt key record");
+            };
+            assert!(format!("{err:#}").contains("load validator secret keys"));
+        }
+    }
+
+    #[test]
+    fn validating_node_on_memory_backend_is_refused() {
+        // The durability gate fires BEFORE any key load, so this needs no
+        // keygen: a validating node (local validators resolved from the duties
+        // YAML) on the in-memory backend is refused at the composition root,
+        // because a restart would lose the OTS watermark and re-enable reuse.
+        let identity_dir = tempfile::tempdir().unwrap();
+        let p2p = HostOptions::try_new(
+            "/ip4/127.0.0.1/udp/0/quic-v1",
+            "test/0.1.0",
+            &identity_dir.path().join("identity.pb"),
+            None,
+        )
+        .unwrap();
+        let duties = runtime::duties::Config::default()
+            .with_validators_path(validators_path())
+            .unwrap()
+            .with_genesis_time_unix(future_genesis());
+        let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
+        let config = Config {
+            node: NodeConfig::default(),
+            p2p,
+            duties,
+            http_addr: loopback(),
+            metrics_addr: loopback(),
+            genesis_state,
+            genesis_block,
+            storage: StorageKind::Memory,
+            // Never read: the gate rejects before the signer loads any key.
+            validator_secrets_dir: Some(identity_dir.path().join("secrets")),
+        };
+
+        // `let Err(..) else`: the Ok type (`Node`) is not `Debug`, so
+        // `expect_err` cannot be used.
+        let Err(err) = new_devnet(config) else {
+            panic!("validating node on memory must be refused");
+        };
+        assert!(
+            format!("{err:#}").contains("durable"),
+            "unexpected error: {err:#}"
+        );
     }
 
     fn validators_path() -> PathBuf {
@@ -367,6 +573,13 @@ mod tests {
             .with_genesis_time_unix(future_genesis());
         let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
 
+        // Secrets for the (validating) ream group, written into the persistent
+        // identity dir so they survive until `new_devnet` loads them. These
+        // build/resume tests use a future genesis, so no signing runs — the keys
+        // only need to LOAD, hence the minimum active window.
+        let secrets_dir = identity_dir.join("validator-secrets");
+        let _pubkeys = write_validator_secrets(&secrets_dir, REAM_VALIDATORS, MIN_ACTIVE_EPOCHS);
+
         Config {
             node: NodeConfig::default(),
             p2p,
@@ -375,7 +588,12 @@ mod tests {
             metrics_addr: loopback(),
             genesis_state,
             genesis_block,
-            storage: StorageKind::Memory,
+            // A durable backend: `build_config` builds a VALIDATING node (ream
+            // secrets above), which `new_devnet` requires run on a persistent
+            // store so the OTS watermark survives a restart. The redb file lives
+            // under the persistent identity dir. The resume test overrides this.
+            storage: StorageKind::Persistent(identity_dir.join("store.redb")),
+            validator_secrets_dir: Some(secrets_dir),
         }
     }
 
@@ -441,7 +659,11 @@ mod tests {
             genesis_state,
         )
         .unwrap();
-        let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
+        let chain = Arc::new(ChainService::with_signer(
+            engine,
+            Arc::clone(&store),
+            stub_signer(),
+        ));
         let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
         let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider).unwrap());
         let sync = Arc::new(SyncLoop::new(
@@ -449,11 +671,14 @@ mod tests {
             Arc::clone(&chain),
             Arc::clone(&p2p),
         ));
+        let (local, total) = resolve_local_validators(&duties).unwrap();
         let driver = ConsensusLoop::new(
             Arc::clone(&chain),
             Arc::clone(&p2p),
             Arc::clone(&sync),
             &duties,
+            local,
+            total,
         )
         .unwrap();
 
@@ -498,6 +723,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     async fn new_devnet_builds_node_that_starts_and_stops() {
         assert!(validators_path().exists());
         let identity_dir = tempfile::tempdir().unwrap();
@@ -604,6 +830,7 @@ mod tests {
     // drop it, then construct a node pointed at the same path and assert it
     // builds/starts/stops via the `Some(resume)` branch.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     async fn new_devnet_resumes_from_persistent_store() {
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("chain.redb");
@@ -681,7 +908,11 @@ mod tests {
             genesis_state,
         )
         .unwrap();
-        let chain = Arc::new(ChainService::new(engine, Arc::clone(&store)));
+        let chain = Arc::new(ChainService::with_signer(
+            engine,
+            Arc::clone(&store),
+            stub_signer(),
+        ));
         let rpc_provider = Arc::new(RpcProvider::chain(Arc::clone(&chain), Arc::clone(&store)));
         let p2p = Arc::new(DevnetHost::build_with_provider(p2p_options, rpc_provider).unwrap());
         let sync = Arc::new(SyncLoop::new(
@@ -689,11 +920,14 @@ mod tests {
             Arc::clone(&chain),
             Arc::clone(&p2p),
         ));
+        let (local, total) = resolve_local_validators(&duties).unwrap();
         let driver = ConsensusLoop::new(
             Arc::clone(&chain),
             Arc::clone(&p2p),
             Arc::clone(&sync),
             &duties,
+            local,
+            total,
         )
         .unwrap();
 

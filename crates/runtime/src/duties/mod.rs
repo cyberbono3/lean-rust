@@ -12,14 +12,12 @@
 
 mod config;
 mod error;
-// Part 15: until Part 3 wires `sign_own_duty` into `produce_*`, the guard cluster
-// is reachable only from `#[cfg(test)]`, so the non-test `--lib` build would fail
-// `-D warnings` with `dead_code`. `allow` (NOT `expect` — the cluster IS used in
-// the cfg(test) build, so `expect(dead_code)` would misfire) keeps standalone Part
-// 2 green. REMOVE this attribute in Part 3 once the production sign sites call it.
-#[allow(dead_code)]
-pub(crate) mod ots_signer;
+mod genesis_pubkeys;
+mod ots_signer;
 mod proposer;
+mod signer;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_fixtures;
 mod validators;
 
 pub use config::{
@@ -27,5 +25,23 @@ pub use config::{
     DEFAULT_VALIDATOR_GROUP,
 };
 pub use error::{DutiesError, DutiesResult};
+pub use genesis_pubkeys::GenesisRegistry;
 pub use proposer::LocalProposers;
+// `AttestationSigner` is the seam `chain::Service` depends on, so it appears in
+// the public `Service::with_signer` signature; `sign_attestation` is public with
+// it (a trait method cannot be narrower than its trait). `LocalSigner` / its
+// errors are `pub` because the composition root (`node`) builds the production
+// implementation and passes it in.
+// `validator_secret_path` is `pub` so the offline keygen (`lean-cli`, which
+// depends on this crate) writes the same file names this loader reads.
+// `OtsSigner` is `pub` because the composition root (`node`) wraps the
+// production `LocalSigner` in the durable one-time-signature guard before
+// injecting it into the chain service; `PersistableSigner` appears in
+// `OtsSigner::new`'s signature (the requirement the guard places on its inner
+// signer).
+pub use ots_signer::OtsSigner;
+pub use signer::{
+    validator_secret_path, AttestationSigner, LocalSigner, PersistableSigner, SignError,
+    SignerLoadError,
+};
 pub use validators::ValidatorAssignments;

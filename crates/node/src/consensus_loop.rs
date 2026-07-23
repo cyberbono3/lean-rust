@@ -126,38 +126,65 @@ struct RunHandle {
     cancel: CancellationToken,
 }
 
+/// The local validators that should attest at `slot`: every local validator
+/// EXCEPT the slot's proposer. The proposer already signed AND locally
+/// re-imported its own attestation inside `ChainService::produce_block` (the
+/// block carries the signed attestation), so re-attesting here would sign the
+/// SAME (validator, slot) twice at epoch = slot — a leanSig one-time-key reuse.
+fn attesters_excluding_proposer(
+    proposers: &LocalProposers,
+    slot: Slot,
+) -> impl Iterator<Item = ValidatorIndex> + '_ {
+    let proposer = proposers.proposer_for_slot(slot);
+    proposers
+        .local()
+        .filter(move |validator| Some(*validator) != proposer)
+}
+
+/// Loads the validator assignments and resolves this node's LOCAL validator
+/// index set (the configured group) plus the total validator count. Shared by
+/// [`ConsensusLoop::new`] (proposer schedule) and the composition root
+/// (`node::devnet`, signer key set), so the group→indices resolution has one home.
+pub(crate) fn resolve_local_validators(
+    duties: &DutiesConfig,
+) -> anyhow::Result<(Vec<ValidatorIndex>, u64)> {
+    let assignments = ValidatorAssignments::load(duties.validators_path())
+        .context("load validator assignments")?;
+    let group = duties.validator_group();
+    let local = assignments
+        .group(group)
+        .with_context(|| format!("validator group {group:?} not found"))?;
+    Ok((local.to_vec(), assignments.total_validators()))
+}
+
 impl ConsensusLoop {
-    /// Builds the driver from the concrete services and the duties config.
+    /// Builds the driver from the concrete services, the duties config, and the
+    /// pre-resolved local validator set (`local` + `total_validators`, obtained
+    /// once by the composition root via [`resolve_local_validators`] and shared
+    /// with the signer so the assignment YAML is read a single time).
     ///
-    /// Loads the validator assignments (to build the local proposer lookup)
-    /// and computes the genesis anchor on the `tokio::time` clock.
+    /// Computes the genesis anchor on the `tokio::time` clock.
     ///
     /// # Errors
     /// - The duties config is not runnable (e.g. unset genesis).
-    /// - The validator-assignment file cannot be loaded.
-    /// - The configured validator group is absent from the assignment file.
     pub fn new(
         chain: Arc<ChainService>,
         p2p: Arc<P2pService>,
         sync: Arc<SyncLoop>,
         duties: &DutiesConfig,
+        local: Vec<ValidatorIndex>,
+        total_validators: u64,
     ) -> anyhow::Result<Self> {
         duties
             .ensure_runnable()
             .context("duties config not runnable")?;
-        let assignments = ValidatorAssignments::load(duties.validators_path())
-            .context("load validator assignments")?;
-        let group = duties.validator_group();
-        let local = assignments
-            .group(group)
-            .with_context(|| format!("validator group {group:?} not found"))?;
         info!(
-            group,
+            group = duties.validator_group(),
             validators = local.len(),
-            total = assignments.total_validators(),
+            total = total_validators,
             "consensus loop validators selected",
         );
-        let proposers = LocalProposers::new(local.iter().copied(), assignments.total_validators());
+        let proposers = LocalProposers::new(local, total_validators);
         Ok(Self {
             chain,
             p2p,
@@ -359,9 +386,7 @@ impl Runner {
     /// this one task); engine mutations still serialize on the engine mutex.
     async fn run_attesters(&self, slot: Slot, cancel: &CancellationToken) {
         let budget = TICK_PERIOD;
-        let mut duties = self
-            .proposers
-            .local()
+        let mut duties = attesters_excluding_proposer(&self.proposers, slot)
             .map(|validator| async move {
                 (
                     validator,
@@ -401,17 +426,24 @@ impl Runner {
     /// warn-logged and dropped. Each sweep is bounded by the inbound gossip
     /// channel capacity (the p2p side `try_send`-drops on a full channel), so
     /// a flood cannot extend a single tick unboundedly.
+    ///
+    /// Each payload arrives paired with the `AdmitGuard` that admitted it at the
+    /// p2p ingress. The guard is bound to a NAMED local (a bare `_` would drop it
+    /// immediately and free the peer's slot before the import runs) so the per-peer
+    /// admission slot is released only after the inline import completes.
     async fn drain_gossip(&mut self) {
-        while let Ok(block) = self.block_rx.try_recv() {
+        while let Ok((admit, block)) = self.block_rx.try_recv() {
             let slot = block.message.block.slot.get();
             if let Err(err) = self.chain.import_block(block).await {
-                warn!(%err, slot, "gossip block import failed; continuing");
+                warn!(%err, slot, peer = %admit.peer(), "gossip block import failed; continuing");
             }
+            drop(admit); // release the peer's admission slot after import
         }
-        while let Ok(vote) = self.vote_rx.try_recv() {
+        while let Ok((admit, vote)) = self.vote_rx.try_recv() {
             if let Err(err) = self.chain.import_attestation(vote).await {
-                warn!(%err, "gossip vote import failed; continuing");
+                warn!(%err, peer = %admit.peer(), "gossip vote import failed; continuing");
             }
+            drop(admit); // release the peer's admission slot after import
         }
     }
 
@@ -495,6 +527,38 @@ fn anchor_from(genesis: Duration, now_wall: Duration, now_instant: Instant) -> I
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    // --- Proposer double-sign resolution -----------------------------------
+
+    #[test]
+    fn attesters_exclude_the_slot_proposer() {
+        // Two local validators out of four total; whichever is the slot's
+        // proposer must be excluded from the attest pass so it does not sign its
+        // own attestation twice at the same epoch (one-time-key reuse) — it
+        // already signed + re-imported that vote inside `produce_block`.
+        let proposers = LocalProposers::new([ValidatorIndex::new(0), ValidatorIndex::new(1)], 4);
+        for slot in 0..8u64 {
+            let s = Slot::new(slot);
+            let proposer = proposers.proposer_for_slot(s);
+            let attesters: Vec<ValidatorIndex> =
+                attesters_excluding_proposer(&proposers, s).collect();
+
+            if let Some(p) = proposer {
+                assert!(
+                    !attesters.contains(&p),
+                    "slot {slot}: proposer {p:?} must be skipped in the attest pass",
+                );
+            }
+            for validator in proposers.local() {
+                if Some(validator) != proposer {
+                    assert!(
+                        attesters.contains(&validator),
+                        "slot {slot}: non-proposer {validator:?} must still attest",
+                    );
+                }
+            }
+        }
+    }
 
     // --- Health escalation (restores the deleted duties `PublishHealth`) ---
 

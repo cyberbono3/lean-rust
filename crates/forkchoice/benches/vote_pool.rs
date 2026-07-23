@@ -23,10 +23,11 @@ use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use protocol::{Attestation, AttestationData, SignedAttestation, ValidatorIndex};
 use types::Signature;
 
-/// Spec validator-registry cap (`VALIDATOR_REGISTRY_LIMIT = 2^12`) from
-/// `leanSpec` `chain/config.py`. The mainnet vote-pool footprint is bounded by
-/// this; benches must support up to (not below) this many validators.
-const VALIDATOR_REGISTRY_LIMIT: u64 = 4096;
+/// Spec validator-registry cap, single-sourced from `config` so the bench
+/// tracks the real cap instead of a drifting local copy. The mainnet vote-pool
+/// footprint is bounded by this; benches must support up to (not below) this
+/// many validators.
+const VALIDATOR_REGISTRY_LIMIT: u64 = config::VALIDATOR_REGISTRY_LIMIT as u64;
 
 /// Baseline floor for a vote-pool entry. An `Attestation` is 136 bytes
 /// (`validator_id` 8 plus `AttestationData` 128) and a `Signature` is 3116, so

@@ -13,15 +13,21 @@ workspace = true
 [features]
 # Exposes the in-crate engine fixture builders (`anchor_pair`,
 # `engine_at_genesis`, `produce_signed_block`) under
-# `runtime::chain::engine::test_fixtures` so integration tests can drive the
-# engine without duplicating the genesis builders.
-test-fixtures = []
+# `runtime::chain::engine::test_fixtures`, plus the validator secret-key
+# builders under `runtime::duties::test_fixtures`, so integration tests can
+# drive the engine and the sign path without duplicating the setup.
+# `rand` is pulled in because the duties fixtures call `crypto::generate`.
+test-fixtures = ["dep:rand"]
 
 [dependencies]
 storage      = { path = "../storage" }
 lean-wire    = { path = "../networking" }
 forkchoice   = { path = "../forkchoice" }
 protocol     = { path = "../protocol" }
+# The runtime boundary is the only permitted in-tree consumer of `crypto`
+# (plus the offline `lean-cli` keygen) — signing lives here, never in the
+# sync-core consensus crates. See PROJECT-KNOWLEDGE.md → LAYER_RULE.
+crypto       = { path = "../crypto" }
 ssz          = { path = "../ssz" }
 config       = { path = "../config" }
 types        = { path = "../types" }
@@ -42,6 +48,10 @@ axum         = { workspace = true, features = ["json"] }
 prometheus   = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender   = { workspace = true }
+# Optional, enabled only by `test-fixtures`: `duties::test_fixtures` generates
+# validator key material via `crypto::generate`, which needs a `rand::CryptoRng`.
+# Absent from a default (production) build.
+rand         = { workspace = true, optional = true }
 # Normal (not dev) dep: the compile-time wiring proofs in `p2p/wiring.rs`
 # gate `cargo check` / `cargo build`, not just tests.
 static_assertions = { workspace = true }

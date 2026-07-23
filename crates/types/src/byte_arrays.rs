@@ -2,18 +2,18 @@
 //!
 //! [`ByteVector<N>`] is a const-generic newtype over `[u8; N]` providing the
 //! SSZ `Vector[byte, N]` shape. Aliases used by the consensus protocol:
-//! [`Bytes32`] (e.g. block roots, state roots), [`Signature`] and
-//! [`PublicKey`] (the devnet-1 XMSS wire types), and the deprecated
-//! [`Bytes4000`] signature placeholder that [`Signature`] replaces.
+//! [`Bytes32`] (e.g. block roots, state roots), and [`Signature`] and
+//! [`PublicKey`] (the devnet-1 XMSS wire types).
 //!
 //! # `Copy` semantics
 //! `ByteVector<N>` does NOT derive [`Copy`]. Explicit `impl Copy` is provided
 //! for `N` in `0..=64` so small fixed-width types ([`Bytes32`], [`PublicKey`],
-//! addresses, hashes) move cheaply. Larger sizes — [`Signature`] and
-//! [`Bytes4000`] — are intentionally `Clone`-only to prevent silent multi-KB
-//! stack copies.
+//! addresses, hashes) move cheaply. Larger sizes — [`Signature`] — are
+//! intentionally `Clone`-only to prevent silent multi-KB stack copies.
 
 use core::fmt::{self, Write};
+
+use crate::error::TypesError;
 
 /// Fixed-width byte vector of length `N`.
 ///
@@ -63,16 +63,6 @@ pub type Signature = ByteVector<3116>;
 /// 52 falls inside the `0..=64` range covered by the `Copy` impls below, so
 /// this type is [`Copy`].
 pub type PublicKey = ByteVector<52>;
-
-/// 4000-byte vector — signature placeholder (Lean devnet0 wire format).
-///
-/// Intentionally not [`Copy`] — every move/clone is an explicit 4 KB byte
-/// copy. Pass by reference (`&Bytes4000`) wherever ownership is not needed.
-#[deprecated(
-    note = "devnet-1 replaces the Bytes4000 placeholder with Signature (Bytes3116); \
-            remaining construction sites migrate with the container refactor"
-)]
-pub type Bytes4000 = ByteVector<4000>;
 
 impl<const N: usize> ByteVector<N> {
     /// Width in bytes — the single source of truth for `N`.
@@ -152,6 +142,91 @@ impl<const N: usize> From<[u8; N]> for ByteVector<N> {
     }
 }
 
+impl<const N: usize> TryFrom<&[u8]> for ByteVector<N> {
+    type Error = TypesError;
+
+    /// Length-checked construction from a raw byte slice. Rejects any slice
+    /// whose length is not exactly `N`.
+    ///
+    /// # Example
+    /// ```
+    /// use types::{ByteVector, TypesError};
+    /// let v = ByteVector::<2>::try_from([0x0a, 0xff].as_slice()).unwrap();
+    /// assert_eq!(v.as_slice(), &[0x0a, 0xff]);
+    /// let err = ByteVector::<2>::try_from([0x00].as_slice()).unwrap_err();
+    /// assert!(matches!(err, TypesError::InvalidByteLength { want: 2, got: 1, .. }));
+    /// ```
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        let arr: [u8; N] = bytes
+            .try_into()
+            .map_err(|_| TypesError::InvalidByteLength {
+                type_name: "ByteVector",
+                want: N,
+                got: bytes.len(),
+            })?;
+        Ok(Self(arr))
+    }
+}
+
+impl<const N: usize> TryFrom<&str> for ByteVector<N> {
+    type Error = TypesError;
+
+    /// Decodes lower- or upper-case hex, tolerating an optional `0x`/`0X`
+    /// prefix, into a `ByteVector<N>`. The decoded byte length must be exactly
+    /// `N`. Mirrors [`Self::to_hex`] (which emits a `0x`-prefixed lower-case
+    /// string) and also accepts the unprefixed form written by the
+    /// `genesis_validators` manifest.
+    ///
+    /// # Example
+    /// ```
+    /// use types::ByteVector;
+    /// // Both prefixed and unprefixed hex decode to the same value.
+    /// assert_eq!(ByteVector::<2>::try_from("0x0aff").unwrap().as_slice(), &[0x0a, 0xff]);
+    /// assert_eq!(ByteVector::<2>::try_from("0aff").unwrap().as_slice(), &[0x0a, 0xff]);
+    /// ```
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        let hex = s
+            .strip_prefix("0x")
+            .or_else(|| s.strip_prefix("0X"))
+            .unwrap_or(s);
+        if hex.len() % 2 != 0 {
+            return Err(TypesError::InvalidHexEncoding {
+                type_name: "ByteVector",
+                detail: "odd number of hex digits",
+            });
+        }
+        // Fail fast on the wrong width BEFORE decoding, and decode straight into
+        // the fixed-size array: no heap allocation, and an oversized invalid
+        // input is rejected without doing the full decode.
+        if hex.len() != 2 * N {
+            return Err(TypesError::InvalidByteLength {
+                type_name: "ByteVector",
+                want: N,
+                got: hex.len() / 2,
+            });
+        }
+        let mut arr = [0_u8; N];
+        for (byte, pair) in arr.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+            *byte = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+        }
+        Ok(Self(arr))
+    }
+}
+
+/// Maps one ASCII hex digit to its `0..=15` value, or an
+/// [`TypesError::InvalidHexEncoding`] for any non-hex byte.
+fn hex_nibble(c: u8) -> Result<u8, TypesError> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => Err(TypesError::InvalidHexEncoding {
+            type_name: "ByteVector",
+            detail: "non-hex character",
+        }),
+    }
+}
+
 impl<const N: usize> fmt::Debug for ByteVector<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ByteVector<{N}>({})", self.to_hex())
@@ -162,8 +237,8 @@ impl<const N: usize> fmt::Debug for ByteVector<N> {
 ///
 /// Stable Rust cannot express `impl<const N: usize> Copy where N <= 64`
 /// without nightly `generic_const_exprs`; the macro expands to one impl per
-/// permitted `N`. [`Bytes4000`] is intentionally NOT covered — see
-/// [`Bytes4000`] doc.
+/// permitted `N`. [`Signature`] (3116) is intentionally NOT covered, keeping it
+/// `Clone`-only.
 macro_rules! impl_copy_for_byte_vector {
     ($($n:literal),* $(,)?) => {
         $( impl Copy for ByteVector<$n> {} )*
@@ -176,25 +251,17 @@ impl_copy_for_byte_vector!(
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
 );
 
-// The `deprecated` allow covers the Bytes4000 witnesses below, which
-// deliberately exercise the deprecated alias. Scoped to this test module —
-// retires with the alias itself, and is NOT part of the file-level allow set
-// carried by the construction sites. Kept as an outer attribute alongside the
-// others: mixing inner and outer attributes on one item trips
-// `clippy::mixed_attributes_style`.
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, deprecated)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::error::TypesError;
     use proptest::prelude::*;
     use static_assertions::{assert_impl_all, assert_not_impl_all, assert_type_eq_all};
 
-    // -- Compile-time witness: Bytes32 is Copy, Bytes4000 is NOT -----------
+    // -- Compile-time witness: Bytes32 is Copy -----------------------------
 
     assert_impl_all!(Bytes32: Copy, Clone, Default);
-    assert_not_impl_all!(Bytes4000: Copy);
-    assert_impl_all!(Bytes4000: Clone, Default);
 
     // -- devnet-1 wire newtypes: shape, width, Copy split ------------------
 
@@ -249,6 +316,98 @@ mod tests {
         assert_eq!(pk.as_slice().len(), PublicKey::LEN);
     }
 
+    // -- TryFrom hex/byte decoder (inverse of to_hex) ----------------------
+
+    #[test]
+    fn try_from_hex_round_trips_via_to_hex() {
+        let pk = PublicKey::new([0xa5; PublicKey::LEN]);
+        // to_hex is 0x-prefixed; the decoder accepts it.
+        let decoded = PublicKey::try_from(pk.to_hex().as_str()).unwrap();
+        assert_eq!(decoded, pk);
+    }
+
+    #[test]
+    fn try_from_hex_accepts_unprefixed_lowercase() {
+        // The `genesis_validators` manifest emits unprefixed lower-case hex.
+        // Every byte is 0x0a, so the unprefixed encoding is "0a" repeated.
+        let raw = [0x0a_u8; PublicKey::LEN];
+        let unprefixed = "0a".repeat(PublicKey::LEN);
+        let decoded = PublicKey::try_from(unprefixed.as_str()).unwrap();
+        assert_eq!(decoded.as_slice(), &raw);
+    }
+
+    #[test]
+    fn try_from_hex_rejects_wrong_length() {
+        // 51 bytes → 102 hex chars, one short of PublicKey's 52.
+        let short: String = "ab".repeat(PublicKey::LEN - 1);
+        let err = PublicKey::try_from(short.as_str()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TypesError::InvalidByteLength {
+                    want: 52,
+                    got: 51,
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn try_from_hex_rejects_odd_length() {
+        let err = PublicKey::try_from("abc").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TypesError::InvalidHexEncoding {
+                    detail: "odd number of hex digits",
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn try_from_hex_rejects_non_hex_char() {
+        let bad: String = "zz".repeat(PublicKey::LEN);
+        let err = PublicKey::try_from(bad.as_str()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TypesError::InvalidHexEncoding {
+                    detail: "non-hex character",
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn try_from_slice_round_trips() {
+        let raw = [0x5a_u8; PublicKey::LEN];
+        let pk = PublicKey::try_from(raw.as_slice()).unwrap();
+        assert_eq!(pk.as_slice(), &raw);
+    }
+
+    #[test]
+    fn try_from_slice_rejects_wrong_length() {
+        let err = PublicKey::try_from([0_u8; 51].as_slice()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TypesError::InvalidByteLength {
+                    want: 52,
+                    got: 51,
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
     // -- Construction + accessors -------------------------------------------
 
     #[test]
@@ -269,13 +428,6 @@ mod tests {
         let d: Bytes32 = ByteVector::default();
         let z: Bytes32 = ByteVector::zero();
         assert_eq!(d, z);
-    }
-
-    #[test]
-    fn bytes4000_default_is_all_zeros() {
-        let d: Bytes4000 = ByteVector::default();
-        assert!(d.as_slice().iter().all(|b| *b == 0));
-        assert_eq!(d.as_slice().len(), 4000);
     }
 
     // -- to_hex emits exactly 0x + 2*N lowercase hex chars -----------------
@@ -378,15 +530,6 @@ mod tests {
                 .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
                 .collect();
             prop_assert_eq!(decoded.as_slice(), v.as_slice());
-        }
-
-        #[test]
-        fn bytes4000_clone_is_equal(bytes in proptest::collection::vec(any::<u8>(), 4000..=4000)) {
-            let mut arr = [0_u8; 4000];
-            arr.copy_from_slice(&bytes);
-            let a: Bytes4000 = ByteVector::new(arr);
-            let b = a.clone();
-            prop_assert_eq!(a, b);
         }
     }
 

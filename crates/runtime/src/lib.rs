@@ -13,4 +13,5 @@ pub mod core;
 pub mod duties;
 pub mod observability;
 pub mod p2p;
+pub mod signing_domain;
 pub mod sync;

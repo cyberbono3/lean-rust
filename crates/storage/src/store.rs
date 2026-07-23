@@ -2,7 +2,7 @@
 
 use protocol::{Checkpoint, SignedBlockWithAttestation, State, ValidatorIndex};
 use thiserror::Error;
-use types::{Bytes32, OtsKeyState};
+use types::{Bytes32, OtsWatermark};
 
 use crate::error::StorageError;
 
@@ -65,12 +65,53 @@ pub enum HeadInfoError {
     },
 }
 
-/// Narrow persistence contract used by the runtime chain layer.
+/// The narrow persistence seam for per-validator OTS watermarks.
+///
+/// Split off [`Store`] (interface segregation): the durable signing guard
+/// (`runtime`'s `OtsSigner`) and the signer resume path need exactly these two
+/// methods, and their test fakes should not have to stub the whole chain-store
+/// surface. Every [`Store`] is a `WatermarkStore` via the supertrait bound, so
+/// full-store call sites are unaffected; `&dyn Store` / `Arc<dyn Store>`
+/// upcast-coerce to the narrow object where only this seam is needed.
+pub trait WatermarkStore: Send + Sync {
+    /// Persists the crypto-free OTS `watermark` for `validator`.
+    ///
+    /// One record per validator: a later save overwrites the prior record for
+    /// that same validator and leaves every other validator's record untouched.
+    /// The payload is a `types`-owned byte blob ([`OtsWatermark`]) — a seed-free
+    /// commitment plus the `next_index` watermark, so NO key material ever
+    /// reaches the store (the seed stays in the operator's `0o600` secret file).
+    /// No adapter links `crypto`, so this method never crosses the
+    /// `storage`/`crypto` boundary.
+    ///
+    /// # Errors
+    /// Backend-specific failures via [`StorageError`].
+    fn save_ots_key_state(
+        &self,
+        validator: ValidatorIndex,
+        watermark: OtsWatermark,
+    ) -> Result<(), StorageError>;
+
+    /// Resolves the persisted OTS watermark for `validator`, or `Ok(None)` when
+    /// none was ever written (a fresh datadir — the normal first-boot path).
+    ///
+    /// Absent is not an error, mirroring [`Store::load_head`].
+    ///
+    /// # Errors
+    /// Backend-specific failures via [`StorageError`], including a stored record
+    /// that fails [`OtsWatermark`] decode.
+    fn load_ots_key_state(
+        &self,
+        validator: ValidatorIndex,
+    ) -> Result<Option<OtsWatermark>, StorageError>;
+}
+
+/// Full persistence contract used by the runtime chain layer.
 ///
 /// All methods take `&self`; adapters carry interior mutability via
 /// [`RwLock`](parking_lot::RwLock) or equivalent. `Send + Sync` are
-/// required so a single `Arc<dyn Store>` handle can be shared across
-/// runtime services.
+/// required (inherited via [`WatermarkStore`]) so a single `Arc<dyn Store>`
+/// handle can be shared across runtime services.
 ///
 /// # Ownership
 ///
@@ -84,7 +125,7 @@ pub enum HeadInfoError {
 /// `load_*` and `has_block` return `Result<Option<T>, _>` /
 /// `Result<bool, _>`. `Ok(None)` and `Ok(false)` mean "not present"; only
 /// `Err(_)` signals a backend failure.
-pub trait Store: Send + Sync {
+pub trait Store: WatermarkStore {
     /// Persists `block` keyed by `root`. Overwrites any prior entry.
     ///
     /// # Errors
@@ -188,35 +229,6 @@ pub trait Store: Send + Sync {
     /// Backend-specific failures via [`StorageError`]. Returns
     /// `Ok(None)` before the first `save_head` call.
     fn load_head(&self) -> Result<Option<HeadInfo>, StorageError>;
-
-    /// Persists the crypto-free OTS key-state `record` for `validator`.
-    ///
-    /// One record per validator: a later save overwrites the prior record for
-    /// that same validator and leaves every other validator's record untouched.
-    /// The payload is a `types`-owned byte blob ([`OtsKeyState`]) — no adapter
-    /// links `crypto`, so this method never crosses the `storage`/`crypto`
-    /// boundary.
-    ///
-    /// # Errors
-    /// Backend-specific failures via [`StorageError`].
-    fn save_ots_key_state(
-        &self,
-        validator: ValidatorIndex,
-        record: OtsKeyState,
-    ) -> Result<(), StorageError>;
-
-    /// Resolves the persisted OTS key-state for `validator`, or `Ok(None)` when
-    /// none was ever written (a fresh datadir — the normal first-boot path).
-    ///
-    /// Absent is not an error, mirroring [`Self::load_head`].
-    ///
-    /// # Errors
-    /// Backend-specific failures via [`StorageError`], including a stored record
-    /// that fails [`OtsKeyState`] decode.
-    fn load_ots_key_state(
-        &self,
-        validator: ValidatorIndex,
-    ) -> Result<Option<OtsKeyState>, StorageError>;
 }
 
 #[cfg(test)]

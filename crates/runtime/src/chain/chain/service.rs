@@ -63,16 +63,18 @@
 use std::sync::Arc;
 
 use crate::chain::engine::{AttestationImportResult, BlockImportResult, Engine, PersistPlan};
+use crate::duties::{AttestationSigner, LocalSigner};
 use async_trait::async_trait;
 use lean_wire::Status;
+use parking_lot::Mutex;
 use protocol::{
-    Attestation, Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot, ValidatorIndex,
+    Attestation, BlockSignatures, BlockWithAttestation, Checkpoint, SignedAttestation,
+    SignedBlockWithAttestation, Slot, ValidatorIndex,
 };
-use ssz::HashTreeRoot;
 use storage::HeadInfo;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, instrument, warn};
-use types::{Bytes32, Signature};
+use types::Bytes32;
 
 use super::cache::ChainSnapshot;
 use super::error::ChainError;
@@ -95,13 +97,47 @@ use super::error::ChainError;
 pub struct Service {
     engine: Engine,
     store: Arc<dyn storage::Store>,
+    /// Local validators' signer, held as the [`AttestationSigner`] ABSTRACTION —
+    /// this service is coupled to the act of signing, not to leanSig key material.
+    /// Production injects [`LocalSigner`]; tests inject a stub and so do not pay
+    /// for `ProdScheme` keygen.
+    ///
+    /// Interior-mutable because `produce_*` take `&self` while `sign_attestation`
+    /// needs `&mut` (a one-time-key watermark advances). The `parking_lot` guard is
+    /// held for the sign call ONLY and dropped before any persist / `.await` — the
+    /// crate `#![deny(clippy::await_holding_lock)]` (top of this file) makes a
+    /// crossing edit fail the build.
+    signer: Arc<Mutex<dyn AttestationSigner>>,
 }
 
 impl Service {
-    /// Builds a service around `engine` and `store`.
+    /// Builds a NON-SIGNING service around `engine` and `store` — an observer
+    /// with no local validators. `produce_block` / `produce_attestation` on such a
+    /// service return [`ChainError::Sign`] ([`SignError::UnknownValidator`]) rather
+    /// than a placeholder; a validating node uses [`Self::with_signer`] instead.
     #[must_use]
     pub fn new(engine: Engine, store: Arc<dyn storage::Store>) -> Self {
-        Self { engine, store }
+        Self::with_signer(engine, store, Arc::new(Mutex::new(LocalSigner::empty())))
+    }
+
+    /// Builds a SIGNING service: `signer` produces the local validators'
+    /// signatures (in production a [`LocalSigner`] the composition root loaded
+    /// from the genesis key material). The signer is applied at this runtime
+    /// boundary — never inside `forkchoice` or the engine store lock.
+    ///
+    /// Takes the [`AttestationSigner`] abstraction rather than a concrete signer,
+    /// so a caller may inject any implementation.
+    #[must_use]
+    pub fn with_signer(
+        engine: Engine,
+        store: Arc<dyn storage::Store>,
+        signer: Arc<Mutex<dyn AttestationSigner>>,
+    ) -> Self {
+        Self {
+            engine,
+            store,
+            signer,
+        }
     }
 
     /// Captures a consistent [`ChainSnapshot`] under one engine-lock
@@ -152,7 +188,44 @@ impl Service {
         // acquisition, so no concurrent writer can shift the head/finalized
         // checkpoint between accept and capture.
         let (outcome, plan) = self.engine.import_block_capturing(signed);
+        self.persist_accepted(slot, outcome, plan)
+    }
 
+    /// Sync-backfill import: SKIPS the import-boundary signature verify gate.
+    ///
+    /// The sync loop imports peer-provided blocks through this entry. Those
+    /// blocks are hash-chained and STF-validated by the sync walk but are NOT
+    /// signature-verified, and the sync trigger is peer-inducible — so this is a
+    /// deliberate trust boundary, not "already-canonical" history. It is safe
+    /// while no live verifier is wired (the gate is inert); the ingress must be
+    /// closed (verify on sync, or bound the imported segment to a trusted
+    /// finalized checkpoint) before the live verifier is activated. Live gossip
+    /// uses [`Self::import_block`] (the verifying path).
+    ///
+    /// `pub(crate)`: only the in-crate self-sync loop may take the skip; no
+    /// downstream crate can reach the verification-skipping path.
+    ///
+    /// # Errors
+    /// Same as [`Self::import_block`].
+    #[instrument(level = "debug", skip_all, fields(slot = signed.message.block.slot.get()), err)]
+    pub(crate) async fn import_block_synced(
+        &self,
+        signed: SignedBlockWithAttestation,
+    ) -> Result<BlockImportResult, ChainError> {
+        let slot = signed.message.block.slot;
+        let (outcome, plan) = self.engine.import_block_synced_capturing(signed);
+        self.persist_accepted(slot, outcome, plan)
+    }
+
+    /// Persists the block on [`BlockImportResult::Accepted`]. Shared by
+    /// [`Self::import_block`] and [`Self::import_block_synced`] so the two entry
+    /// points cannot drift on the persist path.
+    fn persist_accepted(
+        &self,
+        slot: Slot,
+        outcome: BlockImportResult,
+        plan: Option<PersistPlan>,
+    ) -> Result<BlockImportResult, ChainError> {
         if let BlockImportResult::Accepted {
             block_root,
             head_root,
@@ -217,48 +290,104 @@ impl Service {
         Ok(())
     }
 
-    /// Builds one locally authored block via [`Engine::produce_block`],
-    /// wraps it as a [`SignedBlockWithAttestation`] with a zero-filled signature
-    /// placeholder, and persists block + post-state + head to storage.
+    /// Builds one locally authored block, signs the proposer's own attestation
+    /// with a REAL leanSig signature (devnet-1: the proposer signs only its own
+    /// attestation), and persists block + post-state + head to storage.
     ///
-    /// The engine has already tracked the produced block (its `track_block`
-    /// step inside `produce_block`); persistence mirrors the
-    /// [`Self::import_block`] sweep so storage stays consistent with
-    /// engine state.
+    /// The engine returns UNSIGNED output ([`Engine::produce_block_unsigned`]);
+    /// signing happens HERE, at the runtime boundary, so the one-time-key `&mut`
+    /// advance never runs under the engine store lock. The proposer's own vote is
+    /// re-imported locally (as [`Self::produce_attestation`] does) so forkchoice
+    /// counts it WITHOUT the attester pass re-signing the same slot — the
+    /// consensus loop skips the proposer in its attest pass.
+    ///
+    /// The post-state guard is checked BEFORE signing so the unreachable
+    /// [`ChainError::PostStateMissing`] path never burns an irreversible
+    /// one-time-key index.
     ///
     /// # Errors
-    /// - [`ChainError::Engine`] if [`Engine::produce_block`] rejects the
+    /// - [`ChainError::Engine`] if [`Engine::produce_block_unsigned`] rejects the
     ///   request (unauthorized proposer, missing head state, etc.).
-    /// - [`ChainError::Storage`] / [`ChainError::PostStateMissing`] from
-    ///   the shared persist sweep on the same conditions as
-    ///   [`Self::import_block`].
+    /// - [`ChainError::PostStateMissing`] if the just-produced block's post-state
+    ///   is absent (engine invariant violation).
+    /// - [`ChainError::Sign`] if the proposer's key is missing or signing fails.
+    /// - [`ChainError::Storage`] from the persist sweep.
     #[instrument(level = "debug", skip_all, fields(slot = slot.get(), validator = validator.get()), err)]
     pub async fn produce_block(
         &self,
         slot: Slot,
         validator: ValidatorIndex,
     ) -> Result<SignedBlockWithAttestation, ChainError> {
-        // Produce and capture the persist inputs under one engine-lock
-        // acquisition: the block, its post-state, the head, and the finalized
-        // checkpoint all come from one consistent store snapshot, instead of
-        // the prior three separate acquisitions (produce, head(), persist).
-        let (signed, plan) = self.engine.produce_block_capturing(slot, validator)?;
-        let block_root: Bytes32 = signed.message.block.hash_tree_root().into();
-        let plan = plan.ok_or(ChainError::PostStateMissing { block_root })?;
+        // Produce (unsigned) + capture persist inputs under one engine-lock
+        // acquisition; sign at the boundary after the lock is released.
+        let prod = self.engine.produce_block_unsigned(slot, validator)?;
+        // Check the post-state guard BEFORE signing: the unreachable
+        // PostStateMissing path must not advance (burn) a one-time-key index.
+        let inputs = prod.persist.ok_or(ChainError::PostStateMissing {
+            block_root: prod.block_root,
+        })?;
+        // Devnet-1: sign ONLY the proposer's own attestation (block.py:108-115).
+        let proposer_attestation = Attestation {
+            validator_id: validator,
+            data: prod.proposer_vote.vote,
+        };
+        let signature = {
+            // Guard scope = the sign call only; dropped before the re-import /
+            // persist below (no lock guard crosses `.await`).
+            let mut signer = self.signer.lock();
+            signer
+                .sign_attestation(&proposer_attestation)
+                .map_err(ChainError::Sign)?
+        };
+        // Re-import the proposer's OWN attestation into `latest_known_votes` so
+        // forkchoice counts it. `Attestation` is `Copy`, so it stays available for
+        // the block envelope below (NO `.clone()`); `signature` is non-`Copy`, so
+        // its clone here is the one required clone for the re-imported envelope.
+        let self_vote = SignedAttestation {
+            message: proposer_attestation,
+            signature: signature.clone(),
+        };
+        if let AttestationImportResult::Rejected { .. } = self.engine.import_attestation(self_vote)
+        {
+            warn!(
+                slot = slot.get(),
+                validator = validator.get(),
+                "proposer self-vote re-import rejected (vote still carried by the block)",
+            );
+        }
+        // Part 13 fills the proposer's single signature; positional-list assembly
+        // (body attestations + proposer last) is a later part. `BlockSignatures`'
+        // only constructor is `FromIterator<Signature>`.
+        let block_signatures: BlockSignatures = core::iter::once(signature).collect();
+        let signed = SignedBlockWithAttestation {
+            message: BlockWithAttestation {
+                block: prod.block,
+                proposer_attestation,
+            },
+            signature: block_signatures,
+        };
+        let plan = PersistPlan::new(
+            prod.block_root,
+            inputs.head,
+            inputs.finalized,
+            inputs.post_state,
+            signed.clone(),
+        );
         self.persist_plan(plan)?;
         debug!(
             slot = slot.get(),
             validator = validator.get(),
-            block_root = %block_root.to_hex(),
+            block_root = %prod.block_root.to_hex(),
             "chain produced block persisted",
         );
         Ok(signed)
     }
 
     /// Builds one locally authored attestation via
-    /// [`Engine::produce_attestation_vote`], wraps it as a [`SignedAttestation`]
-    /// with a zero-filled signature placeholder, and re-imports the vote
-    /// locally so it lands in the engine's `latest_known_votes` pool.
+    /// [`Engine::produce_attestation_vote`], signs it with a REAL leanSig
+    /// signature over `hash_tree_root(attestation)` at epoch = `data.slot`, and
+    /// re-imports the vote locally so it lands in the engine's
+    /// `latest_known_votes` pool.
     ///
     /// The local re-import is load-bearing: without it, this validator's
     /// own attestations only reach peers via gossip, and the next produced
@@ -266,8 +395,9 @@ impl Service {
     /// the upstream chain-service fix for the same stall.
     ///
     /// # Errors
-    /// [`ChainError::Engine`] if [`Engine::produce_attestation_vote`]
-    /// rejects the request.
+    /// - [`ChainError::Engine`] if [`Engine::produce_attestation_vote`]
+    ///   rejects the request.
+    /// - [`ChainError::Sign`] if the validator's key is missing or signing fails.
     #[instrument(level = "debug", skip_all, fields(slot = slot.get(), validator = validator.get()), err)]
     pub async fn produce_attestation(
         &self,
@@ -275,13 +405,19 @@ impl Service {
         validator: ValidatorIndex,
     ) -> Result<SignedAttestation, ChainError> {
         let produced = self.engine.produce_attestation_vote(slot)?;
-        let signed = SignedAttestation {
-            message: Attestation {
-                validator_id: validator,
-                data: produced.vote,
-            },
-            signature: Signature::zero(),
+        let message = Attestation {
+            validator_id: validator,
+            data: produced.vote,
         };
+        // Sign at the boundary. Guard scope = the sign call only; dropped before
+        // the engine re-import below (no lock guard crosses `.await`).
+        let signature = {
+            let mut signer = self.signer.lock();
+            signer
+                .sign_attestation(&message)
+                .map_err(ChainError::Sign)?
+        };
+        let signed = SignedAttestation { message, signature };
         // Best-effort re-import: when `latest_justified` is still the
         // zero-sentinel (e.g. fresh anchor before the first justified
         // checkpoint), the produced vote's source.root is unresolvable

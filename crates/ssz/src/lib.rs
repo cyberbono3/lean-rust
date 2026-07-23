@@ -245,8 +245,8 @@ mod tests {
     // - The ZERO roots pin tree depth only. An all-zero root depends solely on
     //   `power_of_two_ceil(ceil(N / 32))`, so it is CONSTANT across huge width
     //   ranges: every N in 2049..=4096 roots to 87eb0d…, and that range includes
-    //   4000 — the deprecated `Bytes4000` width this type replaces. A zero root
-    //   therefore CANNOT witness the width, and is useless as an interop vector.
+    //   both 3116 (the `Signature` width) and 4000. A zero root therefore CANNOT
+    //   witness the width, and is useless as an interop vector.
     //   Zero input also hides final-chunk padding: with all-zero bytes, right-pad,
     //   left-pad, and no-pad are indistinguishable.
     //

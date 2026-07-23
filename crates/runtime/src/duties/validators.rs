@@ -198,7 +198,7 @@ impl ValidatorAssignments {
 /// full contents, and because the bound is on the read itself (not a prior
 /// `Metadata::len` probe) it closes the TOCTOU / symlink-swap window: a file
 /// that grows after a stat cannot slurp unbounded memory here.
-fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
+pub(super) fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
     use std::io::Read;
 
     let file = std::fs::File::open(path).map_err(|source| yaml_read_err(path, source))?;
@@ -233,7 +233,7 @@ fn check_file_size(len: u64) -> DutiesResult<()> {
     Ok(())
 }
 
-fn resolve_path(raw: &Path) -> PathBuf {
+pub(super) fn resolve_path(raw: &Path) -> PathBuf {
     if raw.is_absolute() {
         return raw.to_path_buf();
     }
