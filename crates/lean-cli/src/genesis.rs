@@ -229,9 +229,9 @@ fn load_genesis_registry(
     // `load_optional` owns the absent-vs-present decision under ITS path
     // resolution — do NOT pre-probe with `Path::exists`, which resolves against
     // a different root and can silently disagree with the actual read.
-    let Some(registry) = GenesisRegistry::load_optional(assignments, &manifest_path)
-        .with_context(|| format!("load genesis pubkey manifest {}", manifest_path.display()))?
-    else {
+    let manifest = GenesisRegistry::load_optional(assignments, &manifest_path)
+        .with_context(|| format!("load genesis pubkey manifest {}", manifest_path.display()))?;
+    let Some(registry) = manifest else {
         warn!(
             path = %manifest_path.display(),
             "no genesis_validators manifest beside validators.yaml; \
