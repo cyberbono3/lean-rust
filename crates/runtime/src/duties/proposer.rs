@@ -61,6 +61,25 @@ impl LocalProposers {
     pub fn local(&self) -> impl Iterator<Item = ValidatorIndex> + '_ {
         self.local.iter().copied()
     }
+
+    /// The local validators that should attest at `slot`: the whole local set,
+    /// minus the slot's proposer when this node owns it. Order unspecified, as
+    /// for [`Self::local`].
+    ///
+    /// The proposer is excluded because it already signed AND locally
+    /// re-imported its own attestation during block production (the block
+    /// carries that signed attestation), so attesting again here would sign the
+    /// SAME `(validator, slot)` twice at epoch = slot — a leanSig one-time-key
+    /// reuse. Callers get the correct attester set without having to know that
+    /// rule.
+    ///
+    /// `None` from [`Self::proposer_for_slot`] means this node does not own the
+    /// slot's proposer, so nothing is excluded.
+    pub fn attesters_for_slot(&self, slot: Slot) -> impl Iterator<Item = ValidatorIndex> + '_ {
+        let proposer = self.proposer_for_slot(slot);
+        self.local()
+            .filter(move |&validator| Some(validator) != proposer)
+    }
 }
 
 #[cfg(test)]

@@ -126,21 +126,6 @@ struct RunHandle {
     cancel: CancellationToken,
 }
 
-/// The local validators that should attest at `slot`: every local validator
-/// EXCEPT the slot's proposer. The proposer already signed AND locally
-/// re-imported its own attestation inside `ChainService::produce_block` (the
-/// block carries the signed attestation), so re-attesting here would sign the
-/// SAME (validator, slot) twice at epoch = slot — a leanSig one-time-key reuse.
-fn attesters_excluding_proposer(
-    proposers: &LocalProposers,
-    slot: Slot,
-) -> impl Iterator<Item = ValidatorIndex> + '_ {
-    let proposer = proposers.proposer_for_slot(slot);
-    proposers
-        .local()
-        .filter(move |validator| Some(*validator) != proposer)
-}
-
 /// Loads the validator assignments and resolves this node's LOCAL validator
 /// index set (the configured group) plus the total validator count. Shared by
 /// [`ConsensusLoop::new`] (proposer schedule) and the composition root
@@ -386,7 +371,9 @@ impl Runner {
     /// this one task); engine mutations still serialize on the engine mutex.
     async fn run_attesters(&self, slot: Slot, cancel: &CancellationToken) {
         let budget = TICK_PERIOD;
-        let mut duties = attesters_excluding_proposer(&self.proposers, slot)
+        let mut duties = self
+            .proposers
+            .attesters_for_slot(slot)
             .map(|validator| async move {
                 (
                     validator,
@@ -540,8 +527,7 @@ mod tests {
         for slot in 0..8u64 {
             let s = Slot::new(slot);
             let proposer = proposers.proposer_for_slot(s);
-            let attesters: Vec<ValidatorIndex> =
-                attesters_excluding_proposer(&proposers, s).collect();
+            let attesters: Vec<ValidatorIndex> = proposers.attesters_for_slot(s).collect();
 
             if let Some(p) = proposer {
                 assert!(
