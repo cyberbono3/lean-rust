@@ -130,6 +130,36 @@ pub struct Attestation {
     pub data: AttestationData,
 }
 
+impl Attestation {
+    /// Binds `data` to the validator that produced it.
+    ///
+    /// Parameter order mirrors the field (and therefore SSZ) order —
+    /// `validator_id` before `data` — which the hash-tree-root commits to.
+    ///
+    /// Takes a whole [`AttestationData`] rather than its four fields spread
+    /// out: `head`, `target`, and `source` are all [`Checkpoint`], so a
+    /// flattened constructor would let a transposition compile silently and
+    /// produce a well-formed attestation with the wrong justification pair.
+    /// Naming them at the `AttestationData` literal is what prevents that.
+    ///
+    /// # Example
+    /// ```
+    /// use protocol::{Attestation, AttestationData, Slot, ValidatorIndex};
+    ///
+    /// let data = AttestationData {
+    ///     slot: Slot::new(7),
+    ///     ..AttestationData::default()
+    /// };
+    /// let att = Attestation::new(ValidatorIndex::new(3), data);
+    /// assert_eq!(att.validator_id.get(), 3);
+    /// assert_eq!(att.data.slot.get(), 7);
+    /// ```
+    #[must_use]
+    pub const fn new(validator_id: ValidatorIndex, data: AttestationData) -> Self {
+        Self { validator_id, data }
+    }
+}
+
 impl Encode for Attestation {
     fn is_ssz_fixed_len() -> bool {
         true

@@ -41,10 +41,7 @@ const SIGNED_ATTESTATION_BASELINE_BYTES: usize = 3072;
 
 fn signed_attestation(validator: u64) -> SignedAttestation {
     SignedAttestation {
-        message: Attestation {
-            validator_id: ValidatorIndex::new(validator),
-            data: AttestationData::default(),
-        },
+        message: Attestation::new(ValidatorIndex::new(validator), AttestationData::default()),
         signature: Signature::zero(),
     }
 }

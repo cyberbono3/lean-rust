@@ -327,10 +327,7 @@ impl Service {
             block_root: prod.block_root,
         })?;
         // Devnet-1: sign ONLY the proposer's own attestation (block.py:108-115).
-        let proposer_attestation = Attestation {
-            validator_id: validator,
-            data: prod.proposer_vote.vote,
-        };
+        let proposer_attestation = Attestation::new(validator, prod.proposer_vote.vote);
         let signature = {
             // Guard scope = the sign call only; dropped before the re-import /
             // persist below (no lock guard crosses `.await`).
@@ -405,10 +402,7 @@ impl Service {
         validator: ValidatorIndex,
     ) -> Result<SignedAttestation, ChainError> {
         let produced = self.engine.produce_attestation_vote(slot)?;
-        let message = Attestation {
-            validator_id: validator,
-            data: produced.vote,
-        };
+        let message = Attestation::new(validator, produced.vote);
         // Sign at the boundary. Guard scope = the sign call only; dropped before
         // the engine re-import below (no lock guard crosses `.await`).
         let signature = {
