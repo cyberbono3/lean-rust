@@ -11,6 +11,7 @@ use protocol::{
     SignedBlockWithAttestation, Slot, State, ValidatorIndex,
 };
 use runtime::api::{HttpService, MetricsService, Recorder};
+use runtime::chain::engine::Engine;
 use runtime::chain::{ChainMetrics, Service as ChainService};
 use runtime::core::{Node, NodeConfig};
 use runtime::duties::{LocalSigner, OtsSigner};
@@ -323,17 +324,13 @@ fn register_chain_histograms(recorder: &mut Recorder) -> Result<ChainMetrics> {
 /// Extracted from [`new_devnet`] so the composition root stays the flat wiring
 /// list its doc claims; this owns the resume-vs-genesis branch and its two
 /// store-consistency safety checks.
-fn build_engine(
-    store: &dyn Store,
-    genesis_state: State,
-    genesis_block: Block,
-) -> Result<runtime::chain::engine::Engine> {
+fn build_engine(store: &dyn Store, genesis_state: State, genesis_block: Block) -> Result<Engine> {
     if let Some((head_root, state, block)) = resume_anchor(store)? {
         // Resume: trust the persisted head as its own justified+finalized anchor
         // so the fork-choice head walk starts from a tracked root. Plain
         // `from_anchor` would seed justified from the state (an ancestor absent
         // from the anchor-only block map) and break the first head recompute.
-        let engine = runtime::chain::engine::Engine::from_trusted_head(state, block)?;
+        let engine = Engine::from_trusted_head(state, block)?;
         // Defense-in-depth: `from_trusted_head` re-derives the anchor root from
         // the block, so a corrupt/tampered store whose head-keyed block roots
         // elsewhere would silently anchor at a different block than `load_head`
@@ -347,7 +344,7 @@ fn build_engine(
     let anchor_slot = genesis_block.slot;
     let anchor_state = genesis_state.clone();
     let signed_anchor = signed_block_envelope(genesis_block.clone());
-    let engine = runtime::chain::engine::Engine::from_anchor(genesis_state, genesis_block)?;
+    let engine = Engine::from_anchor(genesis_state, genesis_block)?;
     let anchor_root = engine.head();
     let finalized = engine.latest_finalized();
     persist_anchor(
@@ -645,9 +642,7 @@ mod tests {
         let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
         let anchor_slot = genesis_block.slot;
         let signed_anchor = signed_block_envelope(genesis_block.clone());
-        let engine =
-            runtime::chain::engine::Engine::from_anchor(genesis_state.clone(), genesis_block)
-                .unwrap();
+        let engine = Engine::from_anchor(genesis_state.clone(), genesis_block).unwrap();
         let anchor_root = engine.head();
         let finalized = engine.latest_finalized();
         persist_anchor(
@@ -739,7 +734,7 @@ mod tests {
         // The wired chain gauges must not collide with each other or the
         // baseline gauges, so `freeze` succeeds.
         let (state, block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
-        let engine = runtime::chain::engine::Engine::from_anchor(state, block).unwrap();
+        let engine = Engine::from_anchor(state, block).unwrap();
         let store: Arc<dyn Store> = Arc::new(MemoryStore::default());
         let chain = Arc::new(ChainService::new(engine, store));
 
@@ -766,8 +761,7 @@ mod tests {
         let store = MemoryStore::default();
         let (state, block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
         let slot = block.slot;
-        let engine =
-            runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+        let engine = Engine::from_anchor(state.clone(), block.clone()).unwrap();
         let root = engine.head();
         let finalized = engine.latest_finalized();
         let signed = signed_block_envelope(block);
@@ -793,8 +787,7 @@ mod tests {
 
         // Build a valid anchor and persist it head-consistently.
         let (state, block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
-        let engine =
-            runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+        let engine = Engine::from_anchor(state.clone(), block.clone()).unwrap();
         let root = engine.head();
         let slot = block.slot;
         let finalized = engine.latest_finalized();
@@ -840,8 +833,7 @@ mod tests {
         {
             let store = RedbStore::new(&db_path).unwrap();
             let (state, block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
-            let engine =
-                runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+            let engine = Engine::from_anchor(state.clone(), block.clone()).unwrap();
             let root = engine.head();
             let signed = signed_block_envelope(block.clone());
             persist_anchor(
@@ -894,9 +886,7 @@ mod tests {
         let (genesis_state, genesis_block) = runtime::chain::engine::test_fixtures::anchor_pair(4);
         let anchor_slot = genesis_block.slot;
         let signed_anchor = signed_block_envelope(genesis_block.clone());
-        let engine =
-            runtime::chain::engine::Engine::from_anchor(genesis_state.clone(), genesis_block)
-                .unwrap();
+        let engine = Engine::from_anchor(genesis_state.clone(), genesis_block).unwrap();
         let anchor_root = engine.head();
         let finalized = engine.latest_finalized();
         persist_anchor(
@@ -1000,8 +990,7 @@ mod tests {
         // OLD path (from_anchor): advancing the forkchoice clock over one slot of
         // intervals reaches a head-walk phase, where get_fork_choice_head hits
         // the absent justified root and errors.
-        let broken =
-            runtime::chain::engine::Engine::from_anchor(state.clone(), block.clone()).unwrap();
+        let broken = Engine::from_anchor(state.clone(), block.clone()).unwrap();
         let broken_result =
             (0..config::INTERVALS_PER_SLOT).try_for_each(|_| broken.tick_interval(false));
         assert!(
@@ -1012,7 +1001,7 @@ mod tests {
         // FIX (from_trusted_head): resumes at the persisted head and the head
         // recompute succeeds across a full slot of intervals — the node keeps
         // running instead of erroring on its first consensus tick.
-        let resumed = runtime::chain::engine::Engine::from_trusted_head(state, block).unwrap();
+        let resumed = Engine::from_trusted_head(state, block).unwrap();
         assert_eq!(
             resumed.head(),
             head_root,
