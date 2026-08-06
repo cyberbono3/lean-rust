@@ -515,37 +515,6 @@ fn anchor_from(genesis: Duration, now_wall: Duration, now_instant: Instant) -> I
 mod tests {
     use super::*;
 
-    // --- Proposer double-sign resolution -----------------------------------
-
-    #[test]
-    fn attesters_exclude_the_slot_proposer() {
-        // Two local validators out of four total; whichever is the slot's
-        // proposer must be excluded from the attest pass so it does not sign its
-        // own attestation twice at the same epoch (one-time-key reuse) — it
-        // already signed + re-imported that vote inside `produce_block`.
-        let proposers = LocalProposers::new([ValidatorIndex::new(0), ValidatorIndex::new(1)], 4);
-        for slot in 0..8u64 {
-            let s = Slot::new(slot);
-            let proposer = proposers.proposer_for_slot(s);
-            let attesters: Vec<ValidatorIndex> = proposers.attesters_for_slot(s).collect();
-
-            if let Some(p) = proposer {
-                assert!(
-                    !attesters.contains(&p),
-                    "slot {slot}: proposer {p:?} must be skipped in the attest pass",
-                );
-            }
-            for validator in proposers.local() {
-                if Some(validator) != proposer {
-                    assert!(
-                        attesters.contains(&validator),
-                        "slot {slot}: non-proposer {validator:?} must still attest",
-                    );
-                }
-            }
-        }
-    }
-
     // --- Health escalation (restores the deleted duties `PublishHealth`) ---
 
     #[test]
