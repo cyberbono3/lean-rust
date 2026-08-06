@@ -354,11 +354,11 @@ mod tests {
     /// `State.validators` of a given length (pubkey `i` filled with byte `i`).
     fn dummy_registry(n: u64) -> Vec<Validator> {
         (0..n)
-            .map(|i| Validator {
-                pubkey: PublicKey::new(
-                    [u8::try_from(i).expect("test index fits u8"); PublicKey::LEN],
-                ),
-                index: ValidatorIndex::new(i),
+            .map(|i| {
+                Validator::new(
+                    PublicKey::new([u8::try_from(i).expect("test index fits u8"); PublicKey::LEN]),
+                    ValidatorIndex::new(i),
+                )
             })
             .collect()
     }
@@ -417,10 +417,10 @@ mod tests {
         // the registry runs one past it, so the registry-length bound is what
         // fires.
         let mut state = synthesize_state(3, dummy_registry(3), 1_700_000_000);
-        state.validators.push(Validator {
-            pubkey: PublicKey::new([3u8; PublicKey::LEN]),
-            index: ValidatorIndex::new(3),
-        });
+        state.validators.push(Validator::new(
+            PublicKey::new([3u8; PublicKey::LEN]),
+            ValidatorIndex::new(3),
+        ));
         let chain_config = ChainConfig {
             validator_registry_limit: 3,
             ..ChainConfig::default()

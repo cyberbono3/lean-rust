@@ -136,10 +136,10 @@ mod tests {
     use types::PublicKey;
 
     fn validator(seed: u8) -> Validator {
-        Validator {
-            pubkey: PublicKey::new([seed; PublicKey::LEN]),
-            index: ValidatorIndex::new(u64::from(seed)),
-        }
+        Validator::new(
+            PublicKey::new([seed; PublicKey::LEN]),
+            ValidatorIndex::new(u64::from(seed)),
+        )
     }
 
     #[test]

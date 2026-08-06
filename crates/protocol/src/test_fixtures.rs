@@ -77,10 +77,10 @@ pub(crate) fn sample_signature(seed: u8) -> Signature {
 
 /// Deterministic [`Validator`] keyed off `seed`.
 pub(crate) fn sample_validator(seed: u8) -> Validator {
-    Validator {
-        pubkey: PublicKey::new([seed; PublicKey::LEN]),
-        index: ValidatorIndex::new(u64::from(seed)),
-    }
+    Validator::new(
+        PublicKey::new([seed; PublicKey::LEN]),
+        ValidatorIndex::new(u64::from(seed)),
+    )
 }
 
 /// Deterministic [`Validators`] registry with `n` entries (seeds `0..n`).

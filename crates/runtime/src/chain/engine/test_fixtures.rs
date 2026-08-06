@@ -41,10 +41,7 @@ fn engine_from_state(state: State) -> Engine {
 #[must_use]
 pub fn validator_registry(num_validators: u64) -> Validators {
     (0..num_validators)
-        .map(|i| Validator {
-            pubkey: PublicKey::default(),
-            index: ValidatorIndex::new(i),
-        })
+        .map(|i| Validator::new(PublicKey::default(), ValidatorIndex::new(i)))
         .collect()
 }
 

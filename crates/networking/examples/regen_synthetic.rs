@@ -62,9 +62,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     // native `State` SSZ format — there is no devnet-1 cross-client `State`
     // blob to copy yet, so this is a self-generated vector (see PROVENANCE.md).
     let validators: Vec<Validator> = (0..4_u8)
-        .map(|i| Validator {
-            pubkey: PublicKey::new([i; PublicKey::LEN]),
-            index: ValidatorIndex::new(u64::from(i)),
+        .map(|i| {
+            Validator::new(
+                PublicKey::new([i; PublicKey::LEN]),
+                ValidatorIndex::new(u64::from(i)),
+            )
         })
         .collect();
     let genesis_state = genesis_state_with_validators(4, 1_700_000_000, validators);

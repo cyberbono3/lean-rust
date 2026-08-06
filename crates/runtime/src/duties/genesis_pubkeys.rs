@@ -119,10 +119,7 @@ impl GenesisRegistry {
             let index = position as u64;
             let pubkey = PublicKey::try_from(hex.as_str())
                 .map_err(|source| DutiesError::InvalidValidatorPubkey { index, source })?;
-            validators.push(Validator {
-                pubkey,
-                index: ValidatorIndex::new(index),
-            });
+            validators.push(Validator::new(pubkey, ValidatorIndex::new(index)));
         }
         Ok(Self { validators })
     }
