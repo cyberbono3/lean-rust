@@ -196,11 +196,20 @@ impl LocalSigner {
     /// restorable key, else the whole load fails — no partial signer, no silent
     /// gap.
     ///
+    /// `pub(crate)`, NOT `pub`: this reads the keygen file alone, whose
+    /// `next_index` stays `0` forever because nothing rewrites it. A production
+    /// node built on it would rewind its one-time-key watermark to fresh-keygen
+    /// state on every restart and re-sign epochs it had already signed — the
+    /// exact reuse [`load_resuming`](Self::load_resuming) exists to prevent.
+    /// Keeping it crate-private means a composition root cannot reach for the
+    /// shorter name by mistake; the only callers are this crate's tests and
+    /// [`crate::duties::test_fixtures`], which never restart.
+    ///
     /// # Errors
     /// [`SignerLoadError`] on the first index whose file is unreadable, whose
     /// bytes fail [`OtsKeyState`] decode, or whose record fails
     /// [`from_record`](crypto::SigningKey::from_record).
-    pub fn load(
+    pub(crate) fn load(
         secrets_dir: &Path,
         local_indices: impl IntoIterator<Item = ValidatorIndex>,
     ) -> Result<Self, SignerLoadError> {

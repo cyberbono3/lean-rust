@@ -31,7 +31,9 @@ pub use proposer::LocalProposers;
 // the public `Service::with_signer` signature; `sign_attestation` is public with
 // it (a trait method cannot be narrower than its trait). `LocalSigner` / its
 // errors are `pub` because the composition root (`node`) builds the production
-// implementation and passes it in.
+// implementation and passes it in — via `LocalSigner::load_resuming`, the only
+// public constructor that reads key material. Its watermark-ignoring sibling
+// `load` is `pub(crate)` so no composition root can reach it by mistake.
 // `validator_secret_path` is `pub` so the offline keygen (`lean-cli`, which
 // depends on this crate) writes the same file names this loader reads.
 // `OtsSigner` is `pub` because the composition root (`node`) wraps the
