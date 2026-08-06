@@ -17,7 +17,7 @@ use serde::Deserialize;
 use types::PublicKey;
 
 use super::error::{DutiesError, DutiesResult};
-use super::validators::{read_capped, resolve_path, ValidatorAssignments};
+use super::validators::{read_capped, reject_yaml_aliases, resolve_path, ValidatorAssignments};
 
 /// Raw manifest shape — a `genesis_validators:` sequence of hex strings.
 ///
@@ -46,23 +46,16 @@ impl GenesisRegistry {
     /// # Errors
     /// - [`DutiesError::YamlRead`] / [`DutiesError::YamlParse`] /
     ///   [`DutiesError::ValidatorsFileTooLarge`] for IO / decode / size failures.
+    /// - [`DutiesError::ManifestContainsYamlAlias`] when the file contains YAML
+    ///   anchor / alias syntax (see [`reject_yaml_aliases`]).
     /// - [`DutiesError::ValidatorPubkeyCountMismatch`] when the manifest length
     ///   does not equal `assignments.total_validators()`.
     /// - [`DutiesError::InvalidValidatorPubkey`] when an entry is not valid
     ///   52-byte hex.
-    pub fn load(
-        assignments: &ValidatorAssignments,
-        manifest_path: impl AsRef<Path>,
-    ) -> DutiesResult<Self> {
-        let resolved = resolve_path(manifest_path.as_ref());
+    pub fn load(assignments: &ValidatorAssignments, manifest_path: &Path) -> DutiesResult<Self> {
+        let resolved = resolve_path(manifest_path);
         let bytes = read_capped(&resolved)?;
-        // Reject YAML anchors/aliases BEFORE parsing: alias expansion happens
-        // inside `serde_yaml::from_slice` (amplifying a sub-cap file into a huge
-        // `Vec`) before any count check can run, so the file-size cap alone does
-        // not bound the allocation. A flat hex manifest never needs `&`/`*`.
-        if bytes.iter().any(|&b| b == b'&' || b == b'*') {
-            return Err(DutiesError::ManifestContainsYamlAlias { path: resolved });
-        }
+        reject_yaml_aliases(&bytes, &resolved)?;
         let raw: RawManifest =
             serde_yaml::from_slice(&bytes).map_err(|source| DutiesError::YamlParse {
                 path: resolved,
@@ -87,7 +80,7 @@ impl GenesisRegistry {
     /// rather than a [`DutiesError::YamlRead`].
     pub fn load_optional(
         assignments: &ValidatorAssignments,
-        manifest_path: impl AsRef<Path>,
+        manifest_path: &Path,
     ) -> DutiesResult<Option<Self>> {
         match Self::load(assignments, manifest_path) {
             Ok(registry) => Ok(Some(registry)),

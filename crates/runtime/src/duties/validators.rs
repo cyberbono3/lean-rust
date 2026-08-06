@@ -210,6 +210,31 @@ pub(super) fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Rejects YAML anchor / alias syntax (`&`, `*`) in `bytes` before it reaches a
+/// parser.
+///
+/// Load-bearing, not stylistic: `serde_yaml` expands aliases INSIDE
+/// `from_slice`, so a file well under [`MAX_VALIDATORS_FILE_BYTES`] can
+/// amplify into an arbitrarily large `Vec` before any count or shape check can
+/// run. [`read_capped`] bounds the bytes read from disk; it does not bound what
+/// the parser allocates from them. This is the guard that does.
+///
+/// A conservative byte scan: it rejects `&` / `*` anywhere in the file,
+/// including inside a comment or a quoted scalar. The manifests this guards are
+/// machine-generated flat sequences that never need either character, so failing
+/// closed costs nothing and needs no YAML tokenizer to be trustworthy.
+///
+/// # Errors
+/// [`DutiesError::ManifestContainsYamlAlias`] when either byte is present.
+pub(super) fn reject_yaml_aliases(bytes: &[u8], path: &Path) -> DutiesResult<()> {
+    if bytes.iter().any(|b| matches!(b, b'&' | b'*')) {
+        return Err(DutiesError::ManifestContainsYamlAlias {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
 /// Builds the [`DutiesError::YamlRead`] for `path`. One constructor for both
 /// the open and the read in [`read_capped`], so the path / source wrapping
 /// cannot drift between them.
