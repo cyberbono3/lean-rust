@@ -3,6 +3,8 @@
 //! # Scope
 //! - [`genesis_state`] — slot-0 [`State`] for a given validator-set size and
 //!   chain genesis time.
+//! - [`genesis_anchor_block`] — the matching slot-0 anchor [`Block`], the one
+//!   home for the anchor shape that forkchoice and runtime fixtures both need.
 //! - The slot-processing methods (`process_slot`, `process_slots`) live as
 //!   inherent methods on [`State`]; this module re-exports
 //!   [`StateTransitionError`] for convenience.
@@ -20,7 +22,8 @@ use ssz::HashTreeRoot;
 use types::Bytes32;
 
 use crate::{
-    block::BlockBody, state::ProtocolConfig, state::State, validator::Validators, BlockHeader,
+    block::Block, block::BlockBody, state::ProtocolConfig, state::State, validator::Validators,
+    BlockHeader,
 };
 
 pub use crate::error::StateTransitionError;
@@ -92,6 +95,36 @@ pub fn genesis_state_with_validators(
     let mut state = genesis_state(num_validators, genesis_time);
     state.validators = validators;
     state
+}
+
+/// Builds the genesis anchor [`Block`] for `state`: the slot-0, zero-parented
+/// block whose `state_root` commits to `state`.
+///
+/// Satisfies the anchor invariant every store constructor checks —
+/// `block.state_root == state.hash_tree_root()` — so the pair can seed a
+/// forkchoice store directly.
+///
+/// `state_root` is the ONLY non-default field: a genesis anchor is slot 0
+/// (no prior slot), proposer 0, `parent_root` zero (no prior block), and an
+/// empty body. Struct-update keeps that in sync as [`Block`] grows fields,
+/// matching [`genesis_state`]'s construction.
+///
+/// # Example
+/// ```
+/// use protocol::stf::{genesis_anchor_block, genesis_state};
+/// use ssz::HashTreeRoot;
+///
+/// let state = genesis_state(4, 1_700_000_000);
+/// let block = genesis_anchor_block(&state);
+/// assert_eq!(block.slot.get(), 0);
+/// assert_eq!(block.state_root.0, state.hash_tree_root());
+/// ```
+#[must_use]
+pub fn genesis_anchor_block(state: &State) -> Block {
+    Block {
+        state_root: state.hash_tree_root().into(),
+        ..Block::default()
+    }
 }
 
 #[cfg(test)]

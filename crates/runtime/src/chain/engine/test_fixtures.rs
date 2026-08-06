@@ -12,13 +12,12 @@
     clippy::missing_panics_doc
 )]
 
-use protocol::stf::{genesis_state, genesis_state_with_validators};
+use protocol::stf::{genesis_anchor_block, genesis_state, genesis_state_with_validators};
 use protocol::{
-    Attestation, Block, BlockBody, BlockSignatures, BlockWithAttestation,
-    SignedBlockWithAttestation, Slot, State, Validator, ValidatorIndex, Validators,
+    Attestation, Block, BlockSignatures, BlockWithAttestation, SignedBlockWithAttestation, Slot,
+    State, Validator, ValidatorIndex, Validators,
 };
-use ssz::HashTreeRoot;
-use types::{Bytes32, PublicKey};
+use types::PublicKey;
 
 use super::handle::Engine;
 
@@ -29,23 +28,10 @@ pub const ENGINE_VALIDATORS: u64 = 4;
 
 const GENESIS_TIME: u64 = 1_700_000_000;
 
-/// The zero-parented genesis anchor block for `state`, satisfying
-/// `block.state_root == state.hash_tree_root()`. Single source of the anchor
-/// shape for every fixture below.
-fn anchor_block_for(state: &State) -> Block {
-    Block {
-        slot: Slot::ZERO,
-        proposer_index: ValidatorIndex::new(0),
-        parent_root: Bytes32::zero(),
-        state_root: state.hash_tree_root().into(),
-        body: BlockBody::default(),
-    }
-}
-
 /// Anchors `state` into an [`Engine`]. Single call site of
 /// [`Engine::from_anchor`] across the fixtures.
 fn engine_from_state(state: State) -> Engine {
-    let block = anchor_block_for(&state);
+    let block = genesis_anchor_block(&state);
     Engine::from_anchor(state, block).expect("genesis anchor invariants")
 }
 
@@ -68,7 +54,7 @@ pub fn validator_registry(num_validators: u64) -> Validators {
 #[must_use]
 pub fn anchor_pair(num_validators: u64) -> (State, Block) {
     let state = genesis_state(num_validators, GENESIS_TIME);
-    let block = anchor_block_for(&state);
+    let block = genesis_anchor_block(&state);
     (state, block)
 }
 

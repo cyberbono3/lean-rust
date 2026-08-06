@@ -9,6 +9,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use protocol::stf::genesis_anchor_block;
 use protocol::{
     Attestation, AttestationData, Block, BlockBody, BlockHeader, Checkpoint, ProtocolConfig,
     SignedAttestation, Slot, State, ValidatorIndex,
@@ -76,13 +77,7 @@ pub(crate) fn anchor_pair(num_validators: u64) -> (State, Block) {
 /// slot 1 will pass `process_block_header`'s parent-root check.
 pub(crate) fn genesis_anchor(num_validators: u64) -> (State, Block) {
     let state = genesis_state(num_validators);
-    let block = Block {
-        slot: Slot::ZERO,
-        proposer_index: ValidatorIndex::new(0),
-        parent_root: Bytes32::zero(),
-        state_root: state.hash_tree_root().into(),
-        body: BlockBody::default(),
-    };
+    let block = genesis_anchor_block(&state);
     (state, block)
 }
 
