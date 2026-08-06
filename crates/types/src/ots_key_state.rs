@@ -33,10 +33,14 @@ pub struct OtsKeyState {
     ///
     /// The one-time-key watermark: reconstructing through the crypto adapter
     /// refuses to sign any epoch at or below `next_index - 1`. This is a plain
-    /// deserialization target, so the "monotonic, never rewound" invariant across
-    /// restarts is the persistence layer's responsibility to uphold (it must never
-    /// write back a value lower than the one it loaded) — the record type cannot
-    /// enforce it alone.
+    /// deserialization target and cannot enforce monotonicity on its own. The
+    /// "monotonic, never rewound" invariant across restarts is owned by the
+    /// runtime sign-boundary guard (the composition-root OTS signer): it persists
+    /// only post-sign (advanced) records and, on reload, must reject a watermark
+    /// below the one already in force. The durable key-value store faithfully
+    /// records whatever the guard hands it and does NOT itself compare watermarks
+    /// (a blind overwrite, like every other `save_*`), so it is the guard's job to
+    /// ensure a lower `next_index` never reaches `save_ots_key_state`.
     pub next_index: u64,
 }
 

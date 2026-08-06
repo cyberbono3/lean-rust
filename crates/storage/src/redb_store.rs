@@ -14,9 +14,9 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use protocol::{Checkpoint, SignedBlockWithAttestation, State};
+use protocol::{Checkpoint, SignedBlockWithAttestation, State, ValidatorIndex};
 use redb::{Database, TableDefinition};
-use types::Bytes32;
+use types::{Bytes32, OtsKeyState};
 
 use crate::error::StorageError;
 use crate::store::{HeadInfo, Store};
@@ -27,6 +27,9 @@ const BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
 const STATES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("states");
 /// Singleton canonical-head record: `HEAD_KEY -> SSZ(head) ++ SSZ(finalized)`.
 const HEAD: TableDefinition<&[u8], &[u8]> = TableDefinition::new("head");
+/// Per-validator OTS key-state: `ValidatorIndex -> OtsKeyState::to_ssz_bytes()`.
+/// One row per validator (keyed by the `u64` index), NOT a single fixed key.
+const OTS_KEY_STATE: TableDefinition<u64, &[u8]> = TableDefinition::new("ots_key_state");
 
 /// Fixed key for the single row in the [`HEAD`] table.
 const HEAD_KEY: &[u8] = b"head";
@@ -61,9 +64,38 @@ impl RedbStore {
             txn.open_table(BLOCKS).map_err(backend)?;
             txn.open_table(STATES).map_err(backend)?;
             txn.open_table(HEAD).map_err(backend)?;
+            txn.open_table(OTS_KEY_STATE).map_err(backend)?;
         }
         txn.commit().map_err(backend)?;
         Ok(Self { db })
+    }
+
+    /// Runs `f` inside a write transaction and commits it. The commit is the
+    /// atomic barrier — every write `f` performs becomes durable together, or (on
+    /// any error) none of it does. The single home for the begin/commit/error-map
+    /// cycle, shared by `put`, `save_accepted`, and `save_ots_key_state` so the
+    /// transaction discipline is written once, not per byte-keyed vs `u64`-keyed
+    /// table.
+    fn in_write_txn<T>(
+        &self,
+        f: impl FnOnce(&redb::WriteTransaction) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        // `f`'s tables borrow `txn` and drop when `f` returns, so `txn` is free to
+        // be consumed by `commit` below.
+        let out = f(&txn)?;
+        txn.commit().map_err(backend)?;
+        Ok(out)
+    }
+
+    /// Runs `f` inside a read transaction. `f` must copy out any value it needs —
+    /// the transaction drops on return. Companion to [`Self::in_write_txn`].
+    fn in_read_txn<T>(
+        &self,
+        f: impl FnOnce(&redb::ReadTransaction) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        let txn = self.db.begin_read().map_err(backend)?;
+        f(&txn)
     }
 
     fn get(
@@ -71,10 +103,10 @@ impl RedbStore {
         table: TableDefinition<&[u8], &[u8]>,
         key: &[u8],
     ) -> Result<Option<Vec<u8>>, StorageError> {
-        let txn = self.db.begin_read().map_err(backend)?;
-        let table = txn.open_table(table).map_err(backend)?;
-        let value = table.get(key).map_err(backend)?;
-        Ok(value.map(|guard| guard.value().to_vec()))
+        self.in_read_txn(|txn| {
+            let table = txn.open_table(table).map_err(backend)?;
+            Ok(table.get(key).map_err(backend)?.map(|g| g.value().to_vec()))
+        })
     }
 
     /// Existence probe that never materializes the value — avoids the
@@ -85,9 +117,10 @@ impl RedbStore {
         table: TableDefinition<&[u8], &[u8]>,
         key: &[u8],
     ) -> Result<bool, StorageError> {
-        let txn = self.db.begin_read().map_err(backend)?;
-        let table = txn.open_table(table).map_err(backend)?;
-        Ok(table.get(key).map_err(backend)?.is_some())
+        self.in_read_txn(|txn| {
+            let table = txn.open_table(table).map_err(backend)?;
+            Ok(table.get(key).map_err(backend)?.is_some())
+        })
     }
 
     fn put(
@@ -96,13 +129,11 @@ impl RedbStore {
         key: &[u8],
         value: &[u8],
     ) -> Result<(), StorageError> {
-        let txn = self.db.begin_write().map_err(backend)?;
-        {
+        self.in_write_txn(|txn| {
             let mut table = txn.open_table(table).map_err(backend)?;
             table.insert(key, value).map_err(backend)?;
-        }
-        txn.commit().map_err(backend)?;
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -182,8 +213,7 @@ impl Store for RedbStore {
         let head_bytes = encode_head(head);
         let key = block_root.0;
 
-        let txn = self.db.begin_write().map_err(backend)?;
-        {
+        self.in_write_txn(|txn| {
             let mut blocks = txn.open_table(BLOCKS).map_err(backend)?;
             blocks
                 .insert(key.as_slice(), block_bytes.as_slice())
@@ -197,9 +227,8 @@ impl Store for RedbStore {
             head_table
                 .insert(HEAD_KEY, head_bytes.as_slice())
                 .map_err(backend)?;
-        }
-        txn.commit().map_err(backend)?;
-        Ok(())
+            Ok(())
+        })
     }
 
     fn has_block(&self, root: &Bytes32) -> Result<bool, StorageError> {
@@ -232,5 +261,68 @@ impl Store for RedbStore {
             Some(bytes) => Ok(Some(decode_head(&bytes)?)),
             None => Ok(None),
         }
+    }
+
+    fn save_ots_key_state(
+        &self,
+        validator: ValidatorIndex,
+        record: OtsKeyState,
+    ) -> Result<(), StorageError> {
+        // `OtsKeyState` is not an `ssz`-derive type; its bytes come from the
+        // record's own fixed-width codec, NOT the `ssz::encode` path used for
+        // blocks/states.
+        let bytes = record.to_ssz_bytes();
+        self.in_write_txn(|txn| {
+            let mut table = txn.open_table(OTS_KEY_STATE).map_err(backend)?;
+            table
+                .insert(validator.get(), bytes.as_slice())
+                .map_err(backend)?;
+            Ok(())
+        })
+    }
+
+    fn load_ots_key_state(
+        &self,
+        validator: ValidatorIndex,
+    ) -> Result<Option<OtsKeyState>, StorageError> {
+        self.in_read_txn(|txn| {
+            let table = txn.open_table(OTS_KEY_STATE).map_err(backend)?;
+            match table.get(validator.get()).map_err(backend)? {
+                // `backend` maps any Display error — including OtsKeyStateDecodeError
+                // — to StorageError::Backend, matching how decode_head surfaces a
+                // corrupt on-disk record.
+                Some(guard) => Ok(Some(
+                    OtsKeyState::from_ssz_bytes(guard.value()).map_err(backend)?,
+                )),
+                None => Ok(None),
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// A well-formed-in-redb but wrong-length OTS value (e.g. a stale/foreign
+    /// record) must surface as a backend error, not silently decode to a wrong
+    /// watermark. Injected directly into the table, bypassing the 56-byte writer.
+    #[test]
+    fn load_ots_key_state_rejects_corrupt_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = RedbStore::new(dir.path().join("ots-corrupt.redb")).unwrap();
+
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut table = txn.open_table(OTS_KEY_STATE).unwrap();
+            table.insert(0_u64, [0_u8; 10].as_slice()).unwrap();
+        }
+        txn.commit().unwrap();
+
+        let err = store
+            .load_ots_key_state(protocol::ValidatorIndex::new(0))
+            .expect_err("corrupt record must surface as a backend error");
+        assert!(matches!(err, StorageError::Backend { .. }));
     }
 }

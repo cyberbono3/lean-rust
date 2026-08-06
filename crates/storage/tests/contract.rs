@@ -43,6 +43,68 @@ pub fn run_store_contract<S: Store>(factory: impl Fn() -> S) {
     save_state_overwrites_existing_root(&factory());
     save_head_overwrites_previous_head(&factory());
     save_accepted_persists_block_state_and_head(&factory());
+    ots_key_state_round_trips(&factory());
+    ots_key_state_independent_per_validator(&factory());
+    ots_key_state_none_for_unknown_validator(&factory());
+    ots_key_state_overwrites_previous_record(&factory());
+}
+
+/// Builds a distinct `OtsKeyState` per `seed` byte so records are comparable.
+/// The exact window values are immaterial to the round-trip assertions;
+/// `262_144` is 2^18 (the resolved activation epoch), kept for realism.
+fn sample_ots_key_state(seed: u8) -> types::OtsKeyState {
+    types::OtsKeyState {
+        seed: [seed; 32],
+        activation_epoch: 262_144,
+        num_active_epochs: 1_024,
+        next_index: u64::from(seed),
+    }
+}
+
+/// A saved OTS key-state loads back byte-identical for the same validator.
+fn ots_key_state_round_trips(store: &impl Store) {
+    let v = protocol::ValidatorIndex::new(3);
+    let record = sample_ots_key_state(5);
+    store.save_ots_key_state(v, record.clone()).unwrap();
+    assert_eq!(store.load_ots_key_state(v).unwrap(), Some(record));
+}
+
+/// Records are keyed per validator: saving one validator's record never
+/// clobbers another's.
+fn ots_key_state_independent_per_validator(store: &impl Store) {
+    let (v0, v1) = (
+        protocol::ValidatorIndex::new(0),
+        protocol::ValidatorIndex::new(1),
+    );
+    let (r0, r1) = (sample_ots_key_state(10), sample_ots_key_state(20));
+    store.save_ots_key_state(v0, r0.clone()).unwrap();
+    store.save_ots_key_state(v1, r1.clone()).unwrap();
+    // Saving v1 must not clobber v0.
+    assert_eq!(store.load_ots_key_state(v0).unwrap(), Some(r0));
+    assert_eq!(store.load_ots_key_state(v1).unwrap(), Some(r1));
+}
+
+/// Loading a validator that was never saved returns `Ok(None)`, not an error.
+fn ots_key_state_none_for_unknown_validator(store: &impl Store) {
+    // Fresh store: absent is Ok(None), not an error (mirrors load_head).
+    assert_eq!(
+        store
+            .load_ots_key_state(protocol::ValidatorIndex::new(9))
+            .unwrap(),
+        None
+    );
+}
+
+/// A second save for the same validator replaces the prior record (the
+/// advanced-watermark update path).
+fn ots_key_state_overwrites_previous_record(store: &impl Store) {
+    let v = protocol::ValidatorIndex::new(4);
+    store
+        .save_ots_key_state(v, sample_ots_key_state(1))
+        .unwrap();
+    let advanced = sample_ots_key_state(2);
+    store.save_ots_key_state(v, advanced.clone()).unwrap();
+    assert_eq!(store.load_ots_key_state(v).unwrap(), Some(advanced));
 }
 
 fn block_round_trip(store: &impl Store) {
@@ -231,6 +293,21 @@ impl Store for FailingStateStore {
 
     fn load_head(&self) -> Result<Option<storage::HeadInfo>, storage::StorageError> {
         self.inner.load_head()
+    }
+
+    fn save_ots_key_state(
+        &self,
+        validator: protocol::ValidatorIndex,
+        record: types::OtsKeyState,
+    ) -> Result<(), storage::StorageError> {
+        self.inner.save_ots_key_state(validator, record)
+    }
+
+    fn load_ots_key_state(
+        &self,
+        validator: protocol::ValidatorIndex,
+    ) -> Result<Option<types::OtsKeyState>, storage::StorageError> {
+        self.inner.load_ots_key_state(validator)
     }
     // Uses the default `save_accepted` (block → state → head).
 }

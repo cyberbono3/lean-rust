@@ -1,8 +1,8 @@
 //! Persistence trait + canonical-chain view exposed to runtime callers.
 
-use protocol::{Checkpoint, SignedBlockWithAttestation, State};
+use protocol::{Checkpoint, SignedBlockWithAttestation, State, ValidatorIndex};
 use thiserror::Error;
-use types::Bytes32;
+use types::{Bytes32, OtsKeyState};
 
 use crate::error::StorageError;
 
@@ -188,6 +188,35 @@ pub trait Store: Send + Sync {
     /// Backend-specific failures via [`StorageError`]. Returns
     /// `Ok(None)` before the first `save_head` call.
     fn load_head(&self) -> Result<Option<HeadInfo>, StorageError>;
+
+    /// Persists the crypto-free OTS key-state `record` for `validator`.
+    ///
+    /// One record per validator: a later save overwrites the prior record for
+    /// that same validator and leaves every other validator's record untouched.
+    /// The payload is a `types`-owned byte blob ([`OtsKeyState`]) — no adapter
+    /// links `crypto`, so this method never crosses the `storage`/`crypto`
+    /// boundary.
+    ///
+    /// # Errors
+    /// Backend-specific failures via [`StorageError`].
+    fn save_ots_key_state(
+        &self,
+        validator: ValidatorIndex,
+        record: OtsKeyState,
+    ) -> Result<(), StorageError>;
+
+    /// Resolves the persisted OTS key-state for `validator`, or `Ok(None)` when
+    /// none was ever written (a fresh datadir — the normal first-boot path).
+    ///
+    /// Absent is not an error, mirroring [`Self::load_head`].
+    ///
+    /// # Errors
+    /// Backend-specific failures via [`StorageError`], including a stored record
+    /// that fails [`OtsKeyState`] decode.
+    fn load_ots_key_state(
+        &self,
+        validator: ValidatorIndex,
+    ) -> Result<Option<OtsKeyState>, StorageError>;
 }
 
 #[cfg(test)]
