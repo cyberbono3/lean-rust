@@ -279,19 +279,8 @@ mod tests {
     use super::super::test_fixtures::validator_registry;
     use super::test_support::FakeVerifier;
     use super::*;
-    use protocol::{AttestationData, Slot, ValidatorIndex};
+    use crate::duties::test_fixtures::attestation as att;
     use ssz::HashTreeRoot;
-
-    /// Builds an attestation for `validator_id` at `slot` (other fields default).
-    fn att(validator_id: u64, slot: u64) -> Attestation {
-        Attestation {
-            validator_id: ValidatorIndex::new(validator_id),
-            data: AttestationData {
-                slot: Slot::new(slot),
-                ..AttestationData::default()
-            },
-        }
-    }
 
     fn zero_sigs(n: usize) -> Vec<Signature> {
         vec![Signature::zero(); n]

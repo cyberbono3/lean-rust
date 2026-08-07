@@ -640,9 +640,7 @@ mod tests {
         let producer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
         let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
         let elements = signed.message.block.body.attestations.len() + 1;
-        signed.signature = std::iter::repeat_with(types::Signature::zero)
-            .take(elements)
-            .collect();
+        signed.signature = sigs(elements);
         (signed, elements)
     }
 

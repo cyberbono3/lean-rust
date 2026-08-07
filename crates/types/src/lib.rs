@@ -60,6 +60,7 @@ pub mod byte_arrays;
 pub mod bytes;
 pub mod error;
 pub mod ots_key_state;
+mod ots_record_codec;
 pub mod ots_watermark;
 pub mod uint;
 

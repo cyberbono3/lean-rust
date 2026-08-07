@@ -9,11 +9,13 @@
 //!
 //! Fixed-width so its SSZ encoding is a trivial concatenation needing no ssz
 //! crate; the layout mirrors [`crate::OtsKeyState`] byte-for-byte (the
-//! commitment occupies the seed slot), so both share one 56-byte codec shape.
+//! commitment occupies the seed slot). Both records therefore delegate to the
+//! one shared codec in [`crate::ots_record_codec`] rather than carrying a copy
+//! of the same 56-byte layout each.
 
 /// SSZ-layout byte length: 32 (`key_commitment`) + 8 (`activation_epoch`) + 8
 /// (`num_active_epochs`) + 8 (`next_index`).
-pub const OTS_WATERMARK_SSZ_LEN: usize = 32 + 8 + 8 + 8;
+pub const OTS_WATERMARK_SSZ_LEN: usize = crate::ots_record_codec::OTS_RECORD_SSZ_LEN;
 
 /// Persistable, seed-free OTS watermark.
 ///
@@ -54,15 +56,16 @@ impl OtsWatermark {
 
     /// Encodes to the fixed layout:
     /// `key_commitment || activation_epoch || num_active_epochs || next_index`,
-    /// each integer little-endian.
+    /// each integer little-endian. The byte work lives in
+    /// [`crate::ots_record_codec`], shared with [`crate::OtsKeyState`].
     #[must_use]
     pub fn to_ssz_bytes(&self) -> [u8; OTS_WATERMARK_SSZ_LEN] {
-        let mut out = [0u8; OTS_WATERMARK_SSZ_LEN];
-        out[0..32].copy_from_slice(&self.key_commitment);
-        out[32..40].copy_from_slice(&self.activation_epoch.to_le_bytes());
-        out[40..48].copy_from_slice(&self.num_active_epochs.to_le_bytes());
-        out[48..56].copy_from_slice(&self.next_index.to_le_bytes());
-        out
+        crate::ots_record_codec::encode(
+            &self.key_commitment,
+            self.activation_epoch,
+            self.num_active_epochs,
+            self.next_index,
+        )
     }
 
     /// Inverse of [`to_ssz_bytes`](Self::to_ssz_bytes).
@@ -71,29 +74,16 @@ impl OtsWatermark {
     ///
     /// [`OtsWatermarkDecodeError::Length`] when `bytes.len() != OTS_WATERMARK_SSZ_LEN`.
     pub fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, OtsWatermarkDecodeError> {
-        if bytes.len() != OTS_WATERMARK_SSZ_LEN {
-            return Err(OtsWatermarkDecodeError::Length {
+        let (key_commitment, activation_epoch, num_active_epochs, next_index) =
+            crate::ots_record_codec::decode(bytes).ok_or(OtsWatermarkDecodeError::Length {
                 expected: OTS_WATERMARK_SSZ_LEN,
                 actual: bytes.len(),
-            });
-        }
-        let mut key_commitment = [0u8; 32];
-        key_commitment.copy_from_slice(&bytes[0..32]);
-        // Length verified above, so each 8-byte slice decodes; reuse the crate's
-        // canonical LE decoder rather than re-implementing it.
-        let field = |offset: usize| -> Result<u64, OtsWatermarkDecodeError> {
-            crate::decode_u64_le(&bytes[offset..offset + 8]).map_err(|_| {
-                OtsWatermarkDecodeError::Length {
-                    expected: OTS_WATERMARK_SSZ_LEN,
-                    actual: bytes.len(),
-                }
-            })
-        };
+            })?;
         Ok(Self {
             key_commitment,
-            activation_epoch: field(32)?,
-            num_active_epochs: field(40)?,
-            next_index: field(48)?,
+            activation_epoch,
+            num_active_epochs,
+            next_index,
         })
     }
 }

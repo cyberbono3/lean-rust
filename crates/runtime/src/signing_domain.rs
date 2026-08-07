@@ -44,16 +44,12 @@ pub fn attestation_signing_inputs(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use protocol::{AttestationData, Slot, ValidatorIndex};
+    use crate::duties::test_fixtures::attestation;
 
+    /// This module's derivation reads only `data.slot`, so every case uses
+    /// validator 0 and varies the slot alone.
     fn att(slot: u64) -> Attestation {
-        Attestation {
-            validator_id: ValidatorIndex::new(0),
-            data: AttestationData {
-                slot: Slot::new(slot),
-                ..AttestationData::default()
-            },
-        }
+        attestation(0, slot)
     }
 
     #[test]

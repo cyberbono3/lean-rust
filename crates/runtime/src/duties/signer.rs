@@ -368,10 +368,9 @@ impl PersistableSigner for LocalSigner {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use super::super::test_fixtures::{write_validator_secrets, MIN_ACTIVE_EPOCHS};
+    use super::super::test_fixtures::{attestation, write_validator_secrets, MIN_ACTIVE_EPOCHS};
     use super::*;
     use crypto::{ProdScheme, PublicKey};
-    use protocol::{AttestationData, Slot};
     use ssz::HashTreeRoot;
 
     /// Writes a `validator_<i>.ssz` record per index into a fresh temp dir and
@@ -384,16 +383,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let pubs = write_validator_secrets(dir.path(), indices, MIN_ACTIVE_EPOCHS);
         (dir, pubs)
-    }
-
-    fn attestation(validator: u64, slot: u64) -> Attestation {
-        Attestation {
-            validator_id: ValidatorIndex::new(validator),
-            data: AttestationData {
-                slot: Slot::new(slot),
-                ..Default::default()
-            },
-        }
     }
 
     #[test]

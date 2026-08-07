@@ -15,6 +15,12 @@ use core::fmt::{self, Write};
 
 use crate::error::TypesError;
 
+/// Name reported in [`TypesError`] variants raised by this module.
+///
+/// One constant rather than a literal per raise site: the four error
+/// constructions below would otherwise drift independently.
+const TYPE_NAME: &str = "ByteVector";
+
 /// Fixed-width byte vector of length `N`.
 ///
 /// The inner array is `pub` so callers may pattern-match or take a
@@ -160,7 +166,7 @@ impl<const N: usize> TryFrom<&[u8]> for ByteVector<N> {
         let arr: [u8; N] = bytes
             .try_into()
             .map_err(|_| TypesError::InvalidByteLength {
-                type_name: "ByteVector",
+                type_name: TYPE_NAME,
                 want: N,
                 got: bytes.len(),
             })?;
@@ -191,7 +197,7 @@ impl<const N: usize> TryFrom<&str> for ByteVector<N> {
             .unwrap_or(s);
         if hex.len() % 2 != 0 {
             return Err(TypesError::InvalidHexEncoding {
-                type_name: "ByteVector",
+                type_name: TYPE_NAME,
                 detail: "odd number of hex digits",
             });
         }
@@ -200,7 +206,7 @@ impl<const N: usize> TryFrom<&str> for ByteVector<N> {
         // input is rejected without doing the full decode.
         if hex.len() != 2 * N {
             return Err(TypesError::InvalidByteLength {
-                type_name: "ByteVector",
+                type_name: TYPE_NAME,
                 want: N,
                 got: hex.len() / 2,
             });
@@ -221,7 +227,7 @@ fn hex_nibble(c: u8) -> Result<u8, TypesError> {
         b'a'..=b'f' => Ok(c - b'a' + 10),
         b'A'..=b'F' => Ok(c - b'A' + 10),
         _ => Err(TypesError::InvalidHexEncoding {
-            type_name: "ByteVector",
+            type_name: TYPE_NAME,
             detail: "non-hex character",
         }),
     }

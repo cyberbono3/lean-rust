@@ -454,6 +454,7 @@ mod tests {
     /// (a real key load is exercised by the `new_devnet_*` ignored tests).
     mod build_local_signer_branches {
         use super::*;
+        use runtime::duties::test_fixtures::attestation;
         use runtime::duties::AttestationSigner;
 
         #[test]
@@ -461,12 +462,7 @@ mod tests {
             let store = MemoryStore::default();
             let mut signer = build_local_signer(&[], None, &store).expect("observer signer");
             // The observer signer holds no keys: any sign attempt is refused.
-            let err = signer
-                .sign_attestation(&Attestation {
-                    validator_id: ValidatorIndex::new(0),
-                    ..Default::default()
-                })
-                .unwrap_err();
+            let err = signer.sign_attestation(&attestation(0, 0)).unwrap_err();
             assert!(matches!(
                 err,
                 runtime::duties::SignError::UnknownValidator { validator_id: 0 }

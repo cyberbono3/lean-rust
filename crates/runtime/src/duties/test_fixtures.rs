@@ -29,10 +29,32 @@ use protocol::ValidatorIndex;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use protocol::Attestation;
+use protocol::{Attestation, AttestationData, Slot};
 use types::Signature;
 
 use super::signer::{validator_secret_path, AttestationSigner, LocalSigner, SignError};
+
+/// An attestation by `validator` at `slot`, every other [`AttestationData`]
+/// field left at its default.
+///
+/// The one builder for the sign/verify test surface. `(validator, slot)` is
+/// exactly the pair those paths care about — `slot` is the leanSig epoch and
+/// `validator` selects the key — so the same two-argument shape served every
+/// test module that used to carry its own copy (`signing_domain`,
+/// `chain::engine::verify`, `duties::signer`, `duties::ots_signer`, and the
+/// `node` composition-root tests). One home keeps them from drifting on which
+/// fields are defaulted, which the hash-tree-root (and therefore the signed
+/// message) commits to.
+#[must_use]
+pub fn attestation(validator: u64, slot: u64) -> Attestation {
+    Attestation::new(
+        ValidatorIndex::new(validator),
+        AttestationData {
+            slot: Slot::new(slot),
+            ..AttestationData::default()
+        },
+    )
+}
 
 /// The smallest active window that can sign epoch 0 — matching the crypto
 /// crate's own tests. Use this for load-only fixtures, which never sign.

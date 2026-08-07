@@ -230,13 +230,10 @@ mod tests {
         }
     }
 
-    /// A default attestation tagged with `validator` — the guard only reads
-    /// `validator_id`, so the remaining fields are left at their defaults.
+    /// An attestation tagged with `validator` at slot 0 — the guard only reads
+    /// `validator_id`, so the slot is immaterial to these tests.
     fn attestation(validator: u64) -> Attestation {
-        Attestation {
-            validator_id: ValidatorIndex::new(validator),
-            ..Default::default()
-        }
+        super::super::test_fixtures::attestation(validator, 0)
     }
 
     #[test]
@@ -398,20 +395,17 @@ mod tests {
     #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn restart_resumes_watermark_from_store() {
         use super::super::signer::LocalSigner;
-        use super::super::test_fixtures::{write_validator_secrets, MIN_ACTIVE_EPOCHS};
-        use protocol::{AttestationData, Slot};
+        use super::super::test_fixtures::{
+            attestation as build_att, write_validator_secrets, MIN_ACTIVE_EPOCHS,
+        };
 
         let dir = tempfile::tempdir().expect("tempdir");
         let _ = write_validator_secrets(dir.path(), &[0], MIN_ACTIVE_EPOCHS);
         let store: Arc<dyn WatermarkStore> = Arc::new(FakeStore::default());
 
-        let att = |slot: u64| Attestation {
-            validator_id: ValidatorIndex::new(0),
-            data: AttestationData {
-                slot: Slot::new(slot),
-                ..Default::default()
-            },
-        };
+        // Validator 0 across varying slots: the slot IS the leanSig epoch, which
+        // is what the watermark tracks.
+        let att = |slot: u64| build_att(0, slot);
 
         // First run: sign epoch 0 through the guard; the advance persists.
         let local = LocalSigner::load(dir.path(), [ValidatorIndex::new(0)]).unwrap();
