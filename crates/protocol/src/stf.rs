@@ -19,11 +19,9 @@
 //! ```
 
 use ssz::HashTreeRoot;
-use types::Bytes32;
 
 use crate::{
-    block::Block, block::BlockBody, state::ProtocolConfig, state::State, validator::Validators,
-    BlockHeader,
+    block::Block, state::ProtocolConfig, state::State, validator::Validators, BlockHeader,
 };
 
 pub use crate::error::StateTransitionError;
@@ -32,8 +30,8 @@ pub use crate::error::StateTransitionError;
 /// chain genesis time.
 ///
 /// The state's `latest_block_header.body_root` commits to the empty
-/// [`BlockBody`] (no attestations); all other fields are zero-valued. Lists
-/// and bitlists are empty.
+/// [`BlockBody`](crate::BlockBody) (no attestations); all other fields are
+/// zero-valued. Lists and bitlists are empty.
 ///
 /// # Example
 /// ```
@@ -45,18 +43,13 @@ pub use crate::error::StateTransitionError;
 /// ```
 #[must_use]
 pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
-    // Every field but `config` and the header `body_root` is the zero/default
-    // value; struct-update keeps this in sync as `State` grows fields. Note
-    // `body_root` must stay explicit — the empty `BlockBody` root is non-zero,
-    // and the genesis anchor invariant depends on it.
-    let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
-
+    // Every field but `config` and `latest_block_header` is the zero/default
+    // value; struct-update keeps this in sync as `State` grows fields. The
+    // header is not the default one — `BlockHeader::genesis` owns the non-zero
+    // empty-body root the genesis anchor invariant depends on.
     State {
         config: ProtocolConfig::new(num_validators, genesis_time),
-        latest_block_header: BlockHeader {
-            body_root,
-            ..BlockHeader::default()
-        },
+        latest_block_header: BlockHeader::genesis(),
         ..State::default()
     }
 }

@@ -1453,13 +1453,9 @@ mod block_processing_tests {
     /// Genesis-shape `State` for a 4-validator chain whose
     /// `latest_block_header` commits to the empty body.
     fn genesis() -> State {
-        let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
         State {
             config: ProtocolConfig::new(NUM_VALIDATORS, GENESIS_TIME),
-            latest_block_header: BlockHeader {
-                body_root,
-                ..BlockHeader::default()
-            },
+            latest_block_header: BlockHeader::genesis(),
             ..State::default()
         }
     }
@@ -1687,17 +1683,12 @@ mod slot_processing_tests {
     use super::*;
     use proptest::prelude::*;
 
-    use crate::block::BlockBody;
-
     /// Minimal fixture: a non-default `State` whose `latest_block_header`
     /// commits to the empty `BlockBody`. Mirrors the slot-0 shape used by
     /// `crate::stf::genesis_state` without going through the module path.
     fn fresh_state() -> State {
         State {
-            latest_block_header: BlockHeader {
-                body_root: BlockBody::default().hash_tree_root().into(),
-                ..BlockHeader::default()
-            },
+            latest_block_header: BlockHeader::genesis(),
             ..State::default()
         }
     }

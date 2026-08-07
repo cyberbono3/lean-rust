@@ -30,10 +30,10 @@
 //! The remaining `slot` / `latest_block_header` fields are covered by a
 //! sibling check in `state.rs`.
 
-use ssz::{Decode, DecodeError, HashTreeRoot};
+use ssz::{Decode, DecodeError};
 use types::Bitlist;
 
-use crate::block::{BlockBody, BlockHeader};
+use crate::block::BlockHeader;
 use crate::checkpoint::Checkpoint;
 use crate::internal::{
     decode_bytes32_list, read_fixed, read_offset, BYTES_PER_LENGTH_OFFSET, CHECKPOINT_LEN,
@@ -167,10 +167,7 @@ impl State {
         // for the contract.
         Ok(Self {
             config,
-            latest_block_header: BlockHeader {
-                body_root: BlockBody::default().hash_tree_root().into(),
-                ..BlockHeader::default()
-            },
+            latest_block_header: BlockHeader::genesis(),
             latest_justified,
             latest_finalized,
             ..Self::default()
@@ -239,6 +236,7 @@ fn decode_ream_raw_bitlist<const LIMIT: usize>(
 mod tests {
     use super::*;
     use crate::slot::Slot;
+    use ssz::HashTreeRoot;
     use types::Bytes32;
 
     /// Non-trivial baseline state — every field perturbed by the test below

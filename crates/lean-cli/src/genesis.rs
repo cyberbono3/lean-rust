@@ -251,14 +251,10 @@ fn synthesize_state(num_validators: u64, validators: Vec<Validator>, genesis_tim
         validators.is_empty() || validators.len() as u64 == num_validators,
         "registry length must match num_validators when populated",
     );
-    let body_root = BlockBody::default().hash_tree_root().into();
     State {
         config: ProtocolConfig::new(num_validators, genesis_time),
         validators,
-        latest_block_header: BlockHeader {
-            body_root,
-            ..BlockHeader::default()
-        },
+        latest_block_header: BlockHeader::genesis(),
         ..State::default()
     }
 }
