@@ -47,4 +47,11 @@ pub enum ChainError {
         /// Root the engine returned from `head()` but had no block for.
         head_root: Bytes32,
     },
+
+    /// Local signing failed on the production path — the validator's key is
+    /// missing, the slot exceeds the epoch domain, or leanSig rejected the sign.
+    /// A production-path signature is never a placeholder: it is a real signature
+    /// or this error.
+    #[error("local signing: {0}")]
+    Sign(#[source] crate::duties::SignError),
 }

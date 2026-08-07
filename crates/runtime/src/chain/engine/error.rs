@@ -8,6 +8,8 @@
 use forkchoice::ForkchoiceError;
 use protocol::StateTransitionError;
 
+use crate::chain::engine::verify::VerifyError;
+
 /// Failure surface exposed by [`crate::chain::engine::Engine`].
 ///
 /// Engine never raises its own variants — both inner enums already cover the
@@ -24,4 +26,9 @@ pub enum EngineError {
     /// Forwarded from [`protocol::State::state_transition`].
     #[error(transparent)]
     StateTransition(#[from] StateTransitionError),
+
+    /// Forwarded from the import-boundary signature verification gate
+    /// (`verify_positional`).
+    #[error(transparent)]
+    Verify(#[from] VerifyError),
 }

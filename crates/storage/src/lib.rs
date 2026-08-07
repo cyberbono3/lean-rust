@@ -21,4 +21,4 @@ pub mod store;
 pub use error::StorageError;
 pub use memory::MemoryStore;
 pub use redb_store::RedbStore;
-pub use store::{HeadInfo, Store};
+pub use store::{HeadInfo, Store, WatermarkStore};

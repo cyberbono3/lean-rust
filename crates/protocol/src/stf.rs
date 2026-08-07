@@ -3,6 +3,8 @@
 //! # Scope
 //! - [`genesis_state`] — slot-0 [`State`] for a given validator-set size and
 //!   chain genesis time.
+//! - [`genesis_anchor_block`] — the matching slot-0 anchor [`Block`], the one
+//!   home for the anchor shape that forkchoice and runtime fixtures both need.
 //! - The slot-processing methods (`process_slot`, `process_slots`) live as
 //!   inherent methods on [`State`]; this module re-exports
 //!   [`StateTransitionError`] for convenience.
@@ -17,10 +19,9 @@
 //! ```
 
 use ssz::HashTreeRoot;
-use types::Bytes32;
 
 use crate::{
-    block::BlockBody, state::ProtocolConfig, state::State, validator::Validators, BlockHeader,
+    block::Block, state::ProtocolConfig, state::State, validator::Validators, BlockHeader,
 };
 
 pub use crate::error::StateTransitionError;
@@ -29,8 +30,8 @@ pub use crate::error::StateTransitionError;
 /// chain genesis time.
 ///
 /// The state's `latest_block_header.body_root` commits to the empty
-/// [`BlockBody`] (no attestations); all other fields are zero-valued. Lists
-/// and bitlists are empty.
+/// [`BlockBody`](crate::BlockBody) (no attestations); all other fields are
+/// zero-valued. Lists and bitlists are empty.
 ///
 /// # Example
 /// ```
@@ -42,21 +43,13 @@ pub use crate::error::StateTransitionError;
 /// ```
 #[must_use]
 pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
-    // Every field but `config` and the header `body_root` is the zero/default
-    // value; struct-update keeps this in sync as `State` grows fields. Note
-    // `body_root` must stay explicit — the empty `BlockBody` root is non-zero,
-    // and the genesis anchor invariant depends on it.
-    let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
-
+    // Every field but `config` and `latest_block_header` is the zero/default
+    // value; struct-update keeps this in sync as `State` grows fields. The
+    // header is not the default one — `BlockHeader::genesis` owns the non-zero
+    // empty-body root the genesis anchor invariant depends on.
     State {
-        config: ProtocolConfig {
-            num_validators,
-            genesis_time,
-        },
-        latest_block_header: BlockHeader {
-            body_root,
-            ..BlockHeader::default()
-        },
+        config: ProtocolConfig::new(num_validators, genesis_time),
+        latest_block_header: BlockHeader::genesis(),
         ..State::default()
     }
 }
@@ -94,6 +87,36 @@ pub fn genesis_state_with_validators(
     state
 }
 
+/// Builds the genesis anchor [`Block`] for `state`: the slot-0, zero-parented
+/// block whose `state_root` commits to `state`.
+///
+/// Satisfies the anchor invariant every store constructor checks —
+/// `block.state_root == state.hash_tree_root()` — so the pair can seed a
+/// forkchoice store directly.
+///
+/// `state_root` is the ONLY non-default field: a genesis anchor is slot 0
+/// (no prior slot), proposer 0, `parent_root` zero (no prior block), and an
+/// empty body. Struct-update keeps that in sync as [`Block`] grows fields,
+/// matching [`genesis_state`]'s construction.
+///
+/// # Example
+/// ```
+/// use protocol::stf::{genesis_anchor_block, genesis_state};
+/// use ssz::HashTreeRoot;
+///
+/// let state = genesis_state(4, 1_700_000_000);
+/// let block = genesis_anchor_block(&state);
+/// assert_eq!(block.slot.get(), 0);
+/// assert_eq!(block.state_root.0, state.hash_tree_root());
+/// ```
+#[must_use]
+pub fn genesis_anchor_block(state: &State) -> Block {
+    Block {
+        state_root: state.hash_tree_root().into(),
+        ..Block::default()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -103,10 +126,10 @@ mod tests {
     use types::PublicKey;
 
     fn validator(seed: u8) -> Validator {
-        Validator {
-            pubkey: PublicKey::new([seed; PublicKey::LEN]),
-            index: ValidatorIndex::new(u64::from(seed)),
-        }
+        Validator::new(
+            PublicKey::new([seed; PublicKey::LEN]),
+            ValidatorIndex::new(u64::from(seed)),
+        )
     }
 
     #[test]

@@ -98,6 +98,42 @@ pub enum DutiesError {
         #[source]
         source: std::io::Error,
     },
+
+    /// The `genesis_validators` manifest pubkey count does not match the
+    /// validator total from the assignment file. Never a silent truncation —
+    /// every validator index must resolve to exactly one manifest pubkey.
+    #[error(
+        "genesis_validators manifest has {got} pubkeys, expected {expected} (one per validator)"
+    )]
+    ValidatorPubkeyCountMismatch {
+        /// Validator total from the assignment file (`total_validators`).
+        expected: u64,
+        /// Number of pubkeys present in the manifest.
+        got: u64,
+    },
+
+    /// A `genesis_validators` manifest entry failed to decode into a
+    /// validator's `PublicKey` (bad hex, or width != 52).
+    #[error("genesis_validators pubkey at index {index} is invalid: {source}")]
+    InvalidValidatorPubkey {
+        /// Zero-based position of the offending manifest entry.
+        index: u64,
+        /// Underlying `types` decode error (hex or width).
+        #[source]
+        source: types::TypesError,
+    },
+
+    /// The `genesis_validators` manifest contains a YAML anchor (`&`) or alias
+    /// (`*`). YAML alias expansion can inflate a small file into an enormous
+    /// in-memory collection *during deserialization* — before any entry-count
+    /// check can run — defeating the file-size cap and OOM-killing the process.
+    /// The manifest is a flat hex sequence that needs neither, so both are
+    /// rejected outright.
+    #[error("genesis_validators manifest {path:?} must not contain YAML anchors or aliases")]
+    ManifestContainsYamlAlias {
+        /// Resolved path of the offending manifest.
+        path: PathBuf,
+    },
 }
 
 /// Convenience alias for `Result<T, DutiesError>`. Mirrors the

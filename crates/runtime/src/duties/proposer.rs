@@ -61,6 +61,46 @@ impl LocalProposers {
     pub fn local(&self) -> impl Iterator<Item = ValidatorIndex> + '_ {
         self.local.iter().copied()
     }
+
+    /// The local validators that should attest at `slot`: the whole local set,
+    /// minus the slot's proposer when this node owns it. Order unspecified, as
+    /// for [`Self::local`].
+    ///
+    /// The proposer is excluded because it already signed AND locally
+    /// re-imported its own attestation during block production (the block
+    /// carries that signed attestation), so attesting again here would sign the
+    /// SAME `(validator, slot)` twice at epoch = slot — a leanSig one-time-key
+    /// reuse. Callers get the correct attester set without having to know that
+    /// rule.
+    ///
+    /// `None` from [`Self::proposer_for_slot`] means this node does not own the
+    /// slot's proposer, so nothing is excluded.
+    ///
+    /// # Example
+    /// ```
+    /// use protocol::{Slot, ValidatorIndex};
+    /// use runtime::duties::LocalProposers;
+    ///
+    /// // This node owns validators 0 and 1 of a 4-validator registry.
+    /// let proposers = LocalProposers::new([ValidatorIndex::new(0), ValidatorIndex::new(1)], 4);
+    ///
+    /// // Slot 1's proposer is validator 1 (`1 % 4`) and IS local, so it is
+    /// // excluded and only validator 0 attests.
+    /// let attesters: Vec<_> = proposers.attesters_for_slot(Slot::new(1)).collect();
+    /// assert_eq!(attesters, [ValidatorIndex::new(0)]);
+    ///
+    /// // Slot 2's proposer is validator 2 — NOT local, so nothing is excluded
+    /// // and both local validators attest. (Sorted: iteration order is
+    /// // unspecified.)
+    /// let mut attesters: Vec<_> = proposers.attesters_for_slot(Slot::new(2)).collect();
+    /// attesters.sort();
+    /// assert_eq!(attesters, [ValidatorIndex::new(0), ValidatorIndex::new(1)]);
+    /// ```
+    pub fn attesters_for_slot(&self, slot: Slot) -> impl Iterator<Item = ValidatorIndex> + '_ {
+        let proposer = self.proposer_for_slot(slot);
+        self.local()
+            .filter(move |&validator| Some(validator) != proposer)
+    }
 }
 
 #[cfg(test)]
@@ -125,5 +165,36 @@ mod tests {
     fn empty_registry_yields_none() {
         let proposers = LocalProposers::new([ValidatorIndex::new(0)], 0);
         assert_eq!(proposers.proposer_for_slot(Slot::new(0)), None);
+    }
+
+    // --- Attester set (proposer double-sign resolution) --------------------
+
+    #[test]
+    fn attesters_exclude_the_slot_proposer() {
+        // Two local validators out of four total; whichever is the slot's
+        // proposer must be excluded from the attest pass so it does not sign its
+        // own attestation twice at the same epoch (one-time-key reuse) — it
+        // already signed + re-imported that vote inside `produce_block`.
+        let proposers = LocalProposers::new([ValidatorIndex::new(0), ValidatorIndex::new(1)], 4);
+        for slot in 0..8u64 {
+            let s = Slot::new(slot);
+            let proposer = proposers.proposer_for_slot(s);
+            let attesters: Vec<ValidatorIndex> = proposers.attesters_for_slot(s).collect();
+
+            if let Some(p) = proposer {
+                assert!(
+                    !attesters.contains(&p),
+                    "slot {slot}: proposer {p:?} must be skipped in the attest pass",
+                );
+            }
+            for validator in proposers.local() {
+                if Some(validator) != proposer {
+                    assert!(
+                        attesters.contains(&validator),
+                        "slot {slot}: non-proposer {validator:?} must still attest",
+                    );
+                }
+            }
+        }
     }
 }

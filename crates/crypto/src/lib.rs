@@ -67,8 +67,18 @@ pub(crate) mod verify;
 
 pub use error::CryptoError;
 pub use key_state::SigningKey;
-pub use scheme::{generate, ProdScheme, SchemeWire, PROD_LIFETIME};
+pub use record::seed_commitment;
+pub use scheme::{generate, ProdScheme, ProdSigningKey, SchemeWire, PROD_LIFETIME};
 pub use verify::verify;
+
+/// Byte width of the leanSig sign preimage — the 32-byte message.
+///
+/// Re-exported so the runtime layer can name ONE sign-message width source
+/// without reaching for `leansig` directly (the layer rule permits only this
+/// crate and the offline keygen tooling to consume leanSig). `[u8; MESSAGE_LENGTH]`
+/// is definitionally the same array type as [`SigningKey::sign`]'s message
+/// parameter, so callers pass an attestation hash-tree-root straight through.
+pub const MESSAGE_LENGTH: usize = leansig::MESSAGE_LENGTH;
 
 /// The XMSS wire public key. Re-exported from `types` — not redefined here.
 pub use types::PublicKey;
@@ -78,4 +88,4 @@ pub use types::Signature;
 /// The crypto-free, persistable OTS key-state record and its decode error (SA5).
 /// Re-exported from `types` — consumers reach the record through this crate
 /// alongside the key types and the [`SigningKey::to_record`] / `from_record` pair.
-pub use types::{OtsKeyState, OtsKeyStateDecodeError};
+pub use types::{OtsKeyState, OtsKeyStateDecodeError, OtsWatermark};

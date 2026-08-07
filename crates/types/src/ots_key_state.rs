@@ -14,7 +14,7 @@ use core::fmt;
 
 /// SSZ-layout byte length: 32 (seed) + 8 (`activation_epoch`) + 8
 /// (`num_active_epochs`) + 8 (`next_index`).
-pub const OTS_KEY_STATE_SSZ_LEN: usize = 32 + 8 + 8 + 8;
+pub const OTS_KEY_STATE_SSZ_LEN: usize = crate::ots_record_codec::OTS_RECORD_SSZ_LEN;
 
 /// Persistable OTS key state.
 ///
@@ -72,15 +72,16 @@ pub enum OtsKeyStateDecodeError {
 impl OtsKeyState {
     /// Encodes to the fixed SSZ container layout:
     /// `seed || activation_epoch || num_active_epochs || next_index`, each
-    /// integer little-endian.
+    /// integer little-endian. The byte work lives in
+    /// [`crate::ots_record_codec`], shared with [`crate::OtsWatermark`].
     #[must_use]
     pub fn to_ssz_bytes(&self) -> [u8; OTS_KEY_STATE_SSZ_LEN] {
-        let mut out = [0u8; OTS_KEY_STATE_SSZ_LEN];
-        out[0..32].copy_from_slice(&self.seed);
-        out[32..40].copy_from_slice(&self.activation_epoch.to_le_bytes());
-        out[40..48].copy_from_slice(&self.num_active_epochs.to_le_bytes());
-        out[48..56].copy_from_slice(&self.next_index.to_le_bytes());
-        out
+        crate::ots_record_codec::encode(
+            &self.seed,
+            self.activation_epoch,
+            self.num_active_epochs,
+            self.next_index,
+        )
     }
 
     /// Inverse of [`to_ssz_bytes`](Self::to_ssz_bytes).
@@ -89,30 +90,16 @@ impl OtsKeyState {
     ///
     /// [`OtsKeyStateDecodeError::Length`] when `bytes.len() != OTS_KEY_STATE_SSZ_LEN`.
     pub fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, OtsKeyStateDecodeError> {
-        if bytes.len() != OTS_KEY_STATE_SSZ_LEN {
-            return Err(OtsKeyStateDecodeError::Length {
+        let (seed, activation_epoch, num_active_epochs, next_index) =
+            crate::ots_record_codec::decode(bytes).ok_or(OtsKeyStateDecodeError::Length {
                 expected: OTS_KEY_STATE_SSZ_LEN,
                 actual: bytes.len(),
-            });
-        }
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&bytes[0..32]);
-        // Length verified above, so each 8-byte slice decodes; reuse the crate's
-        // canonical LE decoder rather than re-implementing it. The `map_err` arm is
-        // unreachable given the length check but keeps the path panic-free.
-        let field = |offset: usize| -> Result<u64, OtsKeyStateDecodeError> {
-            crate::decode_u64_le(&bytes[offset..offset + 8]).map_err(|_| {
-                OtsKeyStateDecodeError::Length {
-                    expected: OTS_KEY_STATE_SSZ_LEN,
-                    actual: bytes.len(),
-                }
-            })
-        };
+            })?;
         Ok(Self {
             seed,
-            activation_epoch: field(32)?,
-            num_active_epochs: field(40)?,
-            next_index: field(48)?,
+            activation_epoch,
+            num_active_epochs,
+            next_index,
         })
     }
 }

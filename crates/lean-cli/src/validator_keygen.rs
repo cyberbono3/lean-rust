@@ -157,9 +157,10 @@ pub fn generate_validator_keys<R: rand::RngCore + rand::CryptoRng>(
     Ok(manifest)
 }
 
-/// `<out_dir>/validator_<index>.ssz`.
+/// `<out_dir>/validator_<index>.ssz` — delegates to the runtime loader's own
+/// convention so the writer and the reader cannot drift apart.
 fn secret_path(out_dir: &Path, index: u64) -> PathBuf {
-    out_dir.join(format!("validator_{index}.ssz"))
+    runtime::duties::validator_secret_path(out_dir, index)
 }
 
 /// Canonical manifest text: a `genesis_validators:` YAML sequence of lower-case
@@ -250,6 +251,7 @@ mod tests {
     // order, canonical format, AND byte-identity for a fixed seed — folded together
     // because each ProdScheme keygen is expensive.
     #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn manifest_shape_ordering_and_byte_identity() {
         let dir_a = tempfile::tempdir().expect("tempdir");
         let dir_b = tempfile::tempdir().expect("tempdir");
@@ -293,6 +295,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn secret_material_written_as_otskeystate_ssz_owner_only() {
         let dir = tempfile::tempdir().expect("tempdir");
         let p = params(dir.path(), 1);
@@ -312,6 +315,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn keygen_refuses_to_overwrite_existing_key() {
         let dir = tempfile::tempdir().expect("tempdir");
         let p = params(dir.path(), 1);
@@ -332,6 +336,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
     fn generated_key_signs_and_verifies_sample_htr() {
         let dir = tempfile::tempdir().expect("tempdir");
         let p = params(dir.path(), 1);

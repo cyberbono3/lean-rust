@@ -97,6 +97,31 @@ pub struct ProtocolConfig {
     pub genesis_time: u64,
 }
 
+impl ProtocolConfig {
+    /// Builds the in-state runtime parameters from the validator-set size and
+    /// the chain genesis time.
+    ///
+    /// Parameter order mirrors the field (and therefore SSZ) order —
+    /// `num_validators` before `genesis_time` — which the hash-tree-root commits
+    /// to. Keep the two in step if either ever changes.
+    ///
+    /// # Example
+    /// ```
+    /// use protocol::ProtocolConfig;
+    ///
+    /// let cfg = ProtocolConfig::new(4, 1_700_000_000);
+    /// assert_eq!(cfg.num_validators, 4);
+    /// assert_eq!(cfg.genesis_time, 1_700_000_000);
+    /// ```
+    #[must_use]
+    pub const fn new(num_validators: u64, genesis_time: u64) -> Self {
+        Self {
+            num_validators,
+            genesis_time,
+        }
+    }
+}
+
 impl Encode for ProtocolConfig {
     fn is_ssz_fixed_len() -> bool {
         true
@@ -828,10 +853,7 @@ mod tests {
         }
 
         State {
-            config: ProtocolConfig {
-                num_validators: 4,
-                genesis_time: 1_700_000_000,
-            },
+            config: ProtocolConfig::new(4, 1_700_000_000),
             slot: Slot::new(9),
             latest_block_header: sample_block_header(),
             latest_justified: Checkpoint::new(Bytes32::new([0x44; 32]), Slot::new(8)),
@@ -869,10 +891,7 @@ mod tests {
 
     #[test]
     fn protocol_config_round_trip() {
-        let cfg = ProtocolConfig {
-            num_validators: 0xdead_beef,
-            genesis_time: 0x1234_5678,
-        };
+        let cfg = ProtocolConfig::new(0xdead_beef, 0x1234_5678);
         let bytes = encode(&cfg);
         assert_eq!(bytes.len(), PROTOCOL_CONFIG_SSZ_LEN);
         assert_eq!(&bytes[..8], &0xdead_beef_u64.to_le_bytes());
@@ -889,14 +908,8 @@ mod tests {
 
     #[test]
     fn protocol_config_hash_tree_root_distinguishes_fields() {
-        let a = ProtocolConfig {
-            num_validators: 7,
-            genesis_time: 0,
-        };
-        let b = ProtocolConfig {
-            num_validators: 0,
-            genesis_time: 7,
-        };
+        let a = ProtocolConfig::new(7, 0);
+        let b = ProtocolConfig::new(0, 7);
         assert_ne!(a.hash_tree_root(), b.hash_tree_root());
     }
 
@@ -1065,10 +1078,7 @@ mod tests {
             num in any::<u64>(),
             ts in any::<u64>(),
         ) {
-            let cfg = ProtocolConfig {
-                num_validators: num,
-                genesis_time: ts,
-            };
+            let cfg = ProtocolConfig::new(num, ts);
             let back: ProtocolConfig = decode(&encode(&cfg)).unwrap();
             prop_assert_eq!(back, cfg);
         }
@@ -1114,10 +1124,7 @@ mod justifications_tests {
 
     fn state_with(num_validators: u64) -> State {
         State {
-            config: ProtocolConfig {
-                num_validators,
-                genesis_time: 0,
-            },
+            config: ProtocolConfig::new(num_validators, 0),
             ..State::default()
         }
     }
@@ -1213,10 +1220,7 @@ mod attestation_tests {
             justified_slots.set(i, v).unwrap();
         }
         State {
-            config: ProtocolConfig {
-                num_validators,
-                genesis_time: 0,
-            },
+            config: ProtocolConfig::new(num_validators, 0),
             slot: Slot::new(historical_roots.len() as u64),
             latest_finalized: Checkpoint::new(Bytes32::zero(), latest_finalized_slot),
             historical_block_hashes: historical_roots,
@@ -1449,16 +1453,9 @@ mod block_processing_tests {
     /// Genesis-shape `State` for a 4-validator chain whose
     /// `latest_block_header` commits to the empty body.
     fn genesis() -> State {
-        let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
         State {
-            config: ProtocolConfig {
-                num_validators: NUM_VALIDATORS,
-                genesis_time: GENESIS_TIME,
-            },
-            latest_block_header: BlockHeader {
-                body_root,
-                ..BlockHeader::default()
-            },
+            config: ProtocolConfig::new(NUM_VALIDATORS, GENESIS_TIME),
+            latest_block_header: BlockHeader::genesis(),
             ..State::default()
         }
     }
@@ -1686,17 +1683,12 @@ mod slot_processing_tests {
     use super::*;
     use proptest::prelude::*;
 
-    use crate::block::BlockBody;
-
     /// Minimal fixture: a non-default `State` whose `latest_block_header`
     /// commits to the empty `BlockBody`. Mirrors the slot-0 shape used by
     /// `crate::stf::genesis_state` without going through the module path.
     fn fresh_state() -> State {
         State {
-            latest_block_header: BlockHeader {
-                body_root: BlockBody::default().hash_tree_root().into(),
-                ..BlockHeader::default()
-            },
+            latest_block_header: BlockHeader::genesis(),
             ..State::default()
         }
     }

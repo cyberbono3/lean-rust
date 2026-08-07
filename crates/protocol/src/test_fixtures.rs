@@ -4,7 +4,6 @@
 //! sample containers. Each helper returns a deterministic, populated value
 //! suitable for round-trip and hash-tree-root assertions.
 
-#![allow(dead_code)]
 // `assert_ssz_round_trip` reports a decode failure by panicking, which is the
 // only way a test helper can fail. Narrower than the blanket allow a `mod tests`
 // block takes: `unwrap_used` / `expect_used` stay denied here, so the
@@ -21,7 +20,7 @@ use crate::block::{
 use crate::checkpoint::Checkpoint;
 use crate::slot::Slot;
 use crate::validator::{Validator, ValidatorIndex, Validators};
-use crate::vote::{Attestation, AttestationData, SignedAttestation};
+use crate::vote::{Attestation, AttestationData};
 
 /// Asserts that `value` survives an SSZ encode/decode round-trip unchanged, and
 /// that its self-reported [`Encode::ssz_bytes_len`] agrees with the encoding.
@@ -77,10 +76,10 @@ pub(crate) fn sample_signature(seed: u8) -> Signature {
 
 /// Deterministic [`Validator`] keyed off `seed`.
 pub(crate) fn sample_validator(seed: u8) -> Validator {
-    Validator {
-        pubkey: PublicKey::new([seed; PublicKey::LEN]),
-        index: ValidatorIndex::new(u64::from(seed)),
-    }
+    Validator::new(
+        PublicKey::new([seed; PublicKey::LEN]),
+        ValidatorIndex::new(u64::from(seed)),
+    )
 }
 
 /// Deterministic [`Validators`] registry with `n` entries (seeds `0..n`).
@@ -99,23 +98,6 @@ pub(crate) fn sample_attestation(seed: u64) -> Attestation {
             target: Checkpoint::default(),
             source: Checkpoint::default(),
         },
-    }
-}
-
-/// Deterministic [`SignedAttestation`] keyed off `seed`.
-pub(crate) fn sample_signed_attestation(seed: u64) -> SignedAttestation {
-    let byte = u8::try_from(seed & 0xff).unwrap_or(0);
-    SignedAttestation {
-        message: Attestation {
-            validator_id: ValidatorIndex::new(seed),
-            data: AttestationData {
-                slot: Slot::new(seed),
-                head: Checkpoint::new(Bytes32::new([byte; 32]), Slot::new(seed)),
-                target: Checkpoint::default(),
-                source: Checkpoint::default(),
-            },
-        },
-        signature: sample_signature(byte),
     }
 }
 

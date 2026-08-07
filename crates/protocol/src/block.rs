@@ -78,6 +78,41 @@ pub struct BlockHeader {
     pub body_root: Bytes32,
 }
 
+impl BlockHeader {
+    /// Builds the slot-0 genesis header — the header of a state to which no
+    /// block has been applied yet.
+    ///
+    /// `body_root` commits to the empty [`BlockBody`] and is the ONLY
+    /// non-default field: the empty-body root is non-zero, and the genesis
+    /// anchor invariant depends on it. Every other field is the zero value —
+    /// slot 0 (no prior slot), proposer 0, zero `parent_root` (no prior block),
+    /// zero `state_root`. Struct-update keeps that in sync as [`BlockHeader`]
+    /// grows fields, matching how [`crate::stf::genesis_anchor_block`] is
+    /// written.
+    ///
+    /// Not a `const fn` — the empty-body root is hashed, not a literal.
+    ///
+    /// # Example
+    /// ```
+    /// use protocol::{BlockBody, BlockHeader};
+    /// use ssz::HashTreeRoot;
+    ///
+    /// let header = BlockHeader::genesis();
+    /// assert_eq!(header.body_root.0, BlockBody::default().hash_tree_root());
+    /// assert_eq!(header.slot.get(), 0);
+    /// assert_eq!(header.proposer_index.get(), 0);
+    /// assert_eq!(header.parent_root, types::Bytes32::zero());
+    /// assert_eq!(header.state_root, types::Bytes32::zero());
+    /// ```
+    #[must_use]
+    pub fn genesis() -> Self {
+        Self {
+            body_root: BlockBody::default().hash_tree_root().into(),
+            ..Self::default()
+        }
+    }
+}
+
 impl Encode for BlockHeader {
     fn is_ssz_fixed_len() -> bool {
         true
@@ -502,6 +537,25 @@ mod tests {
         sample_attestation, sample_block, sample_block_header, sample_block_with_attestation,
         sample_signature, sample_signed_block_with_attestation,
     };
+
+    // -- BlockHeader::genesis -----------------------------------------------
+
+    #[test]
+    fn genesis_header_is_default_but_for_the_empty_body_root() {
+        let header = BlockHeader::genesis();
+        let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
+
+        assert_eq!(header.body_root, body_root);
+        assert_ne!(body_root, Bytes32::zero(), "empty-body root is non-zero");
+        assert_eq!(
+            header,
+            BlockHeader {
+                body_root,
+                ..BlockHeader::default()
+            },
+            "genesis header must differ from Default only in body_root",
+        );
+    }
 
     // -- Config-derived caps (single source) --------------------------------
 

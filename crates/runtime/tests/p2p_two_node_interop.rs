@@ -313,7 +313,7 @@ async fn gossip_and_blocks_by_root_converge() {
         // filter by root rather than accepting the first delivery.
         let delivered = timeout(GOSSIP_DELIVERY_DEADLINE, async {
             loop {
-                let block = block_rx
+                let (_admit, block) = block_rx
                     .recv()
                     .await
                     .expect("block channel closed before delivery");

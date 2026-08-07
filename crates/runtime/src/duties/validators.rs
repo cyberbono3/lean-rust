@@ -198,7 +198,7 @@ impl ValidatorAssignments {
 /// full contents, and because the bound is on the read itself (not a prior
 /// `Metadata::len` probe) it closes the TOCTOU / symlink-swap window: a file
 /// that grows after a stat cannot slurp unbounded memory here.
-fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
+pub(super) fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
     use std::io::Read;
 
     let file = std::fs::File::open(path).map_err(|source| yaml_read_err(path, source))?;
@@ -208,6 +208,31 @@ fn read_capped(path: &Path) -> DutiesResult<Vec<u8>> {
         .map_err(|source| yaml_read_err(path, source))?;
     check_file_size(bytes.len() as u64)?;
     Ok(bytes)
+}
+
+/// Rejects YAML anchor / alias syntax (`&`, `*`) in `bytes` before it reaches a
+/// parser.
+///
+/// Load-bearing, not stylistic: `serde_yaml` expands aliases INSIDE
+/// `from_slice`, so a file well under [`MAX_VALIDATORS_FILE_BYTES`] can
+/// amplify into an arbitrarily large `Vec` before any count or shape check can
+/// run. [`read_capped`] bounds the bytes read from disk; it does not bound what
+/// the parser allocates from them. This is the guard that does.
+///
+/// A conservative byte scan: it rejects `&` / `*` anywhere in the file,
+/// including inside a comment or a quoted scalar. The manifests this guards are
+/// machine-generated flat sequences that never need either character, so failing
+/// closed costs nothing and needs no YAML tokenizer to be trustworthy.
+///
+/// # Errors
+/// [`DutiesError::ManifestContainsYamlAlias`] when either byte is present.
+pub(super) fn reject_yaml_aliases(bytes: &[u8], path: &Path) -> DutiesResult<()> {
+    if bytes.iter().any(|b| matches!(b, b'&' | b'*')) {
+        return Err(DutiesError::ManifestContainsYamlAlias {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(())
 }
 
 /// Builds the [`DutiesError::YamlRead`] for `path`. One constructor for both
@@ -233,7 +258,7 @@ fn check_file_size(len: u64) -> DutiesResult<()> {
     Ok(())
 }
 
-fn resolve_path(raw: &Path) -> PathBuf {
+pub(super) fn resolve_path(raw: &Path) -> PathBuf {
     if raw.is_absolute() {
         return raw.to_path_buf();
     }

@@ -9,6 +9,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use protocol::stf::genesis_anchor_block;
 use protocol::{
     Attestation, AttestationData, Block, BlockBody, BlockHeader, Checkpoint, ProtocolConfig,
     SignedAttestation, Slot, State, ValidatorIndex,
@@ -24,18 +25,12 @@ const GENESIS_TIME: u64 = 1_700_000_000;
 /// Genesis-shape `State` for an `n`-validator chain whose
 /// `latest_block_header` commits to the empty `BlockBody`. Inlined here
 /// rather than re-exported from `protocol::stf` so forkchoice tests stay
-/// independent of the genesis builder's evolution.
+/// independent of the genesis builder's evolution — the header shape itself
+/// comes from `BlockHeader::genesis`.
 fn genesis_state(num_validators: u64) -> State {
-    let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
     State {
-        config: ProtocolConfig {
-            num_validators,
-            genesis_time: GENESIS_TIME,
-        },
-        latest_block_header: BlockHeader {
-            body_root,
-            ..BlockHeader::default()
-        },
+        config: ProtocolConfig::new(num_validators, GENESIS_TIME),
+        latest_block_header: BlockHeader::genesis(),
         ..State::default()
     }
 }
@@ -76,13 +71,7 @@ pub(crate) fn anchor_pair(num_validators: u64) -> (State, Block) {
 /// slot 1 will pass `process_block_header`'s parent-root check.
 pub(crate) fn genesis_anchor(num_validators: u64) -> (State, Block) {
     let state = genesis_state(num_validators);
-    let block = Block {
-        slot: Slot::ZERO,
-        proposer_index: ValidatorIndex::new(0),
-        parent_root: Bytes32::zero(),
-        state_root: state.hash_tree_root().into(),
-        body: BlockBody::default(),
-    };
+    let block = genesis_anchor_block(&state);
     (state, block)
 }
 

@@ -4,7 +4,15 @@
 //! treats it as a module sibling rather than an extra test binary; each
 //! test file pulls it in with `mod p2p_common;`.
 
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
+// Every token accounted for, same standard as `tests/common/mod.rs`:
+// - `dead_code` is load-bearing: three integration-test binaries declare this
+//   module (`p2p_gossip`, `p2p_rpc`, `p2p_two_node_interop`), each compiles all
+//   of it but calls only part — `build_service` / `build_service_with` are used
+//   by the first two and not the third, so the lint fires per binary. Scoped to
+//   that, NOT a licence to let orphaned helpers accumulate; re-audit as it grows.
+// - `unwrap_used` covers the five `.unwrap()` calls below.
+// - `expect_used` was dropped — there is no `.expect(...)` in this file.
+#![allow(dead_code, clippy::unwrap_used)]
 
 use std::path::Path;
 use std::sync::Arc;

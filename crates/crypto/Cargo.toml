@@ -14,6 +14,10 @@ workspace = true
 types     = { path = "../types" }
 leansig   = { workspace = true }
 thiserror = { workspace = true }
+# SHA-256 for the seed commitment persisted in the durable OTS watermark: a
+# one-way binding to the key identity that lets a resume detect a foreign
+# record without ever storing the seed itself.
+sha2      = { workspace = true }
 # rand appears in the public signature of `generate`, so it is a real dependency
 # rather than dev-only. The major must match leanSig's: its `key_gen` takes a
 # rand 0.9 `Rng`, and handing it a different major would not compile.

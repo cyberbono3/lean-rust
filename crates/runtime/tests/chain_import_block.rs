@@ -22,7 +22,7 @@ use runtime::chain::engine::{BlockImportResult, Engine};
 use runtime::chain::Service;
 use ssz::HashTreeRoot;
 use storage::{HeadInfo, MemoryStore, StorageError, Store};
-use types::{Bytes32, OtsKeyState};
+use types::{Bytes32, OtsWatermark};
 
 /// `Store` decorator that counts each `save_*` invocation.
 ///
@@ -82,17 +82,20 @@ impl Store for CountingStore {
     fn load_head(&self) -> Result<Option<HeadInfo>, StorageError> {
         self.inner.load_head()
     }
+}
+
+impl storage::WatermarkStore for CountingStore {
     fn save_ots_key_state(
         &self,
         validator: ValidatorIndex,
-        record: OtsKeyState,
+        watermark: OtsWatermark,
     ) -> Result<(), StorageError> {
-        self.inner.save_ots_key_state(validator, record)
+        self.inner.save_ots_key_state(validator, watermark)
     }
     fn load_ots_key_state(
         &self,
         validator: ValidatorIndex,
-    ) -> Result<Option<OtsKeyState>, StorageError> {
+    ) -> Result<Option<OtsWatermark>, StorageError> {
         self.inner.load_ots_key_state(validator)
     }
 }

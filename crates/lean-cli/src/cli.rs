@@ -46,6 +46,14 @@ pub struct Cli {
     #[arg(long)]
     pub validator_registry_path: Option<PathBuf>,
 
+    /// Directory of per-validator secret key records (`validator_<i>.ssz`,
+    /// `OtsKeyState` SSZ) produced by the offline keygen. Required only when this
+    /// node runs local validators; the node loads ONLY its own validators' secrets
+    /// from here to sign attestations and blocks. An observer (no local
+    /// validators) starts without it.
+    #[arg(long, value_name = "DIR")]
+    pub validator_secrets_dir: Option<PathBuf>,
+
     /// Local validator-group/node identifier from the validator registry.
     #[arg(long)]
     pub node_id: Option<String>,

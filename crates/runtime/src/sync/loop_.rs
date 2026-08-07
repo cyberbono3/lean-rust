@@ -605,7 +605,11 @@ async fn import_chain(
             return;
         }
         let slot = block.message.block.slot.get();
-        if let Err(err) = chain.import_block(block).await {
+        // Backfill takes the verification-skipping entry: these blocks are
+        // hash-chained and STF-validated by `walk_back`, but NOT
+        // signature-verified. `chain::Service::import_block_synced` documents
+        // the trust boundary that opens and what must close it.
+        if let Err(err) = chain.import_block_synced(block).await {
             warn!(%err, slot, "import_block dropped");
         }
     }

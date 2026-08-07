@@ -25,6 +25,12 @@ pub const PROD_LIFETIME: u64 = <ProdScheme as SignatureScheme>::LIFETIME;
 /// Parameters `LIFETIME = 2^32`, `DIM = 64`, `BASE = 8`, `TARGET_SUM = 375`.
 pub type ProdScheme = leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized::SIGTopLevelTargetSumLifetime32Dim64Base8;
 
+/// [`SigningKey`] specialised to the pinned production scheme ([`ProdScheme`]).
+///
+/// Downstream runtime code holds this rather than spelling the scheme generic at
+/// every site — the production signer is always this specialisation.
+pub type ProdSigningKey = SigningKey<ProdScheme>;
+
 /// A scheme whose signature payload length is known, so a padded wire container
 /// can be sliced back to it.
 ///
@@ -352,7 +358,7 @@ pub(crate) mod test_support {
     /// Production keygen is ~2s against this scheme's ~12ms. The adapter logic
     /// under test is identical; the schemes differ only in `LOG_LIFETIME` (8 vs
     /// 32), which is the entire 768-byte gap between their payload lengths.
-    pub type TestScheme = leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
+    pub(crate) type TestScheme = leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
 
     impl super::sealed::Sealed for TestScheme {}
 
@@ -368,7 +374,7 @@ pub(crate) mod test_support {
     ///
     /// The one keygen call site for tests — no per-test copy-paste. Returns the
     /// wire public key, which is what every caller here actually wants.
-    pub fn test_key_pair() -> (types::PublicKey, SigningKey<TestScheme>) {
+    pub(crate) fn test_key_pair() -> (types::PublicKey, SigningKey<TestScheme>) {
         let mut rng = rand::rng();
         // The test scheme's lifetime is 2^8, so this conversion cannot fail on
         // any target; `try_into` states that rather than asserting it with a cast.
@@ -407,6 +413,16 @@ mod tests {
     /// conversion, so it cannot be tautological.
     ///
     /// Two active epochs is the smallest window that can sign epoch 0.
+    /// The production alias resolves to the production signer specialisation and
+    /// exposes the full [`SigningKey`] surface with no scheme generic spelled out.
+    #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
+    fn prod_signing_key_alias_resolves() {
+        let mut rng = rand::rng();
+        let (_pk, sk): (PublicKey, ProdSigningKey) = generate(&mut rng, 0, 2).unwrap();
+        assert_eq!(sk.to_record().next_index, 0);
+    }
+
     #[test]
     fn test_payload_len_matches_reality() {
         let mut rng = rand::rng();

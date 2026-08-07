@@ -30,6 +30,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::core::Service;
 
+use crate::p2p::admission::{AdmissionConfig, AdmitGuard, PeerAdmission};
 use crate::p2p::error::{HostError, HostResult};
 use crate::p2p::gossip::{handler, BlockReceiver, Topic, VoteReceiver};
 use crate::p2p::host::{
@@ -326,16 +327,24 @@ impl Service for P2pService {
 
         let (commands_tx, commands_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
         let (block_tx, block_rx) =
-            mpsc::channel::<SignedBlockWithAttestation>(GOSSIP_CHANNEL_CAPACITY);
-        let (vote_tx, vote_rx) = mpsc::channel::<SignedAttestation>(GOSSIP_CHANNEL_CAPACITY);
+            mpsc::channel::<(AdmitGuard, SignedBlockWithAttestation)>(GOSSIP_CHANNEL_CAPACITY);
+        let (vote_tx, vote_rx) =
+            mpsc::channel::<(AdmitGuard, SignedAttestation)>(GOSSIP_CHANNEL_CAPACITY);
+        // Per-peer inbound admission bound for the gossip ingress; lives inside the
+        // swarm task, which is the only admitter. The guard rides the channel to the
+        // consumer, which releases the slot on drop after import.
+        let admission = PeerAdmission::new(AdmissionConfig::default());
         let host = Host::new(self.peer_id, commands_tx);
         let cancel = CancellationToken::new();
         let join = tokio::spawn(swarm_task(
             *swarm,
             commands_rx,
             cancel.clone(),
-            block_tx,
-            vote_tx,
+            GossipIngress {
+                block_tx,
+                vote_tx,
+                admission,
+            },
             Arc::clone(&self.provider),
             Arc::clone(&self.registry),
         ));
@@ -508,14 +517,22 @@ fn subscribe_topics(swarm: &mut Swarm<DevnetBehaviour>) -> HostResult<()> {
     Ok(())
 }
 
+/// Gossip ingress sinks + the per-peer admission bound, bundled so the swarm task
+/// and event handler stay within the argument-count lint and route the two topics
+/// plus their admission through one cohesive handle.
+struct GossipIngress {
+    block_tx: mpsc::Sender<(AdmitGuard, SignedBlockWithAttestation)>,
+    vote_tx: mpsc::Sender<(AdmitGuard, SignedAttestation)>,
+    admission: Arc<PeerAdmission>,
+}
+
 /// Long-running swarm-poll task. Owns the `Swarm` and drives it until
 /// the cancellation token fires or the command channel closes.
 async fn swarm_task(
     mut swarm: Swarm<DevnetBehaviour>,
     mut commands: mpsc::Receiver<HostCommand>,
     cancel: CancellationToken,
-    block_tx: mpsc::Sender<SignedBlockWithAttestation>,
-    vote_tx: mpsc::Sender<SignedAttestation>,
+    ingress: GossipIngress,
     provider: Arc<RpcProvider>,
     registry: Arc<PeerRegistry>,
 ) {
@@ -578,8 +595,7 @@ async fn swarm_task(
                 handle_swarm_event(
                     event,
                     &mut swarm,
-                    &block_tx,
-                    &vote_tx,
+                    &ingress,
                     &mut outbound,
                     provider.as_ref(),
                     registry.as_ref(),
@@ -593,8 +609,7 @@ async fn swarm_task(
 fn handle_swarm_event(
     event: SwarmEvent<DevnetBehaviourEvent>,
     swarm: &mut Swarm<DevnetBehaviour>,
-    block_tx: &mpsc::Sender<SignedBlockWithAttestation>,
-    vote_tx: &mpsc::Sender<SignedAttestation>,
+    ingress: &GossipIngress,
     outbound: &mut OutboundTable,
     provider: &RpcProvider,
     registry: &PeerRegistry,
@@ -611,7 +626,14 @@ fn handle_swarm_event(
                 topic = %message.topic.as_str(),
                 "gossipsub message received",
             );
-            handler::route_gossipsub_message(&message_id, &message, block_tx, vote_tx);
+            handler::route_gossipsub_message(
+                &propagation_source,
+                &ingress.admission,
+                &message_id,
+                &message,
+                &ingress.block_tx,
+                &ingress.vote_tx,
+            );
         }
         SwarmEvent::Behaviour(DevnetBehaviourEvent::StatusRr(event)) => {
             handle_status_rr_event(event, swarm, provider, registry);

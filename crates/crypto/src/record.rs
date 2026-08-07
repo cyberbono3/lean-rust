@@ -1,19 +1,60 @@
 //! SA5 conversions between an in-memory [`SigningKey`] and the crypto-free,
-//! persistable [`OtsKeyState`] record.
+//! persistable records.
 //!
-//! The record stores a reproducible seed rather than the variable-size leanSig
-//! secret, plus the monotonic `next_index` watermark. [`SigningKey::from_record`]
-//! reconstructs the key AND restores the watermark, so a reload across a restart
-//! cannot re-enable one-time-key reuse — the discipline the [`SigningKey`] guards
-//! in memory (see `key_state`), extended across persistence.
+//! Two persistable forms, deliberately split by sensitivity:
+//! - [`OtsKeyState`] (the secret-bearing keygen record) stores the reproducible
+//!   seed so [`SigningKey::from_record`] can regenerate the key. It lives ONLY
+//!   in the operator's `0o600` secret file.
+//! - [`OtsWatermark`] (the durable record) carries a one-way [`seed_commitment`]
+//!   instead of the seed, plus the monotonic `next_index`. The runtime guard
+//!   persists THIS through the shared store, so key material never reaches the
+//!   chain database. A resume reads the seed from the secret file and merges the
+//!   store's watermark by the further-advanced `next_index`.
+//!
+//! Restoring the watermark on reload is what stops a restart from re-enabling
+//! one-time-key reuse — the discipline the [`SigningKey`] guards in memory (see
+//! `key_state`), extended across persistence.
 
-use types::OtsKeyState;
+use sha2::{Digest, Sha256};
+use types::{OtsKeyState, OtsWatermark};
 
 use crate::error::CryptoError;
 use crate::key_state::SigningKey;
 use crate::scheme::{generate_from_seed, SchemeWire};
 
+/// Domain-separated, one-way commitment to a signing key's seed.
+///
+/// `sha256("lean-ots-key-commitment-v1" || seed)`. Binds a durable
+/// [`OtsWatermark`] to one key identity without disclosing the seed: a resume
+/// recomputes this from the secret file's seed and compares it against the
+/// stored commitment to reject a foreign / rotated-seed record. Not invertible
+/// to the seed, so it is safe to persist in the shared chain store.
+#[must_use]
+pub fn seed_commitment(seed: [u8; 32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"lean-ots-key-commitment-v1");
+    hasher.update(seed);
+    hasher.finalize().into()
+}
+
 impl<S: SchemeWire> SigningKey<S> {
+    /// Snapshots this key as a durable, seed-free [`OtsWatermark`].
+    ///
+    /// The record the runtime guard persists on every sign: it carries the
+    /// [`seed_commitment`] (not the seed) plus the advanced `next_index`, so the
+    /// store never holds key material. Window handling matches
+    /// [`to_record`](Self::to_record).
+    #[must_use]
+    pub fn to_watermark(&self) -> OtsWatermark {
+        let activation = self.activation_interval();
+        OtsWatermark {
+            key_commitment: seed_commitment(self.seed()),
+            activation_epoch: activation.start,
+            num_active_epochs: activation.end - activation.start,
+            next_index: self.last_signed().map_or(0, |epoch| u64::from(epoch) + 1),
+        }
+    }
+
     /// Snapshots this key as a crypto-free record.
     ///
     /// `next_index = last_signed + 1` (`0` when the key has never signed).
