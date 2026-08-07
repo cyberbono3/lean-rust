@@ -253,10 +253,7 @@ fn synthesize_state(num_validators: u64, validators: Vec<Validator>, genesis_tim
     );
     let body_root = BlockBody::default().hash_tree_root().into();
     State {
-        config: ProtocolConfig {
-            num_validators,
-            genesis_time,
-        },
+        config: ProtocolConfig::new(num_validators, genesis_time),
         validators,
         latest_block_header: BlockHeader {
             body_root,

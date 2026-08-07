@@ -256,10 +256,7 @@ mod tests {
         }
 
         State {
-            config: ProtocolConfig {
-                num_validators: 4,
-                genesis_time: 1_700_000_000,
-            },
+            config: ProtocolConfig::new(4, 1_700_000_000),
             slot: Slot::new(9),
             latest_block_header: BlockHeader::default(),
             latest_justified: Checkpoint::new(Bytes32::new([0x44; 32]), Slot::new(8)),

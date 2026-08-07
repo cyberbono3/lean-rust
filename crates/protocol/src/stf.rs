@@ -52,10 +52,7 @@ pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
     let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
 
     State {
-        config: ProtocolConfig {
-            num_validators,
-            genesis_time,
-        },
+        config: ProtocolConfig::new(num_validators, genesis_time),
         latest_block_header: BlockHeader {
             body_root,
             ..BlockHeader::default()

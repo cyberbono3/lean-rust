@@ -55,10 +55,7 @@ pub fn sample_signed_block(seed: u8) -> SignedBlockWithAttestation {
 
 pub fn sample_state(seed: u8) -> State {
     State {
-        config: ProtocolConfig {
-            num_validators: u64::from(seed.max(1)),
-            genesis_time: 1_700_000_000,
-        },
+        config: ProtocolConfig::new(u64::from(seed.max(1)), 1_700_000_000),
         slot: Slot::new(u64::from(seed)),
         latest_block_header: BlockHeader {
             slot: Slot::new(u64::from(seed)),

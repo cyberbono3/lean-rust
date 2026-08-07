@@ -29,10 +29,7 @@ const GENESIS_TIME: u64 = 1_700_000_000;
 fn genesis_state(num_validators: u64) -> State {
     let body_root: Bytes32 = BlockBody::default().hash_tree_root().into();
     State {
-        config: ProtocolConfig {
-            num_validators,
-            genesis_time: GENESIS_TIME,
-        },
+        config: ProtocolConfig::new(num_validators, GENESIS_TIME),
         latest_block_header: BlockHeader {
             body_root,
             ..BlockHeader::default()
