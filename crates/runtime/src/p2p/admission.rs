@@ -11,21 +11,13 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use crate::nonzero::nz;
 use crate::sync::PeerId;
 
-/// Builds a [`NonZeroUsize`] from a literal at compile time; panics if the input is
-/// zero. Mirrors the `sync::config` idiom for non-zero associated constants.
-const fn nz(n: usize) -> NonZeroUsize {
-    match NonZeroUsize::new(n) {
-        Some(v) => v,
-        None => panic!("expected non-zero constant"),
-    }
-}
-
-/// Admission tunables. `#[non_exhaustive]` so fields can grow without breaking callers.
-/// Crate-internal: built by `P2pService` at start; no external consumer.
+/// Admission tunables. Crate-internal: built by `P2pService` at start, with no
+/// consumer outside this crate — so adding a field here is free and needs no
+/// `#[non_exhaustive]`, which is inert below `pub` visibility anyway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub(crate) struct AdmissionConfig {
     /// Max un-imported gossip messages permitted in flight per source peer.
     pub(crate) max_in_flight_per_peer: NonZeroUsize,

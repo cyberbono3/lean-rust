@@ -4,7 +4,12 @@
 //! builder for validator secret key material (generate → write records → load
 //! signer). Kept as a wrapper so these tests do not each manage a temp dir.
 
-#![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
+// Only `expect_used`: the `.expect("tempdir")` below is the sole suppression this
+// file needs. `dead_code` was dropped (one declaring binary, `chain_sign.rs`,
+// which uses the single helper at four sites) and `unwrap_used` with it — there
+// is no `.unwrap()` here. Add a token back only when a helper actually needs one.
+// Reference the call by identifier, not line number: the number rots on reflow.
+#![allow(clippy::expect_used)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -21,7 +26,9 @@ use runtime::duties::LocalSigner;
 /// The signer holds its keys in memory after loading, so the backing temp dir is
 /// dropped immediately.
 #[must_use]
-pub fn signer_with_keys(indices: &[u64]) -> (Arc<Mutex<LocalSigner>>, BTreeMap<u64, PublicKey>) {
+pub(crate) fn signer_with_keys(
+    indices: &[u64],
+) -> (Arc<Mutex<LocalSigner>>, BTreeMap<u64, PublicKey>) {
     let dir = tempfile::tempdir().expect("tempdir");
     build_signer(dir.path(), indices, MIN_ACTIVE_EPOCHS)
 }

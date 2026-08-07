@@ -98,7 +98,7 @@ impl Health {
 /// exactly one task — no `Arc<Self>`. The gossip receivers are taken from
 /// `p2p` inside `start` (they exist only after `P2pService::start`, which
 /// runs earlier in the node's start order).
-pub struct ConsensusLoop {
+pub(crate) struct ConsensusLoop {
     chain: Arc<ChainService>,
     p2p: Arc<P2pService>,
     proposers: LocalProposers,
@@ -126,50 +126,69 @@ struct RunHandle {
     cancel: CancellationToken,
 }
 
+/// This node's slice of the validator registry: the indices it runs, plus the
+/// registry total the round-robin proposer schedule is computed against.
+///
+/// The two travel together by construction — both come from ONE
+/// [`ValidatorAssignments::load`], and a caller holding one without the other
+/// cannot build a proposer schedule. Naming the pair keeps them from being two
+/// unlabelled positional arguments at the sites that thread them from the
+/// composition root into the driver.
+pub(crate) struct LocalValidatorSet {
+    /// Validator indices this node signs for (its configured group).
+    pub(crate) local: Vec<ValidatorIndex>,
+    /// Total validators in the registry — the round-robin modulus.
+    pub(crate) total: u64,
+}
+
 /// Loads the validator assignments and resolves this node's LOCAL validator
-/// index set (the configured group) plus the total validator count. Shared by
-/// [`ConsensusLoop::new`] (proposer schedule) and the composition root
-/// (`node::devnet`, signer key set), so the group→indices resolution has one home.
-pub(crate) fn resolve_local_validators(
-    duties: &DutiesConfig,
-) -> anyhow::Result<(Vec<ValidatorIndex>, u64)> {
+/// set. Shared by [`ConsensusLoop::new`] (proposer schedule) and the composition
+/// root (`node::devnet`, signer key set), so the group→indices resolution has one
+/// home and the assignment YAML is read a single time.
+///
+/// # Errors
+/// - The validator-assignment file cannot be loaded.
+/// - The configured validator group is absent from the assignment file.
+pub(crate) fn resolve_local_validators(duties: &DutiesConfig) -> anyhow::Result<LocalValidatorSet> {
     let assignments = ValidatorAssignments::load(duties.validators_path())
         .context("load validator assignments")?;
     let group = duties.validator_group();
     let local = assignments
         .group(group)
         .with_context(|| format!("validator group {group:?} not found"))?;
-    Ok((local.to_vec(), assignments.total_validators()))
+    Ok(LocalValidatorSet {
+        local: local.to_vec(),
+        total: assignments.total_validators(),
+    })
 }
 
 impl ConsensusLoop {
     /// Builds the driver from the concrete services, the duties config, and the
-    /// pre-resolved local validator set (`local` + `total_validators`, obtained
-    /// once by the composition root via [`resolve_local_validators`] and shared
-    /// with the signer so the assignment YAML is read a single time).
+    /// pre-resolved [`LocalValidatorSet`] (obtained once by the composition root
+    /// via [`resolve_local_validators`] and shared with the signer so the
+    /// assignment YAML is read a single time).
     ///
     /// Computes the genesis anchor on the `tokio::time` clock.
     ///
     /// # Errors
     /// - The duties config is not runnable (e.g. unset genesis).
-    pub fn new(
+    pub(crate) fn new(
         chain: Arc<ChainService>,
         p2p: Arc<P2pService>,
         sync: Arc<SyncLoop>,
         duties: &DutiesConfig,
-        local: Vec<ValidatorIndex>,
-        total_validators: u64,
+        validators: LocalValidatorSet,
     ) -> anyhow::Result<Self> {
         duties
             .ensure_runnable()
             .context("duties config not runnable")?;
         info!(
             group = duties.validator_group(),
-            validators = local.len(),
-            total = total_validators,
+            validators = validators.local.len(),
+            total = validators.total,
             "consensus loop validators selected",
         );
-        let proposers = LocalProposers::new(local, total_validators);
+        let proposers = LocalProposers::new(validators.local, validators.total);
         Ok(Self {
             chain,
             p2p,

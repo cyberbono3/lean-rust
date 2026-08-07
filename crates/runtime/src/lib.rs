@@ -11,6 +11,7 @@ pub mod api;
 pub mod chain;
 pub mod core;
 pub mod duties;
+mod nonzero;
 pub mod observability;
 pub mod p2p;
 pub mod signing_domain;

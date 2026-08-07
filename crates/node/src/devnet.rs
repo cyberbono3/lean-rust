@@ -161,7 +161,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     // Resolve this node's local validator set ONCE (the assignment YAML is read a
     // single time here) and share it between the signer and the consensus-loop
     // proposer schedule.
-    let (local_validators, total_validators) = resolve_local_validators(&duties)?;
+    let validators = resolve_local_validators(&duties)?;
     // A validating node MUST run on a durable backend: the OTS guard resumes its
     // one-time-key watermark from the store on restart, and the in-memory store
     // loses that watermark on exit — a restarted node would reset to fresh-keygen
@@ -169,7 +169,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     // combination at the composition root rather than signing into it silently.
     // An observer (no local validators) never signs, so any backend is fine.
     anyhow::ensure!(
-        local_validators.is_empty() || storage.is_durable(),
+        validators.local.is_empty() || storage.is_durable(),
         "a validating node requires a durable --storage-path: the in-memory backend loses the OTS watermark on restart, which would re-enable one-time-key reuse",
     );
     // Build the local validator signer at the composition root. Observer node
@@ -179,7 +179,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
     // the durable OTS guard so every production sign persists its advanced
     // watermark before the signature is released (persist-before-release).
     let local_signer = build_local_signer(
-        &local_validators,
+        &validators.local,
         validator_secrets_dir.as_deref(),
         store.as_ref(),
     )?;
@@ -219,8 +219,7 @@ pub fn new_devnet(config: Config) -> Result<Node> {
         Arc::clone(&p2p),
         Arc::clone(&sync),
         &duties,
-        local_validators,
-        total_validators,
+        validators,
     )?);
 
     let http = Arc::new(HttpService::new(Arc::clone(&store), http_addr));
@@ -662,14 +661,13 @@ mod tests {
             Arc::clone(&chain),
             Arc::clone(&p2p),
         ));
-        let (local, total) = resolve_local_validators(&duties).unwrap();
+        let validators = resolve_local_validators(&duties).unwrap();
         let driver = ConsensusLoop::new(
             Arc::clone(&chain),
             Arc::clone(&p2p),
             Arc::clone(&sync),
             &duties,
-            local,
-            total,
+            validators,
         )
         .unwrap();
 
@@ -906,14 +904,13 @@ mod tests {
             Arc::clone(&chain),
             Arc::clone(&p2p),
         ));
-        let (local, total) = resolve_local_validators(&duties).unwrap();
+        let validators = resolve_local_validators(&duties).unwrap();
         let driver = ConsensusLoop::new(
             Arc::clone(&chain),
             Arc::clone(&p2p),
             Arc::clone(&sync),
             &duties,
-            local,
-            total,
+            validators,
         )
         .unwrap();
 

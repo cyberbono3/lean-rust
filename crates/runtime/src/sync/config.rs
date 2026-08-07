@@ -3,18 +3,8 @@
 use core::num::NonZeroUsize;
 use core::time::Duration;
 
+use crate::nonzero::nz;
 use crate::sync::error::SyncError;
-
-/// Builds a [`NonZeroUsize`] from a literal at compile time; panics if
-/// the input is zero. Used to define non-zero associated constants
-/// without the unstable `NonZeroUsize::unwrap` (stable in const since
-/// 1.83; MSRV here is 1.80).
-const fn nz(n: usize) -> NonZeroUsize {
-    match NonZeroUsize::new(n) {
-        Some(v) => v,
-        None => panic!("expected non-zero constant"),
-    }
-}
 
 /// Type-validated configuration for the sync [`Loop`](crate::sync::Loop).
 ///

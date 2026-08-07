@@ -305,9 +305,8 @@ mod tests {
         }
     }
 
-    // The single in-module signed sample. The crate-level
-    // `sample_signed_attestation(seed)` serves the seeded cases; this one pins
-    // the fixed 0xab sample the layout assertions below read byte-for-byte.
+    // The single signed sample. Pins the fixed 0xab sample the layout assertions
+    // below read byte-for-byte.
     fn sample_signed_attestation_fixed() -> SignedAttestation {
         SignedAttestation {
             message: sample_attestation(),

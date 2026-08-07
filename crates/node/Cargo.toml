@@ -26,11 +26,9 @@ tokio-util  = { workspace = true }
 tracing     = { workspace = true }
 
 [dev-dependencies]
+# `runtime` is re-declared here ONLY to add the `test-fixtures` feature for test
+# targets; `config` needed no such re-declaration (the `[dependencies]` entry
+# already covers test targets), so it is not repeated.
 runtime = { path = "../runtime", features = ["test-fixtures"] }
-config     = { path = "../config" }
 tokio      = { workspace = true, features = ["test-util"] }
 tempfile   = { workspace = true }
-# The self-driving / resume tests exercise the REAL sign path, so they generate
-# per-validator secret key material via `crypto::generate` (needs a CryptoRng).
-crypto     = { path = "../crypto" }
-rand       = { workspace = true }

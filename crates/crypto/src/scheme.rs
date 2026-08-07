@@ -358,7 +358,7 @@ pub(crate) mod test_support {
     /// Production keygen is ~2s against this scheme's ~12ms. The adapter logic
     /// under test is identical; the schemes differ only in `LOG_LIFETIME` (8 vs
     /// 32), which is the entire 768-byte gap between their payload lengths.
-    pub type TestScheme = leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
+    pub(crate) type TestScheme = leansig::signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_8::SIGTopLevelTargetSumLifetime8Dim64Base8;
 
     impl super::sealed::Sealed for TestScheme {}
 
@@ -374,7 +374,7 @@ pub(crate) mod test_support {
     ///
     /// The one keygen call site for tests — no per-test copy-paste. Returns the
     /// wire public key, which is what every caller here actually wants.
-    pub fn test_key_pair() -> (types::PublicKey, SigningKey<TestScheme>) {
+    pub(crate) fn test_key_pair() -> (types::PublicKey, SigningKey<TestScheme>) {
         let mut rng = rand::rng();
         // The test scheme's lifetime is 2^8, so this conversion cannot fail on
         // any target; `try_into` states that rather than asserting it with a cast.
