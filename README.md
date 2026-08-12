@@ -103,6 +103,12 @@ Revisions are recorded as full 40-character hashes rather than short prefixes: a
 prefix can become ambiguous as an upstream repository grows, and this table is
 the only place these values are written down.
 
+`make audit-spec` checks the leanSpec revision above out at `.audit/leanSpec`,
+reading it from this table rather than from a second copy that could drift. It is
+what makes a citation of the form `leanSpec@<rev>:<path>:<line>` resolvable on
+another machine; the checkout is derived and disposable, and `make
+audit-spec-clean` removes it.
+
 The leanSig revision is additionally pinned to an exact commit in `Cargo.toml`
 rather than a branch or tag, because a moving reference would rebuild against a
 different scheme and invalidate keys already generated against this one.

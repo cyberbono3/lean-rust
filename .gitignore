@@ -31,6 +31,11 @@ crates/fixtures/genesis/genesis_validators.yaml
 crates/fixtures/genesis/secrets/
 crates/fixtures/logs/*.log
 
+# pq-devnet-1 conformance audit workspace: the pinned leanSpec checkout
+# (`make audit-spec`) and the evidence bundle produced alongside it. Derived and
+# disposable — `make audit-spec-clean` removes it.
+.audit/
+
 # Third-party research sources (not part of this project)
 superpowers-main/
 caveman/
