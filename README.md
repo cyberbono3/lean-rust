@@ -90,7 +90,7 @@ clients. Changing any row is an interop break, not a routine bump.
 
 | Parameter | Value | Source |
 | --------- | ----- | ------ |
-| leanSpec revision | `050fa4a18881d54d7dc07601fe59e34eb20b9630` | [leanEthereum/leanSpec](https://github.com/leanEthereum/leanSpec) |
+| leanSpec revision | `0c9528ac6f403f913caf6d9c450879c36d361742` | [leanEthereum/leanSpec](https://github.com/leanEthereum/leanSpec) |
 | leanSig revision | `f10dcbefac2502d356d93f686e8b4ecd8dc8840a` | [leanEthereum/leanSig](https://github.com/leanEthereum/leanSig) — pinned in `Cargo.toml` |
 | leanSig scheme alias | `SIGTopLevelTargetSumLifetime32Dim64Base8` | `signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized` |
 | Scheme parameters | `LIFETIME = 2^32`, `DIM = 64`, `BASE = 8`, `TARGET_SUM = 375` | leanSpec `xmss` `PROD_CONFIG` |
@@ -99,9 +99,24 @@ clients. Changing any row is an interop break, not a routine bump.
 | `Signature` | 3116 bytes | leanSpec `Signature` container |
 | `PublicKey` | 52 bytes | leanSpec `Validator.pubkey` |
 
+The leanSpec revision above is the pq-devnet-4 target. Every other row in this
+table is a pq-devnet-1 value that has not been reconfirmed against it, and the
+section heading still says so. They are listed together because a client needs
+all of them at once, not because they were confirmed at the same revision;
+reconfirming the sizes, the scheme parameters and the leanSig pin against
+pq-devnet-4 is outstanding work.
+
 Revisions are recorded as full 40-character hashes rather than short prefixes: a
 prefix can become ambiguous as an upstream repository grows, and this table is
 the only place these values are written down.
+
+`make spec-pq-devnet4` checks the leanSpec revision above out at
+`leanSpec-pq-devnet-4/`, reading it from this table rather than from a second copy
+that could drift. It is what makes a citation of the form
+`leanSpec@<rev>:<path>:<line>` resolvable on another machine; the checkout is
+derived and disposable, and `make spec-pq-devnet4-clean` removes it. That clean
+also removes `.audit/`, where the checkout used to live — run it once if you
+were carrying the previous pin.
 
 The leanSig revision is additionally pinned to an exact commit in `Cargo.toml`
 rather than a branch or tag, because a moving reference would rebuild against a
