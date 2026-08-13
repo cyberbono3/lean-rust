@@ -23,6 +23,7 @@
 #   TC-12 README.md missing                      -> fail  (must not default to pass)
 #   TC-13 value cell is not backtick-quoted      -> fail
 #   TC-14 upstream URL is read from the row      -> fail  (+ output assertion)
+#   TC-15 existing checkout predates the pin     -> pass  (+ HEAD assertion)
 #
 # The suite is offline: the upstream is a throwaway local repository, and TC-14
 # blocks every transport except `file` so the https attempt fails on protocol
@@ -46,6 +47,11 @@
 #     table all fail closed further down. Those guards are kept for their error
 #     messages, which name the actual problem instead of reporting it as a git
 #     failure three steps away.
+#   - TC-15 turns red if the fetch block is removed. TC-11 alone would stay
+#     green there: its fixture is a full clone, so the recorded revision is
+#     already in the object store and no fetch is needed to reach it. The two
+#     cases split the upgrade path between them — TC-11 pins the forced
+#     detach, TC-15 pins the fetch — and neither covers the other's half.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,6 +81,13 @@ REV_TIP="$(git -C "$UPSTREAM" rev-parse HEAD)"
 ABSENT_REV="0123456789abcdef0123456789abcdef01234567"
 OTHER_REV="f10dcbefac2502d356d93f686e8b4ecd8dc8840a"
 
+# The script's default checkout path. Every case drives the script with no
+# LEANSPEC_DIR set, so this is the one place the suite knows where the
+# checkout lands — a relocation is a one-line change here, and a relocation
+# that forgets this file turns the HEAD assertions red rather than silently
+# passing against a directory nobody wrote.
+CHECKOUT="leanSpec-pq-devnet-4"
+
 # readme_with <rows> — the interop table with its revision rows swapped.
 readme_with() {
     printf '%s\n' '# lean-rust
@@ -94,8 +107,8 @@ row_spec() {
 
 # seed_checkout <dir> <rev> — a pre-existing checkout parked on <rev>.
 seed_checkout() {
-    git clone --quiet "$UPSTREAM" "$1/.audit/leanSpec"
-    git -C "$1/.audit/leanSpec" checkout --quiet --detach --force "$2"
+    git clone --quiet "$UPSTREAM" "$1/$CHECKOUT"
+    git -C "$1/$CHECKOUT" checkout --quiet --detach --force "$2"
 }
 
 # Per-case knobs, reset by run(). SETUP is a function name called with the case
@@ -125,7 +138,7 @@ run() {
     [ "$got" = "$expect" ] || problem="expected $expect, got $got (exit $rc)"
 
     if [ -z "$problem" ] && [ -n "$EXPECT_HEAD" ]; then
-        local head; head="$(git -C "$dir/.audit/leanSpec" rev-parse HEAD 2>/dev/null)"
+        local head; head="$(git -C "$dir/$CHECKOUT" rev-parse HEAD 2>/dev/null)"
         [ "$head" = "$EXPECT_HEAD" ] || problem="HEAD is ${head:-<none>}, expected $EXPECT_HEAD"
     fi
     if [ -z "$problem" ] && [ -n "$EXPECT_OUT" ]; then
@@ -193,14 +206,14 @@ $(row_spec "$REV")")"
 
 # --- pre-existing state at the checkout path ---
 
-setup_not_a_repo() { mkdir -p "$1/.audit/leanSpec"; printf 'stray\n' > "$1/.audit/leanSpec/notes.txt"; }
+setup_not_a_repo() { mkdir -p "$1/$CHECKOUT"; printf 'stray\n' > "$1/$CHECKOUT/notes.txt"; }
 SETUP=setup_not_a_repo; URL_OVERRIDE="$UPSTREAM"
 run "TC-10 checkout path exists, not a repository" fail "$(readme_with "$(row_spec "$REV")")"
 
 # A stale checkout from an earlier run sits on the branch tip with an edit left
 # behind by an interrupted run. A plain detach refuses to overwrite that edit, so
 # without --force the script leaves the wrong revision on disk.
-setup_stale() { seed_checkout "$1" "$REV_TIP"; printf 'interrupted\n' > "$1/.audit/leanSpec/spec.md"; }
+setup_stale() { seed_checkout "$1" "$REV_TIP"; printf 'interrupted\n' > "$1/$CHECKOUT/spec.md"; }
 SETUP=setup_stale; URL_OVERRIDE="$UPSTREAM"; EXPECT_HEAD="$REV"
 run "TC-11 stale checkout parked on another commit" pass "$(readme_with "$(row_spec "$REV")")"
 
@@ -218,6 +231,30 @@ EXTRA_ENV="GIT_ALLOW_PROTOCOL=file GIT_TERMINAL_PROMPT=0"
 EXPECT_OUT="https://spec.example.invalid/leanSpec"
 run "TC-14 upstream URL is read from the row" fail \
     "$(readme_with "| leanSpec revision | \`$REV\` | [mirror](https://spec.example.invalid/leanSpec) |")"
+
+# A checkout taken before the recorded revision existed. TC-11 covers the other
+# half of an upgrade — revision already present, only the detach needed — and
+# would stay green if the fetch were deleted outright. This is the case that
+# walks the fetch branch on a repository the script did not clone.
+#
+# The template is a full clone made now, and only then does the upstream gain
+# the commit that the row will record: the object store genuinely predates the
+# revision rather than being truncated to hide it. A truncated one — a shallow
+# clone — would work here too, but only because an unadvertised-object want
+# happens to be honoured; its wanted commit lies beyond the shallow boundary,
+# which the full-refspec fallback never crosses, so the case would turn red on
+# any git or server that declines that want, with nothing wrong in the script.
+# A genuinely older store reaches its revision from the branch tip, so the
+# fallback recovers it on every configuration.
+git clone --quiet "$UPSTREAM" "$WORK/predates"
+printf 'spec v3\n' > "$UPSTREAM/spec.md"
+git -C "$UPSTREAM" commit --quiet -am "spec v3"
+REV_LATE="$(git -C "$UPSTREAM" rev-parse HEAD)"
+
+setup_predates() { cp -R "$WORK/predates" "$1/$CHECKOUT"; }
+SETUP=setup_predates; URL_OVERRIDE="$UPSTREAM"; EXPECT_HEAD="$REV_LATE"
+run "TC-15 existing checkout predates the pin" pass \
+    "$(readme_with "$(row_spec "$REV_LATE")")"
 
 printf '\n%d passed, %d failed\n' "$pass_count" "$fail_count"
 [ "$fail_count" -eq 0 ]

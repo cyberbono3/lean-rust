@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# fetch-leanspec.sh — materialise the recorded leanSpec revision under .audit/.
+# fetch-leanspec.sh — materialise the recorded leanSpec revision at leanSpec-pq-devnet-4/.
 #
 # Conformance work cites the specification as `leanSpec@<rev>:<path>:<line>`. A
 # citation of that shape is only checkable when the exact revision is on disk;
@@ -26,7 +26,7 @@
 # no-op. That is what allows this to be a precondition of other targets.
 #
 # Usage:   scripts/fetch-leanspec.sh
-# Env:     LEANSPEC_DIR — checkout path (default `.audit/leanSpec`)
+# Env:     LEANSPEC_DIR — checkout path (default `leanSpec-pq-devnet-4`)
 #          LEANSPEC_URL — clone source (default: the URL in the same table row;
 #                         override only to point at a mirror of the same history)
 # Exit:    0 = checkout is detached at the recorded revision
@@ -38,7 +38,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 README="README.md"
-LEANSPEC_DIR="${LEANSPEC_DIR:-.audit/leanSpec}"
+LEANSPEC_DIR="${LEANSPEC_DIR:-leanSpec-pq-devnet-4}"
 
 # The full 40-character hash is required. README.md states why: a prefix can
 # become ambiguous as an upstream repository grows, and a prefix that resolves
@@ -121,10 +121,11 @@ fi
 git -C "$LEANSPEC_DIR" cat-file -e "${rev}^{commit}" 2>/dev/null ||
     fail "revision $rev is not present in $LEANSPEC_URL — either the recorded revision is wrong or the upstream does not carry that history"
 
-# --force discards a dirty tree from an interrupted earlier run. Nothing under
-# .audit/ is authored here, so there is no local work to lose, and a checkout
+# --force discards a dirty tree from an interrupted earlier run. Nothing in the
+# checkout is authored here, so there is no local work to lose, and a checkout
 # that silently declined to move would leave the HEAD assertion below reporting
-# a revision nobody selected.
+# a revision nobody selected. This is also what carries a tree left over from
+# the previous pin onto the newly recorded revision without a manual clean.
 git -C "$LEANSPEC_DIR" checkout --quiet --detach --force "$rev" ||
     fail "could not check out $rev in $LEANSPEC_DIR"
 

@@ -260,9 +260,10 @@ mod tests {
     // vectors cover it.
     //
     // All four expectations below were cross-checked against the consensus
-    // spec's own `hash_tree_root` at the pinned revision (leanSpec@050fa4a,
-    // `lean_spec.subspecs.ssz.hash`), so they agree with the spec and not merely
-    // with this crate.
+    // spec's own `hash_tree_root` at leanSpec 050fa4a
+    // (`lean_spec.subspecs.ssz.hash`), so they agree with the spec and not merely
+    // with this crate. That is the revision the cross-check was performed at,
+    // which is not necessarily the revision pinned today.
     // ---------------------------------------------------------------------
 
     /// Reference zero-hash recursion — deliberately independent of

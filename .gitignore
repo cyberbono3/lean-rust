@@ -31,9 +31,15 @@ crates/fixtures/genesis/genesis_validators.yaml
 crates/fixtures/genesis/secrets/
 crates/fixtures/logs/*.log
 
-# pq-devnet-1 conformance audit workspace: the pinned leanSpec checkout
-# (`make audit-spec`) and the evidence bundle produced alongside it. Derived and
-# disposable — `make audit-spec-clean` removes it.
+# Pinned leanSpec checkout (`make spec-pq-devnet4`). It sits at the repository
+# root so the tree on disk states which devnet generation it is, which puts it
+# outside every other ignore rule here — this entry is the only thing keeping a
+# whole spec tree out of `git add -A`. Derived and disposable;
+# `make spec-pq-devnet4-clean` removes it.
+/leanSpec-pq-devnet-4/
+
+# Conformance evidence bundles produced alongside the checkout. Derived and
+# disposable — `make spec-pq-devnet4-clean` removes this too.
 .audit/
 
 # Third-party research sources (not part of this project)
