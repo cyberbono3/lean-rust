@@ -99,6 +99,8 @@ pub(crate) fn sample_validators(n: u8) -> Validators {
 pub(crate) fn registry_of(n: u64) -> Validators {
     (0..n)
         .map(|i| {
+            // `& 0xff` makes this conversion infallible; the fallback is
+            // unreachable and exists only to keep the expression total.
             let seed = u8::try_from(i & 0xff).unwrap_or(0);
             Validator::new(
                 PublicKey::new([seed; PublicKey::LEN]),

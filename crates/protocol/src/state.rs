@@ -699,6 +699,8 @@ impl State {
         &mut self,
         attestations: &[Attestation],
     ) -> Result<(), StateTransitionError> {
+        // Same quantity in two widths: the `u64` form is what the error
+        // variant carries, the `usize` form is what indexes the vote vector.
         let num_validators = self.num_validators();
         let validator_limit = self.validators.len();
         let just_len = self.justified_slots.len();
@@ -1408,7 +1410,10 @@ mod attestation_tests {
 
     #[test]
     fn attestation_bound_uses_registry_length() {
-        // Registry of 2: validator 3 is past the registry and must be rejected.
+        // Pins the bound's exact value at the boundary: with a 2-entry
+        // registry, id 3 is out of range and the error reports
+        // `num_validators: 2`. `out_of_range_validator_aborts` uses a far
+        // out-of-range id, so it would still pass under an off-by-one bound.
         let mut state =
             populated_state(2, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
         let votes = vec![attestation(3, root(0xaa), 0, root(0xbb), 1)];
@@ -1424,9 +1429,10 @@ mod attestation_tests {
 
     #[test]
     fn supermajority_threshold_uses_registry_length() {
-        // Registry of 3: two votes clear `ceil(2*3/3) == 2`. The threshold
-        // tracks the registry, so a state that merely claimed 300 validators
-        // without holding them would still justify here.
+        // Exercises EXACT division in the supermajority: `ceil(2*3/3) == 2`,
+        // so two of three votes justify. The existing
+        // `supermajority_justifies_target` uses 4 validators, where the same
+        // formula rounds up — the two cases pin different arms of `div_ceil`.
         let mut state =
             populated_state(3, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
         let votes = vec![
@@ -1536,8 +1542,10 @@ mod block_processing_tests {
 
     #[test]
     fn proposer_check_uses_registry_length() {
-        // Registry of 4: slot 5's proposer is `5 % 4 == 1`. Validator 5 is not
-        // in the registry at all and must be rejected.
+        // Pins the modulus and its wrap-around: with a 4-entry registry the
+        // proposer for slot 5 is `5 % 4 == 1`, and validator 5 — an index the
+        // registry does not contain — is rejected. Asserts both directions;
+        // `incorrect_proposer_rejects` covers only the negative case.
         let mut state = genesis();
         state.process_slots(Slot::new(5)).unwrap();
 

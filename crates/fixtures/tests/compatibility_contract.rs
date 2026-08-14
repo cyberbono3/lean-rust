@@ -145,6 +145,7 @@ struct SpecGenesisVector {
     genesis_time: u64,
     /// Hex-encoded validator pubkeys, in index order. Empty for the
     /// empty-registry vector.
+    #[serde(default)]
     pubkeys: Vec<String>,
     /// Hex-encoded `hash_tree_root` of the spec's genesis state.
     expected_root: String,
@@ -216,4 +217,18 @@ fn genesis_hash_tree_root_matches_spec_vector_populated_registry() {
         "genesis root diverges from {}",
         vector.spec_revision,
     );
+}
+
+/// The staged populated-registry vector is `#[ignore]`d until the dual-key
+/// `Validator` lands, so nothing would otherwise parse it. This keeps it
+/// honest: a pubkey that drifts out of `PublicKey`'s 52-byte shape fails here
+/// as a fixture error, rather than surfacing later as a mystifying root
+/// mismatch the moment the ignored test is switched on.
+#[test]
+fn staged_spec_vector_stays_parseable() {
+    let vector = SpecGenesisVector::load("genesis-2node-spec-vector.yaml");
+    let validators = vector.validators();
+    assert_eq!(validators.len(), 2);
+    assert_eq!(validators[1].index, ValidatorIndex::new(1));
+    assert!(!vector.expected_root.is_empty());
 }

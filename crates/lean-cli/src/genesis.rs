@@ -61,7 +61,12 @@ pub fn load_chain_config(path: Option<&Path>) -> Result<ChainConfig> {
 ///
 /// Returns an error when the file cannot be read or the SSZ decoder rejects
 /// the bytes.
-pub fn load_state(path: &Path) -> Result<State> {
+// NOTE: this decodes only — it does NOT enforce chain-config limits or the
+// non-empty-registry requirement. `load_or_synthesize_state` is the single
+// validation boundary and applies `validate_state_limits` to BOTH the supplied
+// and synthesized paths. Kept crate-private so that boundary cannot be
+// bypassed; promote it only together with the validation call.
+pub(crate) fn load_state(path: &Path) -> Result<State> {
     // Upper bound on the on-disk genesis state. The wire-format State for
     // devnet0's validator-registry-limit (4096) + historical-roots-limit
     // (262_144) bounds out well under this; the cap exists so an
@@ -250,8 +255,8 @@ fn validate_state_limits(state: &State, chain_config: &ChainConfig) -> Result<()
         !state.validators.is_empty(),
         "genesis anchor carries an empty validator registry: the registry is the sole source \
          of the validator count, so a node anchored here rejects every attestation and can \
-         never propose or justify. The compact devnet0 interop format carries no validator \
-         registry — supply a native genesis state",
+         never propose or justify. Supply a genesis state whose validator registry is \
+         populated (note that the compact interop format carries no registry at all)",
     );
     let registry_len = u64::try_from(state.validators.len())
         .context("genesis state validator-registry length does not fit in u64")?;
@@ -325,6 +330,8 @@ mod tests {
     fn dummy_registry(n: u64) -> Vec<Validator> {
         (0..n)
             .map(|i| {
+                // `& 0xff` makes this conversion infallible; the fallback is
+                // unreachable and exists only to keep the expression total.
                 let seed = u8::try_from(i & 0xff).unwrap_or(0);
                 Validator::new(
                     PublicKey::new([seed; PublicKey::LEN]),

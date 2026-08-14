@@ -78,15 +78,25 @@ impl State {
     /// `latest_justified` / `latest_finalized` checkpoints, and four
     /// SSZ offsets pointing at the `historical_block_hashes`,
     /// `justified_slots`, `justifications_roots`, and
-    /// `justifications_validators` tails. ream `master-0bceaee` reads the
-    /// generated `num_validators` / `genesis_time` from this and builds
-    /// its own anchor; lean-rust does the same so both clients share a
-    /// genesis (and therefore agree on head roots).
+    /// `justifications_validators` tails.
     ///
-    /// This is a **validate-then-discard** producer: every variable tail
-    /// is parsed and bounds-checked (so malformed generator output
-    /// surfaces as a typed error), but the tails are *not* copied into
-    /// the returned state. The result is the canonical slot-0 anchor —
+    /// The external config pair is 16 bytes — a validator count followed by
+    /// `genesis_time` — and is deliberately decoupled from the native
+    /// [`ProtocolConfig`], which carries only `genesis_time`. The declared
+    /// count is used SOLELY to bound the `justifications_validators` bitlist
+    /// and is never carried into the returned [`State`].
+    ///
+    /// Consequently the returned anchor's validator registry is EMPTY by
+    /// construction: this format has no `validators` tail to hydrate from, so
+    /// [`State::num_validators`] is 0 no matter what the payload declared.
+    /// A state decoded here therefore cannot back a validating node — it
+    /// resolves no proposer and admits no attestation — and callers that
+    /// adopt a chain anchor must reject it.
+    ///
+    /// This is a **validate-then-discard** producer: the declared validator
+    /// count and every variable tail are parsed and bounds-checked (so
+    /// malformed generator output surfaces as a typed error), but neither the
+    /// count nor the tails are copied into the returned state. The result is the canonical slot-0 anchor —
     /// the configured `config` and checkpoints, an empty history, and
     /// default bitlists — consistent with how the rest of the codebase
     /// treats imported anchor states.
@@ -322,5 +332,77 @@ mod tests {
         let mut s = sample_state();
         s.validators.push(crate::validator::Validator::default());
         assert_ne!(s.hash_tree_root(), baseline);
+    }
+
+    /// Builds a compact legacy payload declaring `declared_count` validators
+    /// with a single justification root, so the `justifications_validators`
+    /// tail must be exactly `declared_count` bits.
+    fn legacy_payload(declared_count: u64, genesis_time: u64, vote_bits: usize) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&declared_count.to_le_bytes());
+        buf.extend_from_slice(&genesis_time.to_le_bytes());
+        buf.extend_from_slice(&[0_u8; CHECKPOINT_LEN]); // latest_justified
+        buf.extend_from_slice(&[0_u8; CHECKPOINT_LEN]); // latest_finalized
+
+        // One historical root, one justified-slot bit, one justifications
+        // root, and a vote bitlist sized by the caller.
+        let historical = [0xaa_u8; 32];
+        let justified_slots = [0x01_u8]; // 1 bit set
+        let justifications_roots = [0xbb_u8; 32];
+        let vote_bytes = vec![0_u8; vote_bits.div_ceil(8)];
+
+        let base = REAM_LEAN_STATE_FIXED_PART_LEN;
+        let o0 = base;
+        let o1 = o0 + historical.len();
+        let o2 = o1 + justified_slots.len();
+        let o3 = o2 + justifications_roots.len();
+        for offset in [o0, o1, o2, o3] {
+            buf.extend_from_slice(&u32::try_from(offset).unwrap().to_le_bytes());
+        }
+        buf.extend_from_slice(&historical);
+        buf.extend_from_slice(&justified_slots);
+        buf.extend_from_slice(&justifications_roots);
+        buf.extend_from_slice(&vote_bytes);
+        buf
+    }
+
+    /// The declared validator count is validated and DISCARDED: it bounds the
+    /// vote bitlist during decode and never reaches the returned state, whose
+    /// registry is empty because this format carries no validators tail.
+    ///
+    /// The declared count is deliberately 5 while the resulting registry is 0,
+    /// so this distinguishes "the count was discarded" from "the count was
+    /// parsed into a field that no longer exists".
+    #[test]
+    fn ream_legacy_decode_discards_declared_count() {
+        const DECLARED: u64 = 5;
+        const GENESIS_TIME: u64 = 1_778_169_008;
+
+        let vote_bits = usize::try_from(DECLARED).expect("declared count fits usize");
+        let bytes = legacy_payload(DECLARED, GENESIS_TIME, vote_bits);
+        let state = State::from_ream_legacy_ssz_bytes(&bytes).expect("payload must decode");
+
+        assert_eq!(state.num_validators(), 0, "registry must be empty");
+        assert!(state.validators.is_empty());
+        assert_eq!(state.config.genesis_time, GENESIS_TIME);
+    }
+
+    /// The surviving use of the declared count: it sizes the
+    /// `justifications_validators` bound. A tail that does not match
+    /// `roots * declared_count` bits is rejected, so discarding the count
+    /// from the state did not discard it from validation.
+    #[test]
+    fn ream_legacy_decode_bounds_vote_bitlist_by_declared_count() {
+        const DECLARED: u64 = 5;
+
+        // One justifications root × 5 validators = 5 bits = 1 byte. Feeding a
+        // 2-byte tail must fail against that bound.
+        let bytes = legacy_payload(DECLARED, 1_778_169_008, 16);
+        let err = State::from_ream_legacy_ssz_bytes(&bytes)
+            .expect_err("vote tail must be bounded by the declared count");
+        assert!(
+            matches!(err, DecodeError::BytesInvalid(ref m) if m.contains("justifications_validators")),
+            "unexpected error: {err:?}"
+        );
     }
 }
