@@ -11,8 +11,8 @@
 //! `block_order` records the order in which roots first entered `blocks`.
 //! Re-inserting a known root is a no-op for both the maps and the order
 //! vector. The vector is **first-seen order, not slot-sorted** — the
-//! canonical tie-break for head resolution operates on `(weight, slot, root)`
-//! and never consults `block_order`.
+//! canonical tie-break for head resolution operates on `(weight, root)`
+//! and never consults `block_order` or the block slot.
 //!
 //! # Vote-map cost note
 //!
