@@ -697,10 +697,10 @@ impl State {
     /// complementary case:
     /// `process_attestations_is_order_dependent_when_finalization_advances`
     /// covers the vote-eligibility read,
-    /// `..._finalization_scan_reads_the_live_checkpoint` covers the read
-    /// inside the finalization scan, and
-    /// `..._is_order_independent_without_finalization_advance` covers the
-    /// batches whose order genuinely does not matter.
+    /// `process_attestations_finalization_scan_reads_the_live_checkpoint`
+    /// covers the read inside the finalization scan, and
+    /// `process_attestations_is_order_independent_without_finalization_advance`
+    /// covers the batches whose order genuinely does not matter.
     ///
     /// # Errors
     /// - [`StateTransitionError::AttestationSlotOutOfRange`] when a vote
