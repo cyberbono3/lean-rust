@@ -5,14 +5,22 @@
 //! is mandated by the spec — vote-weight accumulation, threshold filter into
 //! a children map, then greedy descent with a `(weight, root)` tie-break
 //! (`store.py:746 @ 0c9528ac`). Reordering the filter against the walk, or
-//! adding an axis to the tie-break, breaks parity with the canonical
+//! adding an axis to the DESCENT tie-break, breaks parity with the canonical
 //! implementation.
 //!
-//! Slot is deliberately absent from the tie-break. On equal weight the
+//! Slot is deliberately absent from that tie-break. On equal weight the
 //! lex-larger root wins even when it sits at a lower slot, so the resolved
 //! head can be shallower than an available sibling. That is the specified
 //! behaviour, not an oversight: adding a slot axis ahead of the root axis
 //! is the exact divergence this rule exists to prevent.
+//!
+//! [`min_block_root`], which resolves the zero-root origin, is the one place
+//! this crate deliberately ranks on more than the spec does. `store.py:695`
+//! keys that `min` on slot alone and leaves ties to dict insertion order —
+//! under-determined rather than a contract, since no client can implement
+//! against another's map ordering. Adding the root as a secondary key
+//! refines that into something deterministic without contradicting it, so
+//! the parity rule above is scoped to the descent and does not extend here.
 //!
 //! Public surface: [`get_fork_choice_head`] is consumed by
 //! [`crate::Store`]'s `update_safe_target` / `update_head` hooks and by
@@ -182,8 +190,11 @@ mod tests {
         let head = get_fork_choice_head(&blocks, Bytes32::zero(), &HashMap::new(), 0).unwrap();
         assert_eq!(head, a);
 
-        // Now add a strictly-lower slot to force the slot-axis tie-break.
-        let c = Bytes32::new([0xff; 32]); // lex-max, but slot-min
+        // Add a third block, also at slot 0, whose root is lex-max. This
+        // pins `min_block_root`'s ORIGIN selection only — every block here
+        // is a child of the zero root, so the descent never runs and the
+        // descent tie-break is not exercised by this test at all.
+        let c = Bytes32::new([0xff; 32]); // lex-max, same slot
         let mut blocks2 = blocks.clone();
         insert(&mut blocks2, c, block_with(0, Bytes32::zero()));
         // Still tied at slot 0 → lex-min root wins.
