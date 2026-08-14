@@ -687,6 +687,21 @@ impl State {
     /// after the loop, so an `Err` return leaves the state byte-equal to
     /// its pre-call value.
     ///
+    /// The finalized checkpoint is deliberately *live* inside the loop: a
+    /// vote that advances finalization changes the justifiability window
+    /// every later vote in the same batch is tested against. Acceptance is
+    /// therefore sensitive to the order of `attestations`, matching the
+    /// reference specification, which reassigns its own `finalized_slot`
+    /// local mid-loop for the same reason. Neither read may be hoisted to a
+    /// pre-loop snapshot. Two tests pin the reads and a third pins the
+    /// complementary case:
+    /// `process_attestations_is_order_dependent_when_finalization_advances`
+    /// covers the vote-eligibility read,
+    /// `process_attestations_finalization_scan_reads_the_live_checkpoint`
+    /// covers the read inside the finalization scan, and
+    /// `process_attestations_is_order_independent_without_finalization_advance`
+    /// covers the batches whose order genuinely does not matter.
+    ///
     /// # Errors
     /// - [`StateTransitionError::AttestationSlotOutOfRange`] when a vote
     ///   references a slot beyond `state.justified_slots.len()` or
@@ -1501,6 +1516,173 @@ mod attestation_tests {
         let votes_twice = vec![votes[0], votes[0]];
         twice.process_attestations(&votes_twice).unwrap();
         assert_eq!(once.hash_tree_root(), twice.hash_tree_root());
+    }
+
+    // -- Batch ordering -----------------------------------------------------
+
+    /// Three validators (so a supermajority is two votes) and `history_len`
+    /// slots of history whose root at slot `i` is `root(i)`, finalized at
+    /// slot 0 with `pre_justified` slots already justified.
+    ///
+    /// Shared by the ordering tests so that they differ only in the batch
+    /// they feed and the property they assert.
+    fn ordering_state(history_len: u8, pre_justified: &[usize]) -> State {
+        let history: Vec<Bytes32> = (0..history_len).map(root).collect();
+        let mut pattern = vec![false; usize::from(history_len)];
+        for &slot in pre_justified {
+            pattern[slot] = true;
+        }
+        populated_state(3, history, &pattern, Slot::ZERO)
+    }
+
+    /// One vote from `validator_id`, sourced at `source_slot` and targeting
+    /// `target_slot`.
+    ///
+    /// Both roots are derived from the slot, matching the history
+    /// [`ordering_state`] builds, so a vote always agrees with the chain and
+    /// the two cannot drift apart at a call site.
+    fn ordering_vote(validator_id: u64, source_slot: u8, target_slot: u8) -> Attestation {
+        attestation(
+            validator_id,
+            root(source_slot),
+            u64::from(source_slot),
+            root(target_slot),
+            u64::from(target_slot),
+        )
+    }
+
+    /// The two identical votes that carry a target to supermajority in the
+    /// three-validator registry [`ordering_state`] builds.
+    fn ordering_supermajority(source_slot: u8, target_slot: u8) -> [Attestation; 2] {
+        [
+            ordering_vote(0, source_slot, target_slot),
+            ordering_vote(1, source_slot, target_slot),
+        ]
+    }
+
+    /// `state` with `batch` applied, leaving the caller's copy untouched so
+    /// one pre-state can seed several orderings.
+    fn after(state: &State, batch: &[Attestation]) -> State {
+        let mut post = state.clone();
+        post.process_attestations(batch).unwrap();
+        post
+    }
+
+    #[test]
+    fn process_attestations_is_order_dependent_when_finalization_advances() {
+        // Pins the eligibility read against the reference specification,
+        // which reassigns its own finalized-slot local mid-loop
+        // (containers/state/state.py:543-:545 at 0c9528ac) and reads it in
+        // the justifiability guard at :486.
+        //
+        // The finalized checkpoint is read live inside the loop, so a vote
+        // that advances finalization widens the justifiability window for
+        // every later vote in the same batch. Slot 7 is the discriminator:
+        // `Slot(7).is_justifiable_after(Slot(0))` is false (delta 7 is
+        // neither a perfect square nor a pronic, and exceeds the delta <= 5
+        // fast path) while `Slot(7).is_justifiable_after(Slot(1))` is true
+        // (delta 6 == 2 * 3 is pronic).
+        let state = ordering_state(8, &[0, 1]);
+
+        // Justifies slot 2 from the slot-1 source, finalizing slot 1.
+        let advance = ordering_supermajority(1, 2);
+        // Targets slot 7 from the slot-0 source — acceptable only once
+        // finalization has reached slot 1.
+        let late = ordering_supermajority(0, 7);
+
+        let widened = after(&state, &[advance, late].concat());
+        let narrow = after(&state, &[late, advance].concat());
+
+        // Both orderings finalize slot 1, so the batches agree on everything
+        // except what the slot-7 votes were measured against.
+        assert_eq!(widened.latest_finalized.slot, Slot::new(1));
+        assert_eq!(narrow.latest_finalized.slot, Slot::new(1));
+        assert_eq!(widened.justified_slots.get(7), Some(true));
+        assert_eq!(narrow.justified_slots.get(7), Some(false));
+        // Names the checkpoint each ordering settled on, so a regression
+        // reports the property that broke rather than a bare bit index.
+        assert_eq!(widened.latest_justified.slot, Slot::new(7));
+        assert_eq!(narrow.latest_justified.slot, Slot::new(2));
+        assert_ne!(widened.hash_tree_root(), narrow.hash_tree_root());
+    }
+
+    #[test]
+    fn process_attestations_is_order_independent_without_finalization_advance() {
+        const ORDERINGS: [[usize; 3]; 6] = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+
+        // Pins the complementary case: with the finalized slot unmoved,
+        // batch order cannot matter. The specification's finalized-slot
+        // local is only reassigned on a finalization advance
+        // (containers/state/state.py:543-:545).
+        //
+        // Justifying slot 2 from the slot-0 source cannot finalize: slot 1
+        // lies strictly between them and is justifiable after slot 0. The
+        // finalized checkpoint therefore never moves, and no vote can change
+        // the window another vote is tested against.
+        let state = ordering_state(8, &[0]);
+        let votes = [
+            ordering_vote(0, 0, 2),
+            ordering_vote(1, 0, 2),
+            ordering_vote(2, 0, 3),
+        ];
+
+        let mut post_roots = Vec::with_capacity(ORDERINGS.len());
+        for ordering in ORDERINGS {
+            let batch: Vec<Attestation> = ordering.iter().map(|&i| votes[i]).collect();
+            let permuted = after(&state, &batch);
+
+            // Non-vacuity: the batch justifies a target and leaves a pending
+            // tally behind, so equality across orderings is a real property
+            // and not the trivial agreement of six no-op batches.
+            assert_eq!(permuted.justified_slots.get(2), Some(true));
+            assert_eq!(permuted.justifications_roots, vec![root(3)]);
+            assert_eq!(permuted.latest_finalized, state.latest_finalized);
+
+            post_roots.push(permuted.hash_tree_root());
+        }
+        assert!(post_roots.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn process_attestations_finalization_scan_reads_the_live_checkpoint() {
+        // Pins the read inside the finalization scan, the counterpart of
+        // the specification's `not any(... is_justifiable_after(
+        // finalized_slot))` at containers/state/state.py:539-:541.
+        //
+        // Isolates the finalized read inside the no-intermediate scan. The
+        // two tests above cannot reach it: their scan ranges are either
+        // empty or short-circuit identically under a frozen read.
+        //
+        // Slot 12 is justifiable after both slot 0 (delta 12 == 3 * 4,
+        // pronic) and slot 6 (delta 6 == 2 * 3, pronic), so the vote passes
+        // the eligibility predicate under either reading and only the scan
+        // can discriminate.
+        let state = ordering_state(13, &[0, 6]);
+        let post = after(
+            &state,
+            &[
+                // Justify slot 9 and finalize slot 6: the scan range 7..9
+                // holds no slot justifiable after slot 0.
+                ordering_supermajority(6, 9),
+                // Justify slot 12. The scan range 10..12 holds slots that
+                // ARE justifiable after the live finalized slot 6 (deltas 4
+                // and 5, inside the fast path), so finalization must not
+                // advance. Against a frozen slot 0 neither slot is
+                // justifiable and finalization would wrongly reach slot 9.
+                ordering_supermajority(9, 12),
+            ]
+            .concat(),
+        );
+
+        assert_eq!(post.latest_justified.slot, Slot::new(12));
+        assert_eq!(post.latest_finalized.slot, Slot::new(6));
     }
 }
 
