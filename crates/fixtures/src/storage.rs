@@ -54,8 +54,10 @@ pub fn sample_signed_block(seed: u8) -> SignedBlockWithAttestation {
 }
 
 pub fn sample_state(seed: u8) -> State {
+    let validator_count = u64::from(seed.max(1));
     State {
-        config: ProtocolConfig::new(u64::from(seed.max(1)), 1_700_000_000),
+        config: ProtocolConfig::new(1_700_000_000),
+        validators: crate::stf::validator_registry(validator_count),
         slot: Slot::new(u64::from(seed)),
         latest_block_header: BlockHeader {
             slot: Slot::new(u64::from(seed)),

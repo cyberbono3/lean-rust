@@ -303,10 +303,7 @@ mod tests {
     };
     use types::Signature;
 
-    use super::super::test_fixtures::{
-        engine_at_genesis, engine_at_genesis_with_validators, produce_signed_block,
-        ENGINE_VALIDATORS,
-    };
+    use super::super::test_fixtures::{engine_at_genesis, produce_signed_block, ENGINE_VALIDATORS};
     use super::super::verify::test_support::FakeVerifier;
     use std::sync::Arc;
 
@@ -637,7 +634,7 @@ mod tests {
     /// and every `(attestation, signature)` pair reaches the verifier. Returns
     /// the block plus its element count (`= body.len() + 1`).
     fn signed_block_len_matched() -> (SignedBlockWithAttestation, usize) {
-        let producer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
         let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
         let elements = signed.message.block.body.attestations.len() + 1;
         signed.signature = sigs(elements);
@@ -647,7 +644,7 @@ mod tests {
     /// An importer engine with a populated validator registry and `fake`
     /// injected — injection is what enables the gate.
     fn gated_engine(fake: &Arc<FakeVerifier>) -> Engine {
-        engine_at_genesis_with_validators(ENGINE_VALIDATORS).with_verifier(fake.clone())
+        engine_at_genesis(ENGINE_VALIDATORS).with_verifier(fake.clone())
     }
 
     #[test]
@@ -716,13 +713,13 @@ mod tests {
         // the strict length check. Explicit guard so a future default-verifier
         // change cannot silently reject production blocks before the full
         // positional signature list is assembled (a later Part).
-        let producer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
         let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
         // Deliberately mismatched vs body.len() + 1 (zero signatures).
         signed.signature = BlockSignatures::default();
 
         // No verifier injected — the Engine default.
-        let importer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        let importer = engine_at_genesis(ENGINE_VALIDATORS);
         assert!(matches!(
             importer.import_block(signed),
             BlockImportResult::Accepted { .. }
@@ -740,7 +737,7 @@ mod tests {
         // nothing ever inspects them, so the block is accepted.
         let (signed, _elements) = signed_block_len_matched();
 
-        let importer = engine_at_genesis_with_validators(ENGINE_VALIDATORS);
+        let importer = engine_at_genesis(ENGINE_VALIDATORS);
         assert!(matches!(
             importer.import_block(signed),
             BlockImportResult::Accepted { .. }

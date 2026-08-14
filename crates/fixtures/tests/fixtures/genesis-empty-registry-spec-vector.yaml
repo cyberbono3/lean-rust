@@ -1,0 +1,18 @@
+# Spec-derived genesis hash-tree-root, EMPTY validator registry.
+#
+# Generated from the pinned leanSpec checkout at rev 0c9528ac:
+#   State.generate_genesis(Uint64(genesis_time), Validators(data=[]))
+#   hash_tree_root(state)
+#
+# Why an empty registry: the spec's Validator container carries three fields
+# (attestation_pubkey, proposal_pubkey, index) to this crate's two, so a state
+# holding a POPULATED registry cannot merkleize identically until the dual-key
+# Validator lands. An SSZList's empty root depends only on LIMIT, and every relevant
+# limit matches on both sides (VALIDATOR_REGISTRY_LIMIT 2^12,
+# HISTORICAL_ROOTS_LIMIT 2^18, their product for justifications). This vector
+# therefore isolates exactly what this change touches: the Config container
+# shape, both checkpoints, the block header, and all four remaining tails.
+spec_revision: "leanSpec-pq-devnet-4@0c9528ac"
+genesis_time: 1778169008
+pubkeys: []
+expected_root: "9bcc325e28fd8fb4882da3406303fb2048600463806fc9819b7ed527115b6f58"

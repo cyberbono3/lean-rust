@@ -114,12 +114,12 @@ pub enum StateTransitionError {
         len: usize,
     },
 
-    /// An attestation's `validator_id` is `>= state.config.num_validators`.
+    /// An attestation's `validator_id` is past the validator-registry length.
     #[error("attestation validator {validator} >= num_validators {num_validators}")]
     AttestationValidatorOutOfRange {
         /// The offending validator index.
         validator: ValidatorIndex,
-        /// `state.config.num_validators`.
+        /// The registry length the id was bounded against.
         num_validators: u64,
     },
 

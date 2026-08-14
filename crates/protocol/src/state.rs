@@ -67,7 +67,7 @@ pub const JUSTIFICATIONS_VALIDATORS_LIMIT: usize =
 
 // `pub(crate)` so the sibling [`crate::ream`] module can reuse them; both
 // are also consumed by `STATE_FIXED_PART_LEN` below.
-pub(crate) const PROTOCOL_CONFIG_SSZ_LEN: usize = 2 * U64_LEN; // 16
+pub(crate) const PROTOCOL_CONFIG_SSZ_LEN: usize = U64_LEN; // 8
 pub(crate) const STATE_VARIABLE_FIELD_COUNT: usize = 5;
 
 /// Length of the fixed portion of a [`State`] (5 fixed fields plus 5 offsets
@@ -77,7 +77,7 @@ pub const STATE_FIXED_PART_LEN: usize = PROTOCOL_CONFIG_SSZ_LEN
     + BLOCK_HEADER_LEN
     + CHECKPOINT_LEN
     + CHECKPOINT_LEN
-    + STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 236
+    + STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 228
 
 // =====================================================================
 // ProtocolConfig (the inner `config` field of State)
@@ -85,40 +85,31 @@ pub const STATE_FIXED_PART_LEN: usize = PROTOCOL_CONFIG_SSZ_LEN
 
 /// In-state runtime parameters carried by the consensus [`State`].
 ///
-/// Two fixed-size `u64` fields → 16-byte SSZ payload. Distinct from the
-/// chain-wide [`config::Config`] preset: this container records the
-/// validator-set size and chain genesis time committed to the state
-/// hash-tree-root.
+/// One fixed-size `u64` field → 8-byte SSZ payload. Distinct from the
+/// chain-wide [`config::Config`] preset: this container records only the
+/// chain genesis time committed to the state hash-tree-root.
+///
+/// The validator-set size is NOT carried here — it is derived from
+/// [`State::num_validators`], the validator-registry length.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ProtocolConfig {
-    /// Number of active validators tracked by the chain.
-    pub num_validators: u64,
     /// Unix timestamp (seconds) of chain genesis.
     pub genesis_time: u64,
 }
 
 impl ProtocolConfig {
-    /// Builds the in-state runtime parameters from the validator-set size and
-    /// the chain genesis time.
-    ///
-    /// Parameter order mirrors the field (and therefore SSZ) order —
-    /// `num_validators` before `genesis_time` — which the hash-tree-root commits
-    /// to. Keep the two in step if either ever changes.
+    /// Builds the in-state runtime parameters from the chain genesis time.
     ///
     /// # Example
     /// ```
     /// use protocol::ProtocolConfig;
     ///
-    /// let cfg = ProtocolConfig::new(4, 1_700_000_000);
-    /// assert_eq!(cfg.num_validators, 4);
+    /// let cfg = ProtocolConfig::new(1_700_000_000);
     /// assert_eq!(cfg.genesis_time, 1_700_000_000);
     /// ```
     #[must_use]
-    pub const fn new(num_validators: u64, genesis_time: u64) -> Self {
-        Self {
-            num_validators,
-            genesis_time,
-        }
+    pub const fn new(genesis_time: u64) -> Self {
+        Self { genesis_time }
     }
 }
 
@@ -136,7 +127,6 @@ impl Encode for ProtocolConfig {
     }
 
     fn ssz_append(&self, buf: &mut Vec<u8>) {
-        self.num_validators.ssz_append(buf);
         self.genesis_time.ssz_append(buf);
     }
 }
@@ -154,7 +144,6 @@ impl Decode for ProtocolConfig {
         ensure_len(bytes, PROTOCOL_CONFIG_SSZ_LEN)?;
         let mut c = 0;
         Ok(Self {
-            num_validators: read_fixed::<u64>(bytes, &mut c)?,
             genesis_time: read_fixed::<u64>(bytes, &mut c)?,
         })
     }
@@ -162,8 +151,9 @@ impl Decode for ProtocolConfig {
 
 impl HashTreeRoot for ProtocolConfig {
     fn hash_tree_root(&self) -> [u8; 32] {
-        // 2 fields → width 2 → single hash_pair via merkleize.
-        merkleize(&[u64_chunk(self.num_validators), u64_chunk(self.genesis_time)])
+        // 1 field → width 1 → `merkleize` returns the chunk itself, which is
+        // the SSZ root of a single-field container.
+        merkleize(&[u64_chunk(self.genesis_time)])
     }
 }
 
@@ -201,6 +191,30 @@ pub struct State {
 }
 
 impl State {
+    /// Number of validators in the registry — the single source of the
+    /// validator-set size.
+    ///
+    /// The consensus spec derives every validator-count bound from the length
+    /// of the validator registry; the in-state `config` container carries only
+    /// `genesis_time`. Reading the registry here keeps the count and the
+    /// entries it describes from drifting apart.
+    ///
+    /// Saturates at `u64::MAX` for a registry longer than `u64` can index.
+    /// [`VALIDATOR_REGISTRY_LIMIT`] makes that unreachable; the saturation
+    /// exists so the accessor is infallible at every call site.
+    ///
+    /// # Example
+    /// ```
+    /// use protocol::State;
+    ///
+    /// let state = State::default();
+    /// assert_eq!(state.num_validators(), 0);
+    /// ```
+    #[must_use]
+    pub fn num_validators(&self) -> u64 {
+        u64::try_from(self.validators.len()).unwrap_or(u64::MAX)
+    }
+
     /// Returns the five variable-length tail payloads encoded into their wire
     /// bytes, in declaration order.
     fn variable_tail_payloads(&self) -> [Vec<u8>; STATE_VARIABLE_FIELD_COUNT] {
@@ -432,7 +446,7 @@ impl State {
     ///   parent root plus zero-padded empty slots would push
     ///   `historical_block_hashes` or `justified_slots` past their bounds.
     /// - [`StateTransitionError::Protocol`] forwarded from
-    ///   [`is_proposer`] when `self.config.num_validators == 0`.
+    ///   [`is_proposer`] when the validator registry is empty.
     pub fn process_block_header(&mut self, block: &Block) -> Result<(), StateTransitionError> {
         // -- Validation gate: cheap checks first, hash last. ----------------
         if block.slot != self.slot {
@@ -447,7 +461,7 @@ impl State {
                 latest: self.latest_block_header.slot,
             });
         }
-        if !is_proposer(block.proposer_index, self.slot, self.config.num_validators)? {
+        if !is_proposer(block.proposer_index, self.slot, self.num_validators())? {
             return Err(StateTransitionError::IncorrectBlockProposer {
                 slot: self.slot,
                 proposer: block.proposer_index,
@@ -543,7 +557,7 @@ impl State {
 struct Justifications {
     /// Per-target-root vote vector, length = `num_validators` per entry.
     table: BTreeMap<Bytes32, Vec<bool>>,
-    /// Cached `state.config.num_validators` as a `usize`.
+    /// Cached validator-registry length as a `usize`.
     num_validators: usize,
 }
 
@@ -552,16 +566,12 @@ impl TryFrom<&State> for Justifications {
 
     /// Hydrates the working view from `state.justifications_*`.
     ///
-    /// Returns [`StateTransitionError::StateBoundExceeded`] when
-    /// `state.config.num_validators` does not fit in `usize`, or when the
-    /// flat bitlist length is not a multiple of `num_validators` (i.e. an
-    /// on-state invariant break).
+    /// Returns [`StateTransitionError::StateBoundExceeded`] when the flat
+    /// bitlist length is not a multiple of the validator-registry length
+    /// (i.e. an on-state invariant break). The registry length is already a
+    /// `usize`, so no fallible conversion is involved.
     fn try_from(state: &State) -> Result<Self, Self::Error> {
-        let n = usize::try_from(state.config.num_validators).map_err(|_| {
-            StateTransitionError::StateBoundExceeded {
-                context: "num_validators",
-            }
-        })?;
+        let n = state.validators.len();
 
         let mut table = BTreeMap::new();
         if n == 0 {
@@ -682,14 +692,15 @@ impl State {
     ///   references a slot beyond `state.justified_slots.len()` or
     ///   `state.historical_block_hashes.len()`.
     /// - [`StateTransitionError::AttestationValidatorOutOfRange`] when
-    ///   `validator_id >= state.config.num_validators`.
+    ///   `validator_id` is past the validator-registry length.
     /// - [`StateTransitionError::StateBoundExceeded`] forwarded from the
     ///   working bitmap rebuild.
     pub fn process_attestations(
         &mut self,
         attestations: &[Attestation],
     ) -> Result<(), StateTransitionError> {
-        let num_validators = self.config.num_validators;
+        let num_validators = self.num_validators();
+        let validator_limit = self.validators.len();
         let just_len = self.justified_slots.len();
         let hist_len = self.historical_block_hashes.len();
 
@@ -698,12 +709,6 @@ impl State {
         let mut justified_slots = self.justified_slots.clone();
         let mut latest_justified = self.latest_justified;
         let mut latest_finalized = self.latest_finalized;
-
-        let validator_limit = usize::try_from(num_validators).map_err(|_| {
-            StateTransitionError::StateBoundExceeded {
-                context: "num_validators",
-            }
-        })?;
 
         for att in attestations {
             let vote = &att.data;
@@ -853,7 +858,7 @@ mod tests {
         }
 
         State {
-            config: ProtocolConfig::new(4, 1_700_000_000),
+            config: ProtocolConfig::new(1_700_000_000),
             slot: Slot::new(9),
             latest_block_header: sample_block_header(),
             latest_justified: Checkpoint::new(Bytes32::new([0x44; 32]), Slot::new(8)),
@@ -869,8 +874,8 @@ mod tests {
     // -- Constants ----------------------------------------------------------
 
     #[test]
-    fn fixed_part_is_two_thirty_six_bytes() {
-        assert_eq!(STATE_FIXED_PART_LEN, 236);
+    fn fixed_part_is_two_twenty_eight_bytes() {
+        assert_eq!(STATE_FIXED_PART_LEN, 228);
         assert_eq!(STATE_VARIABLE_FIELD_COUNT, 5);
     }
 
@@ -881,36 +886,52 @@ mod tests {
         assert_eq!(JUSTIFICATIONS_VALIDATORS_LIMIT, 262_144 * 4_096);
     }
 
+    // -- Validator count ----------------------------------------------------
+
+    #[test]
+    fn num_validators_matches_registry_length() {
+        for n in [0_u8, 1, 4] {
+            let state = State {
+                validators: sample_validators(n),
+                ..State::default()
+            };
+            assert_eq!(state.num_validators(), u64::from(n), "registry of {n}");
+        }
+    }
+
     // -- ProtocolConfig SSZ -------------------------------------------------
 
     #[test]
-    fn protocol_config_ssz_fixed_len_is_sixteen() {
-        assert_eq!(<ProtocolConfig as Encode>::ssz_fixed_len(), 16);
+    fn protocol_config_ssz_fixed_len_is_eight() {
+        assert_eq!(<ProtocolConfig as Encode>::ssz_fixed_len(), 8);
         assert!(<ProtocolConfig as Encode>::is_ssz_fixed_len());
     }
 
     #[test]
     fn protocol_config_round_trip() {
-        let cfg = ProtocolConfig::new(0xdead_beef, 0x1234_5678);
+        let cfg = ProtocolConfig::new(0x1234_5678);
         let bytes = encode(&cfg);
         assert_eq!(bytes.len(), PROTOCOL_CONFIG_SSZ_LEN);
-        assert_eq!(&bytes[..8], &0xdead_beef_u64.to_le_bytes());
-        assert_eq!(&bytes[8..16], &0x1234_5678_u64.to_le_bytes());
+        assert_eq!(&bytes[..8], &0x1234_5678_u64.to_le_bytes());
         let back: ProtocolConfig = decode(&bytes).unwrap();
         assert_eq!(back, cfg);
     }
 
     #[test]
     fn protocol_config_decode_rejects_wrong_length() {
-        assert!(decode::<ProtocolConfig>(&[0_u8; 15]).is_err());
-        assert!(decode::<ProtocolConfig>(&[0_u8; 17]).is_err());
+        assert!(decode::<ProtocolConfig>(&[0_u8; 7]).is_err());
+        assert!(decode::<ProtocolConfig>(&[0_u8; 9]).is_err());
     }
 
     #[test]
-    fn protocol_config_hash_tree_root_distinguishes_fields() {
-        let a = ProtocolConfig::new(7, 0);
-        let b = ProtocolConfig::new(0, 7);
-        assert_ne!(a.hash_tree_root(), b.hash_tree_root());
+    fn protocol_config_hash_tree_root_is_the_genesis_time_chunk() {
+        // A one-field container merkleizes to its single chunk: the field's
+        // little-endian bytes, zero-padded to 32. That is what a peer computes,
+        // so this pins the shape, not just self-consistency.
+        let cfg = ProtocolConfig::new(0x1234_5678);
+        let mut want = [0_u8; 32];
+        want[..8].copy_from_slice(&0x1234_5678_u64.to_le_bytes());
+        assert_eq!(cfg.hash_tree_root(), want);
     }
 
     // -- State SSZ ---------------------------------------------------------
@@ -1041,13 +1062,17 @@ mod tests {
 
     #[test]
     fn state_root_regression_vector() {
-        // Frozen native State root after the validator-registry field insert.
-        // Regenerate by printing test_fixtures::regen_vector(&sample_state());
-        // the pre-registry root no longer matches (the devnet-1 State-root break).
+        // Frozen native State root. Regenerate by printing
+        // test_fixtures::regen_vector(&sample_state()) — never hand-derive.
+        //
+        // Moved when the in-state config dropped `num_validators`: the config
+        // container went from two fields to one, so its subtree root and the
+        // whole state root change. The validator count now comes from the
+        // registry.
         const STATE_ROOT: [u8; 32] = [
-            0x73, 0xef, 0x3f, 0xca, 0x88, 0x1a, 0xff, 0xd3, 0xce, 0x02, 0x48, 0x04, 0x2c, 0x18,
-            0xd1, 0x57, 0xfd, 0x7d, 0x65, 0x77, 0xd6, 0x61, 0xc2, 0xb3, 0xd3, 0x17, 0xdc, 0xe1,
-            0x54, 0x4e, 0x72, 0xf2,
+            0xbe, 0xe5, 0xae, 0x6b, 0x5e, 0x42, 0x72, 0xdb, 0xd8, 0xfc, 0x54, 0x42, 0xf1, 0xc9,
+            0x01, 0x67, 0x08, 0xae, 0xcc, 0x75, 0x32, 0xa8, 0xdd, 0xfc, 0x21, 0x06, 0x91, 0x50,
+            0x3c, 0x58, 0x7c, 0xfb,
         ];
         let state = sample_state();
         assert_htr_eq(&state, STATE_ROOT);
@@ -1075,10 +1100,9 @@ mod tests {
     proptest! {
         #[test]
         fn protocol_config_round_trips(
-            num in any::<u64>(),
             ts in any::<u64>(),
         ) {
-            let cfg = ProtocolConfig::new(num, ts);
+            let cfg = ProtocolConfig::new(ts);
             let back: ProtocolConfig = decode(&encode(&cfg)).unwrap();
             prop_assert_eq!(back, cfg);
         }
@@ -1124,7 +1148,8 @@ mod justifications_tests {
 
     fn state_with(num_validators: u64) -> State {
         State {
-            config: ProtocolConfig::new(num_validators, 0),
+            config: ProtocolConfig::new(0),
+            validators: crate::test_fixtures::registry_of(num_validators),
             ..State::default()
         }
     }
@@ -1220,7 +1245,8 @@ mod attestation_tests {
             justified_slots.set(i, v).unwrap();
         }
         State {
-            config: ProtocolConfig::new(num_validators, 0),
+            config: ProtocolConfig::new(0),
+            validators: crate::test_fixtures::registry_of(num_validators),
             slot: Slot::new(historical_roots.len() as u64),
             latest_finalized: Checkpoint::new(Bytes32::zero(), latest_finalized_slot),
             historical_block_hashes: historical_roots,
@@ -1381,6 +1407,38 @@ mod attestation_tests {
     }
 
     #[test]
+    fn attestation_bound_uses_registry_length() {
+        // Registry of 2: validator 3 is past the registry and must be rejected.
+        let mut state =
+            populated_state(2, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
+        let votes = vec![attestation(3, root(0xaa), 0, root(0xbb), 1)];
+        let err = state.process_attestations(&votes).unwrap_err();
+        assert_eq!(
+            err,
+            StateTransitionError::AttestationValidatorOutOfRange {
+                validator: ValidatorIndex::new(3),
+                num_validators: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn supermajority_threshold_uses_registry_length() {
+        // Registry of 3: two votes clear `ceil(2*3/3) == 2`. The threshold
+        // tracks the registry, so a state that merely claimed 300 validators
+        // without holding them would still justify here.
+        let mut state =
+            populated_state(3, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
+        let votes = vec![
+            attestation(0, root(0xaa), 0, root(0xbb), 1),
+            attestation(1, root(0xaa), 0, root(0xbb), 1),
+        ];
+        state.process_attestations(&votes).unwrap();
+        assert_eq!(state.justified_slots.get(1), Some(true));
+        assert_eq!(state.latest_justified.root, root(0xbb));
+    }
+
+    #[test]
     fn supermajority_justifies_target() {
         let mut state =
             populated_state(4, vec![root(0xaa), root(0xbb)], &[true, false], Slot::ZERO);
@@ -1454,7 +1512,8 @@ mod block_processing_tests {
     /// `latest_block_header` commits to the empty body.
     fn genesis() -> State {
         State {
-            config: ProtocolConfig::new(NUM_VALIDATORS, GENESIS_TIME),
+            config: ProtocolConfig::new(GENESIS_TIME),
+            validators: crate::test_fixtures::registry_of(NUM_VALIDATORS),
             latest_block_header: BlockHeader::genesis(),
             ..State::default()
         }
@@ -1463,7 +1522,7 @@ mod block_processing_tests {
     /// Produces a valid block for `state` at `state.slot` whose body is empty.
     fn valid_block_for(state: &State) -> Block {
         let parent_root: Bytes32 = state.latest_block_header.hash_tree_root().into();
-        let proposer_index = ValidatorIndex::new(state.slot.get() % state.config.num_validators);
+        let proposer_index = ValidatorIndex::new(state.slot.get() % state.num_validators());
         Block {
             slot: state.slot,
             proposer_index,
@@ -1471,6 +1530,30 @@ mod block_processing_tests {
             state_root: Bytes32::zero(),
             body: BlockBody::default(),
         }
+    }
+
+    // -- Validator count comes from the registry ----------------------------
+
+    #[test]
+    fn proposer_check_uses_registry_length() {
+        // Registry of 4: slot 5's proposer is `5 % 4 == 1`. Validator 5 is not
+        // in the registry at all and must be rejected.
+        let mut state = genesis();
+        state.process_slots(Slot::new(5)).unwrap();
+
+        let mut block = valid_block_for(&state);
+        block.proposer_index = ValidatorIndex::new(1);
+        state.clone().process_block_header(&block).unwrap();
+
+        block.proposer_index = ValidatorIndex::new(5);
+        let err = state.process_block_header(&block).unwrap_err();
+        assert_eq!(
+            err,
+            StateTransitionError::IncorrectBlockProposer {
+                slot: Slot::new(5),
+                proposer: ValidatorIndex::new(5),
+            }
+        );
     }
 
     // -- Validation: rejection paths ----------------------------------------
@@ -1540,7 +1623,9 @@ mod block_processing_tests {
     #[test]
     fn zero_validators_surfaces_protocol_error() {
         let mut state = genesis();
-        state.config.num_validators = 0;
+        // Empty the REGISTRY, not a scalar: the registry is the validator-set
+        // size, so this is what makes the round-robin modulus zero.
+        state.validators.clear();
         state.process_slots(Slot::new(1)).unwrap();
         let block = Block {
             slot: Slot::new(1),
@@ -1827,14 +1912,17 @@ mod state_transition_tests {
     const GENESIS_TIME: u64 = 1_700_000_000;
 
     fn genesis_state(num_validators: u64) -> State {
-        crate::stf::genesis_state(num_validators, GENESIS_TIME)
+        crate::stf::genesis_state(
+            GENESIS_TIME,
+            crate::test_fixtures::registry_of(num_validators),
+        )
     }
 
     /// Two-phase build: produce a `SignedBlockWithAttestation` for `state`
     /// whose body is empty and whose `state_root` matches the post-state
     /// reached by applying the transition on a clone of `state`.
     fn build_signed_block(state: &State, slot: Slot) -> SignedBlockWithAttestation {
-        let proposer_index = ValidatorIndex::new(slot.get() % state.config.num_validators);
+        let proposer_index = ValidatorIndex::new(slot.get() % state.num_validators());
 
         // Phase 1: compute the post-state with `state_root = zero`.
         let mut probe = state.clone();

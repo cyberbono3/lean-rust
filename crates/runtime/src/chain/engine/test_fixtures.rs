@@ -12,7 +12,7 @@
     clippy::missing_panics_doc
 )]
 
-use protocol::stf::{genesis_anchor_block, genesis_state, genesis_state_with_validators};
+use protocol::stf::{genesis_anchor_block, genesis_state};
 use protocol::{
     Attestation, Block, BlockSignatures, BlockWithAttestation, SignedBlockWithAttestation, Slot,
     State, Validator, ValidatorIndex, Validators,
@@ -50,24 +50,17 @@ pub fn validator_registry(num_validators: u64) -> Validators {
 /// the zero sentinel. Eligible input to [`Engine::from_anchor`].
 #[must_use]
 pub fn anchor_pair(num_validators: u64) -> (State, Block) {
-    let state = genesis_state(num_validators, GENESIS_TIME);
+    let state = genesis_state(GENESIS_TIME, validator_registry(num_validators));
     let block = genesis_anchor_block(&state);
     (state, block)
 }
 
-/// Builds an [`Engine`] anchored at genesis.
+/// Builds an [`Engine`] anchored at genesis with a populated
+/// [`validator_registry`], so `validator_id` lookups and proposer selection
+/// both resolve against a registry of the declared size.
 #[must_use]
 pub fn engine_at_genesis(num_validators: u64) -> Engine {
-    engine_from_state(genesis_state(num_validators, GENESIS_TIME))
-}
-
-/// Like [`engine_at_genesis`] but the genesis state carries a populated
-/// [`validator_registry`]. Needed by the import-boundary verify-gate tests so
-/// `validator_id` lookups resolve.
-#[must_use]
-pub fn engine_at_genesis_with_validators(num_validators: u64) -> Engine {
-    engine_from_state(genesis_state_with_validators(
-        num_validators,
+    engine_from_state(genesis_state(
         GENESIS_TIME,
         validator_registry(num_validators),
     ))

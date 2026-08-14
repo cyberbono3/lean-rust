@@ -1630,6 +1630,7 @@ dependencies = [
  "libp2p",
  "protocol",
  "runtime",
+ "serde",
  "serde_yaml",
  "ssz",
  "storage",

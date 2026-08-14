@@ -319,6 +319,16 @@ mod tests {
         let path = dir.join("validators.yaml");
         std::fs::write(&path, "ream_0:\n  - 0\nleanrust_1:\n  - 1\n")
             .expect("write validator registry");
+        // The genesis pubkey manifest is REQUIRED: State.validators is the sole
+        // source of the validator count, so synthesis refuses an assignment file
+        // with no sibling manifest.
+        let pk0 = "00".repeat(52);
+        let pk1 = "01".repeat(52);
+        std::fs::write(
+            dir.join("genesis_validators.yaml"),
+            format!("genesis_validators:\n  - {pk0}\n  - {pk1}\n"),
+        )
+        .expect("write genesis validator manifest");
         path
     }
 
@@ -337,7 +347,7 @@ mod tests {
 
         let config = build_devnet_config(&cli).expect("build config");
 
-        assert_eq!(config.genesis_state.config.num_validators, 30);
+        assert_eq!(config.genesis_state.num_validators(), 30);
         assert_eq!(
             config.genesis_block.state_root,
             config.genesis_state.hash_tree_root().into()
@@ -361,7 +371,7 @@ mod tests {
 
         assert_eq!(config.duties.validators_path(), validators_path.as_path());
         assert_eq!(config.duties.validator_group(), "leanrust_1");
-        assert_eq!(config.genesis_state.config.num_validators, 2);
+        assert_eq!(config.genesis_state.num_validators(), 2);
     }
 
     #[test]

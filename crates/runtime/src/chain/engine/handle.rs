@@ -59,7 +59,7 @@ impl Engine {
     /// Forwards every variant raised by [`Store::from_anchor`].
     pub fn from_anchor(state: State, anchor_block: Block) -> Result<Self, ForkchoiceError> {
         let slot = anchor_block.slot;
-        let validators = state.config.num_validators;
+        let validators = state.num_validators();
         let genesis_time = state.config.genesis_time;
         let anchor_root: Bytes32 = anchor_block.hash_tree_root().into();
         let state_root: Bytes32 = state.hash_tree_root().into();
@@ -104,7 +104,7 @@ impl Engine {
     /// Forwards every variant raised by [`Store::from_trusted_head`].
     pub fn from_trusted_head(state: State, anchor_block: Block) -> Result<Self, ForkchoiceError> {
         let slot = anchor_block.slot;
-        let validators = state.config.num_validators;
+        let validators = state.num_validators();
         let genesis_time = state.config.genesis_time;
         let anchor_root: Bytes32 = anchor_block.hash_tree_root().into();
         let state_root: Bytes32 = state.hash_tree_root().into();

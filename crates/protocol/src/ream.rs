@@ -25,7 +25,7 @@
 //! the *native* [`State`] hash-tree-root (defined in [`crate::state`]) to
 //! commit to the same ten-field shape the ream client uses, so both
 //! clients compute identical state roots over the wire. The `tests` module
-//! below pins that shape: perturbing any of the nine
+//! below pins that shape: perturbing any of the eight
 //! config / checkpoint / list / bitlist / registry fields changes the root.
 //! The remaining `slot` / `latest_block_header` fields are covered by a
 //! sibling check in `state.rs`.
@@ -36,12 +36,20 @@ use types::Bitlist;
 use crate::block::BlockHeader;
 use crate::checkpoint::Checkpoint;
 use crate::internal::{
-    decode_bytes32_list, read_fixed, read_offset, BYTES_PER_LENGTH_OFFSET, CHECKPOINT_LEN,
+    decode_bytes32_list, read_fixed, read_offset, BYTES_PER_LENGTH_OFFSET, CHECKPOINT_LEN, U64_LEN,
 };
 use crate::state::{
     ProtocolConfig, State, HISTORICAL_ROOTS_LIMIT, JUSTIFICATIONS_VALIDATORS_LIMIT,
-    PROTOCOL_CONFIG_SSZ_LEN,
 };
+
+/// Byte length of the compact ream "leanchain" config container.
+///
+/// Pinned at 16 — the devnet0 generator writes `num_validators` before
+/// `genesis_time`. Deliberately DECOUPLED from
+/// [`crate::state::PROTOCOL_CONFIG_SSZ_LEN`] (now 8): the native container
+/// dropped its validator count, and that must not silently change how this
+/// external format is parsed.
+const REAM_LEGACY_CONFIG_LEN: usize = 2 * U64_LEN; // 16
 
 /// Variable-field count of the *external* compact ream "leanchain" state:
 /// `historical_block_hashes`, `justified_slots`, `justifications_roots`, and
@@ -55,7 +63,7 @@ const REAM_STATE_VARIABLE_FIELD_COUNT: usize = 4;
 /// Byte length of the fixed portion of the compact ream "leanchain"
 /// state: the `config` container, both checkpoints, and the four
 /// variable-field offsets. `112` bytes on devnet0.
-const REAM_LEAN_STATE_FIXED_PART_LEN: usize = PROTOCOL_CONFIG_SSZ_LEN
+const REAM_LEAN_STATE_FIXED_PART_LEN: usize = REAM_LEGACY_CONFIG_LEN
     + CHECKPOINT_LEN
     + CHECKPOINT_LEN
     + REAM_STATE_VARIABLE_FIELD_COUNT * BYTES_PER_LENGTH_OFFSET; // 112
@@ -99,7 +107,11 @@ impl State {
         }
 
         let mut c = 0;
-        let config = read_fixed::<ProtocolConfig>(bytes, &mut c)?;
+        // The legacy 16-byte config pair. `legacy_validator_count` is used ONLY
+        // to size the justifications bitlist below — it is NOT carried into the
+        // returned state, whose registry is the sole source of the count.
+        let legacy_validator_count = read_fixed::<u64>(bytes, &mut c)?;
+        let genesis_time = read_fixed::<u64>(bytes, &mut c)?;
         let latest_justified = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_LEN])?;
         c += CHECKPOINT_LEN;
         let latest_finalized = Checkpoint::from_ssz_bytes(&bytes[c..c + CHECKPOINT_LEN])?;
@@ -140,7 +152,7 @@ impl State {
             "justified_slots",
         )?;
         let justifications_roots = decode_bytes32_list(tail_slice(2), HISTORICAL_ROOTS_LIMIT)?;
-        let validator_count = usize::try_from(config.num_validators).map_err(|_| {
+        let validator_count = usize::try_from(legacy_validator_count).map_err(|_| {
             DecodeError::BytesInvalid("num_validators does not fit usize".to_owned())
         })?;
         let justifications_validator_bits = justifications_roots
@@ -166,7 +178,7 @@ impl State {
         // lean-cli's loads_ream_legacy_local_pq_state_from_ssz test
         // for the contract.
         Ok(Self {
-            config,
+            config: ProtocolConfig::new(genesis_time),
             latest_block_header: BlockHeader::genesis(),
             latest_justified,
             latest_finalized,
@@ -254,7 +266,7 @@ mod tests {
         }
 
         State {
-            config: ProtocolConfig::new(4, 1_700_000_000),
+            config: ProtocolConfig::new(1_700_000_000),
             slot: Slot::new(9),
             latest_block_header: BlockHeader::default(),
             latest_justified: Checkpoint::new(Bytes32::new([0x44; 32]), Slot::new(8)),
@@ -269,16 +281,15 @@ mod tests {
 
     /// Cross-client HTR-shape compatibility: the native [`State`]
     /// hash-tree-root must commit to all ten fields of the devnet-1 shape, so
-    /// the two clients agree on state roots. Perturbing any of the nine
+    /// the two clients agree on state roots. Perturbing any of the eight
     /// config / checkpoint / list / bitlist / registry fields must change the
     /// root (the `slot` / `latest_block_header` pair is covered in `state.rs`).
+    ///
+    /// Eight perturbation cases, not nine: the in-state config carries only
+    /// `genesis_time` now that the validator count comes from the registry.
     #[test]
     fn native_state_htr_commits_to_ream_ten_field_shape() {
         let baseline = sample_state().hash_tree_root();
-
-        let mut s = sample_state();
-        s.config.num_validators = 5;
-        assert_ne!(s.hash_tree_root(), baseline);
 
         let mut s = sample_state();
         s.config.genesis_time = 1_800_000_000;

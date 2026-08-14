@@ -12,10 +12,10 @@
 use protocol::stf::genesis_anchor_block;
 use protocol::{
     Attestation, AttestationData, Block, BlockBody, BlockHeader, Checkpoint, ProtocolConfig,
-    SignedAttestation, Slot, State, ValidatorIndex,
+    SignedAttestation, Slot, State, Validator, ValidatorIndex, Validators,
 };
 use ssz::HashTreeRoot;
-use types::{Bytes32, Signature};
+use types::{Bytes32, PublicKey, Signature};
 
 use crate::store::Store;
 use crate::time::Time;
@@ -29,10 +29,22 @@ const GENESIS_TIME: u64 = 1_700_000_000;
 /// comes from `BlockHeader::genesis`.
 fn genesis_state(num_validators: u64) -> State {
     State {
-        config: ProtocolConfig::new(num_validators, GENESIS_TIME),
+        config: ProtocolConfig::new(GENESIS_TIME),
+        validators: validator_registry(num_validators),
         latest_block_header: BlockHeader::genesis(),
         ..State::default()
     }
+}
+
+/// Registry of `n` entries with sequential indices. The registry length is the
+/// validator-set size, so every fixture that declares `n` validators must carry
+/// `n` entries — proposer selection and attestation bounds read this, not any
+/// scalar. Local to forkchoice for the same independence reason `genesis_state`
+/// is inlined above.
+fn validator_registry(n: u64) -> Validators {
+    (0..n)
+        .map(|i| Validator::new(PublicKey::default(), ValidatorIndex::new(i)))
+        .collect()
 }
 
 /// Builds a `(state, block)` pair such that `block.state_root ==

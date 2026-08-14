@@ -12,9 +12,9 @@ use std::fs;
 use std::path::Path;
 
 use protocol::{
-    stf::genesis_state_with_validators, Attestation, AttestationData, Block, BlockBody,
-    BlockSignatures, BlockWithAttestation, Checkpoint, SignedAttestation,
-    SignedBlockWithAttestation, Slot, Validator, ValidatorIndex,
+    stf::genesis_state, Attestation, AttestationData, Block, BlockBody, BlockSignatures,
+    BlockWithAttestation, Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot,
+    Validator, ValidatorIndex,
 };
 use ssz::{encode, HashTreeRoot};
 use types::{Bytes32, PublicKey, Signature};
@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             )
         })
         .collect();
-    let genesis_state = genesis_state_with_validators(4, 1_700_000_000, validators);
+    let genesis_state = genesis_state(1_700_000_000, validators);
 
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/synthetic");
     fs::create_dir_all(&dir)?;

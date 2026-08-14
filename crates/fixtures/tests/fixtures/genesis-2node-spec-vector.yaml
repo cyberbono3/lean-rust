@@ -1,0 +1,20 @@
+# Spec-derived genesis hash-tree-root, POPULATED 2-validator registry.
+#
+# STAGED, NOT YET SATISFIABLE. The consuming test is #[ignore]d.
+#
+# Generated from the pinned leanSpec checkout at rev 0c9528ac, with both of the
+# spec Validator's pubkey fields set to the same value per entry:
+#   Validator(attestation_pubkey=pk, proposal_pubkey=pk, index=i)
+#   State.generate_genesis(Uint64(genesis_time), Validators(data=[v0, v1]))
+#
+# This crate's Validator carries a single `pubkey` field, so its registry
+# element serializes to 60 bytes against the spec's 112 and merkleizes to a
+# different width. This vector becomes live when the dual-key Validator
+# container lands; the pubkey assignment above is a placeholder that the
+# dual-key work will settle.
+spec_revision: "leanSpec-pq-devnet-4@0c9528ac"
+genesis_time: 1778169008
+pubkeys:
+  - "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  - "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+expected_root: "ae4b8e6145c17ee60127872d6845769cb5aecaf1db430f070ef3022456d25b0d"

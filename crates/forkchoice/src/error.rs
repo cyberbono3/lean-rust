@@ -91,7 +91,8 @@ pub enum ForkchoiceError {
         current_slot: Slot,
     },
 
-    /// An attestation's `validator_id` is `>= config.num_validators`. The
+    /// An attestation's `validator_id` is past the head post-state's
+    /// validator-registry length. The
     /// vote pool is keyed by validator id; without this gate a peer could
     /// forge arbitrary `u64` ids and grow the pool without bound (≈3.2 KiB
     /// per entry — 250K forged ids ≈ 800 MB).
@@ -99,7 +100,7 @@ pub enum ForkchoiceError {
     ValidatorIndexOutOfRange {
         /// `signed_attestation.message.validator_id` declared by the attester.
         validator_id: u64,
-        /// `Store::config.num_validators` at call time.
+        /// The head registry length at call time.
         num_validators: u64,
     },
 

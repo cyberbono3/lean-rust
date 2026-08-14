@@ -13,7 +13,7 @@
 //! ```
 //! use protocol::{stf::genesis_state, Slot};
 //!
-//! let mut state = genesis_state(4, 1_700_000_000);
+//! let mut state = genesis_state(1_700_000_000, Vec::new());
 //! state.process_slots(Slot::new(3)).unwrap();
 //! assert_eq!(state.slot, Slot::new(3));
 //! ```
@@ -26,8 +26,12 @@ use crate::{
 
 pub use crate::error::StateTransitionError;
 
-/// Builds the slot-0 consensus [`State`] for the given validator-set size and
+/// Builds the slot-0 consensus [`State`] for the given validator registry and
 /// chain genesis time.
+///
+/// The registry is the sole source of the validator-set size — there is no
+/// scalar count to keep in step with it. Parameter order mirrors the spec's
+/// genesis constructor: `genesis_time` before `validators`.
 ///
 /// The state's `latest_block_header.body_root` commits to the empty
 /// [`BlockBody`](crate::BlockBody) (no attestations); all other fields are
@@ -36,55 +40,23 @@ pub use crate::error::StateTransitionError;
 /// # Example
 /// ```
 /// use protocol::stf::genesis_state;
-/// let s = genesis_state(4, 1_700_000_000);
+/// let s = genesis_state(1_700_000_000, Vec::new());
 /// assert_eq!(s.slot.get(), 0);
-/// assert_eq!(s.config.num_validators, 4);
+/// assert_eq!(s.num_validators(), 0);
 /// assert_eq!(s.config.genesis_time, 1_700_000_000);
 /// ```
 #[must_use]
-pub fn genesis_state(num_validators: u64, genesis_time: u64) -> State {
+pub fn genesis_state(genesis_time: u64, validators: Validators) -> State {
     // Every field but `config` and `latest_block_header` is the zero/default
     // value; struct-update keeps this in sync as `State` grows fields. The
     // header is not the default one — `BlockHeader::genesis` owns the non-zero
     // empty-body root the genesis anchor invariant depends on.
     State {
-        config: ProtocolConfig::new(num_validators, genesis_time),
+        config: ProtocolConfig::new(genesis_time),
+        validators,
         latest_block_header: BlockHeader::genesis(),
         ..State::default()
     }
-}
-
-/// Builds the slot-0 consensus [`State`] with a pre-populated validator
-/// registry.
-///
-/// Delegates to [`genesis_state`] for the empty-registry shape, then installs
-/// `validators`. Keeps [`genesis_state`]'s signature stable for existing
-/// callers; genesis keygen (a later part) supplies the real `Bytes52` pubkeys.
-///
-/// # Preconditions
-/// An empty registry is the valid pre-keygen shape — it is what [`genesis_state`]
-/// produces and what this delegates to. When `validators` is non-empty its
-/// length should equal `num_validators`; this constructor does not enforce that
-/// coupling (the registry and `config.num_validators` are wired together by the
-/// genesis keygen part). A non-empty registry whose length disagrees with
-/// `num_validators` produces a `State` whose `process_attestations` validator
-/// bound (`config.num_validators`) disagrees with the registry size.
-///
-/// # Example
-/// ```
-/// use protocol::stf::{genesis_state, genesis_state_with_validators};
-/// let s = genesis_state_with_validators(4, 1_700_000_000, Vec::new());
-/// assert_eq!(s, genesis_state(4, 1_700_000_000));
-/// ```
-#[must_use]
-pub fn genesis_state_with_validators(
-    num_validators: u64,
-    genesis_time: u64,
-    validators: Validators,
-) -> State {
-    let mut state = genesis_state(num_validators, genesis_time);
-    state.validators = validators;
-    state
 }
 
 /// Builds the genesis anchor [`Block`] for `state`: the slot-0, zero-parented
@@ -104,7 +76,7 @@ pub fn genesis_state_with_validators(
 /// use protocol::stf::{genesis_anchor_block, genesis_state};
 /// use ssz::HashTreeRoot;
 ///
-/// let state = genesis_state(4, 1_700_000_000);
+/// let state = genesis_state(1_700_000_000, Vec::new());
 /// let block = genesis_anchor_block(&state);
 /// assert_eq!(block.slot.get(), 0);
 /// assert_eq!(block.state_root.0, state.hash_tree_root());
@@ -133,17 +105,19 @@ mod tests {
     }
 
     #[test]
-    fn genesis_state_registry_is_empty() {
-        assert!(genesis_state(4, 1_700_000_000).validators.is_empty());
+    fn genesis_state_empty_registry_has_no_validators() {
+        let state = genesis_state(1_700_000_000, Vec::new());
+        assert!(state.validators.is_empty());
+        assert_eq!(state.num_validators(), 0);
     }
 
     #[test]
     fn genesis_state_populates_registry_in_order() {
         let validators = vec![validator(0), validator(1)];
-        let state = genesis_state_with_validators(4, 1_700_000_000, validators.clone());
+        let state = genesis_state(1_700_000_000, validators.clone());
         assert_eq!(state.validators, validators);
-        // Only the registry differs from the empty-registry genesis state.
+        // The registry IS the validator count.
+        assert_eq!(state.num_validators(), 2);
         assert_eq!(state.slot, Slot::ZERO);
-        assert_eq!(state.config.num_validators, 4);
     }
 }

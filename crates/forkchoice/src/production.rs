@@ -70,9 +70,9 @@ impl Store {
     /// Produces a local unsigned block for `slot`, proposed by
     /// `validator`. The flow:
     ///
-    /// 1. Authorize: `validator` must be the round-robin proposer for
-    ///    `slot`.
-    /// 2. Resolve proposal head and pull out the head's post-state.
+    /// 1. Resolve proposal head and pull out the head's post-state.
+    /// 2. Authorize: `validator` must be the round-robin proposer for
+    ///    `slot`, against the head state's validator registry.
     /// 3. Loop:
     ///    - Build a candidate block + post-state from the current
     ///      attestation set.
@@ -98,15 +98,18 @@ impl Store {
         slot: Slot,
         validator: ValidatorIndex,
     ) -> Result<ProducedBlock, ForkchoiceError> {
-        if !is_proposer(validator, slot, self.config().num_validators)? {
-            return Err(ForkchoiceError::UnauthorizedProposer { validator, slot });
-        }
-
+        // Resolve the proposal head BEFORE authorizing: the round-robin
+        // modulus is the head post-state's registry size, so the head is a
+        // data dependency of the check, and the spec orders it the same way.
         let head_root = self.get_proposal_head()?;
         let head_state = self
             .state(&head_root)
             .cloned()
             .ok_or(ForkchoiceError::HeadStateNotFound { root: head_root })?;
+
+        if !is_proposer(validator, slot, head_state.num_validators())? {
+            return Err(ForkchoiceError::UnauthorizedProposer { validator, slot });
+        }
 
         let (attestations, post_state) =
             self.converge_attestations(head_root, slot, validator, &head_state)?;
