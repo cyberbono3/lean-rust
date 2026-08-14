@@ -1535,6 +1535,39 @@ mod attestation_tests {
         populated_state(3, history, &pattern, Slot::ZERO)
     }
 
+    /// One vote from `validator_id`, sourced at `source_slot` and targeting
+    /// `target_slot`.
+    ///
+    /// Both roots are derived from the slot, matching the history
+    /// [`ordering_state`] builds, so a vote always agrees with the chain and
+    /// the two cannot drift apart at a call site.
+    fn ordering_vote(validator_id: u64, source_slot: u8, target_slot: u8) -> Attestation {
+        attestation(
+            validator_id,
+            root(source_slot),
+            u64::from(source_slot),
+            root(target_slot),
+            u64::from(target_slot),
+        )
+    }
+
+    /// The two identical votes that carry a target to supermajority in the
+    /// three-validator registry [`ordering_state`] builds.
+    fn ordering_supermajority(source_slot: u8, target_slot: u8) -> [Attestation; 2] {
+        [
+            ordering_vote(0, source_slot, target_slot),
+            ordering_vote(1, source_slot, target_slot),
+        ]
+    }
+
+    /// `state` with `batch` applied, leaving the caller's copy untouched so
+    /// one pre-state can seed several orderings.
+    fn after(state: &State, batch: &[Attestation]) -> State {
+        let mut post = state.clone();
+        post.process_attestations(batch).unwrap();
+        post
+    }
+
     #[test]
     fn process_attestations_is_order_dependent_when_finalization_advances() {
         // Pins the eligibility read against the reference specification,
@@ -1552,25 +1585,13 @@ mod attestation_tests {
         let state = ordering_state(8, &[0, 1]);
 
         // Justifies slot 2 from the slot-1 source, finalizing slot 1.
-        let advance = [
-            attestation(0, root(1), 1, root(2), 2),
-            attestation(1, root(1), 1, root(2), 2),
-        ];
+        let advance = ordering_supermajority(1, 2);
         // Targets slot 7 from the slot-0 source — acceptable only once
         // finalization has reached slot 1.
-        let late = [
-            attestation(0, root(0), 0, root(7), 7),
-            attestation(1, root(0), 0, root(7), 7),
-        ];
+        let late = ordering_supermajority(0, 7);
 
-        let mut widened = state.clone();
-        widened
-            .process_attestations(&[advance[0], advance[1], late[0], late[1]])
-            .unwrap();
-        let mut narrow = state.clone();
-        narrow
-            .process_attestations(&[late[0], late[1], advance[0], advance[1]])
-            .unwrap();
+        let widened = after(&state, &[advance, late].concat());
+        let narrow = after(&state, &[late, advance].concat());
 
         // Both orderings finalize slot 1, so the batches agree on everything
         // except what the slot-7 votes were measured against.
@@ -1607,16 +1628,15 @@ mod attestation_tests {
         // the window another vote is tested against.
         let state = ordering_state(8, &[0]);
         let votes = [
-            attestation(0, root(0), 0, root(2), 2),
-            attestation(1, root(0), 0, root(2), 2),
-            attestation(2, root(0), 0, root(3), 3),
+            ordering_vote(0, 0, 2),
+            ordering_vote(1, 0, 2),
+            ordering_vote(2, 0, 3),
         ];
 
         let mut post_roots = Vec::with_capacity(ORDERINGS.len());
         for ordering in ORDERINGS {
             let batch: Vec<Attestation> = ordering.iter().map(|&i| votes[i]).collect();
-            let mut permuted = state.clone();
-            permuted.process_attestations(&batch).unwrap();
+            let permuted = after(&state, &batch);
 
             // Non-vacuity: the batch justifies a target and leaves a pending
             // tally behind, so equality across orderings is a real property
@@ -1644,25 +1664,25 @@ mod attestation_tests {
         // pronic) and slot 6 (delta 6 == 2 * 3, pronic), so the vote passes
         // the eligibility predicate under either reading and only the scan
         // can discriminate.
-        let mut state = ordering_state(13, &[0, 6]);
-        state
-            .process_attestations(&[
+        let state = ordering_state(13, &[0, 6]);
+        let post = after(
+            &state,
+            &[
                 // Justify slot 9 and finalize slot 6: the scan range 7..9
                 // holds no slot justifiable after slot 0.
-                attestation(0, root(6), 6, root(9), 9),
-                attestation(1, root(6), 6, root(9), 9),
+                ordering_supermajority(6, 9),
                 // Justify slot 12. The scan range 10..12 holds slots that
                 // ARE justifiable after the live finalized slot 6 (deltas 4
                 // and 5, inside the fast path), so finalization must not
                 // advance. Against a frozen slot 0 neither slot is
                 // justifiable and finalization would wrongly reach slot 9.
-                attestation(0, root(9), 9, root(12), 12),
-                attestation(1, root(9), 9, root(12), 12),
-            ])
-            .unwrap();
+                ordering_supermajority(9, 12),
+            ]
+            .concat(),
+        );
 
-        assert_eq!(state.latest_justified.slot, Slot::new(12));
-        assert_eq!(state.latest_finalized.slot, Slot::new(6));
+        assert_eq!(post.latest_justified.slot, Slot::new(12));
+        assert_eq!(post.latest_finalized.slot, Slot::new(6));
     }
 }
 
