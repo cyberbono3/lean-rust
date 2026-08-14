@@ -33,7 +33,7 @@ struct Field {
 const FIELDS: &[Field] = &[
     Field {
         name: "config",
-        shape: Shape::Fixed(16),
+        shape: Shape::Fixed(8),
     },
     Field {
         name: "slot",
@@ -158,11 +158,11 @@ fn fixed_portion_length_matches_state_fixed_part_len() {
         })
         .sum();
     assert_eq!(computed, STATE_FIXED_PART_LEN);
-    assert_eq!(STATE_FIXED_PART_LEN, 236);
+    assert_eq!(STATE_FIXED_PART_LEN, 228);
 }
 
 #[test]
-fn fixed_field_widths_sum_to_two_sixteen() {
+fn fixed_field_widths_sum_to_two_oh_eight() {
     let fixed_total: usize = FIELDS
         .iter()
         .filter_map(|f| match f.shape {
@@ -170,8 +170,8 @@ fn fixed_field_widths_sum_to_two_sixteen() {
             Shape::Variable { .. } => None,
         })
         .sum();
-    // 16 + 8 + 112 + 40 + 40 = 216
-    assert_eq!(fixed_total, 216);
+    // 8 + 8 + 112 + 40 + 40 = 208
+    assert_eq!(fixed_total, 208);
 }
 
 #[test]

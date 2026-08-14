@@ -11,9 +11,10 @@ use libp2p::{
     multiaddr::Protocol,
     Multiaddr,
 };
-use protocol::{State, ValidatorIndex};
+use protocol::{stf::genesis_state, State, Validator, ValidatorIndex, Validators};
 use runtime::duties::ValidatorAssignments;
 use ssz::HashTreeRoot;
+use types::PublicKey;
 
 const GENESIS_TIME: u64 = 1_778_169_008;
 
@@ -77,14 +78,21 @@ fn genesis_2node_fixture_decodes_to_protocol_state() {
     let bytes = decode_hex_fixture("genesis-2node.ssz.hex");
     let state = decode_current_local_pq_genesis(&bytes);
 
-    assert_eq!(state.config.num_validators, 2);
+    // The compact interop format carries no validators tail, so the legacy
+    // anchor has an EMPTY registry — the declared count is validated during
+    // decode and discarded. A node refuses such a state as a chain anchor
+    // (see lean-cli `validate_state_limits`); this test covers the decoder.
+    assert_eq!(state.num_validators(), 0);
     assert_eq!(state.config.genesis_time, GENESIS_TIME);
     assert_eq!(state.slot.get(), 0);
     assert!(state.historical_block_hashes.is_empty());
     assert!(state.justified_slots.is_empty());
     assert_eq!(
         hex::encode(state.hash_tree_root()),
-        "70ea466fb4da8f44f62612d7394bbe5f8c8e9afdd6488fbebd0ce44fa096be37"
+        // Moved when the in-state config dropped `num_validators`: the config
+        // container went from two fields to one, so the state root changes.
+        // The 145-byte devnet0 payload itself is unchanged.
+        "9bcc325e28fd8fb4882da3406303fb2048600463806fc9819b7ed527115b6f58"
     );
 }
 
@@ -123,4 +131,104 @@ fn bootnode_contract_uses_temporary_multiaddr_adapter() {
     let decision = include_str!("fixtures/README.md");
     assert!(decision.contains("genesis/bootnodes.rust.yaml"));
     assert!(decision.contains("rather than parsing ENR"));
+}
+
+// =====================================================================
+// Spec-parity: genesis hash-tree-root
+// =====================================================================
+
+/// A genesis root computed by the pinned leanSpec checkout for known inputs.
+#[derive(serde::Deserialize)]
+struct SpecGenesisVector {
+    /// leanSpec revision the vector was generated from.
+    spec_revision: String,
+    genesis_time: u64,
+    /// Hex-encoded validator pubkeys, in index order. Empty for the
+    /// empty-registry vector.
+    #[serde(default)]
+    pubkeys: Vec<String>,
+    /// Hex-encoded `hash_tree_root` of the spec's genesis state.
+    expected_root: String,
+}
+
+impl SpecGenesisVector {
+    fn load(name: &str) -> Self {
+        let raw = std::fs::read(fixture_path(name)).expect("read spec vector fixture");
+        serde_yaml::from_slice(&raw).expect("spec vector must be valid YAML")
+    }
+
+    fn validators(&self) -> Validators {
+        self.pubkeys
+            .iter()
+            .enumerate()
+            .map(|(i, hex)| {
+                let index = u64::try_from(i).expect("fixture index fits u64");
+                let pubkey =
+                    PublicKey::try_from(hex.as_str()).expect("fixture pubkey must be valid hex");
+                Validator::new(pubkey, ValidatorIndex::new(index))
+            })
+            .collect()
+    }
+}
+
+/// The genesis state lean-rust synthesizes must hash to the root leanSpec
+/// computes for the same inputs. This is the interop contract in its most
+/// basic form: two clients that disagree here cannot agree on any head root.
+///
+/// Empty registry, deliberately. An `SSZList`'s empty root depends only on its
+/// LIMIT, which matches on both sides, so this vector isolates the in-state
+/// `Config` shape — the thing that changed — along with both checkpoints, the
+/// block header, and the four remaining tails. The populated-registry form is
+/// staged below.
+#[test]
+fn genesis_hash_tree_root_matches_spec_vector_empty_registry() {
+    let vector = SpecGenesisVector::load("genesis-empty-registry-spec-vector.yaml");
+    assert!(
+        vector.pubkeys.is_empty(),
+        "this vector must carry no validators"
+    );
+
+    let state = genesis_state(vector.genesis_time, Vec::new());
+
+    assert_eq!(state.num_validators(), 0);
+    assert_eq!(
+        hex::encode(state.hash_tree_root()),
+        vector.expected_root,
+        "genesis root diverges from {}; peers would reject this genesis",
+        vector.spec_revision,
+    );
+}
+
+/// Populated-registry parity. Blocked on the `Validator` container gaining a
+/// second pubkey: leanSpec's entry carries `attestation_pubkey`,
+/// `proposal_pubkey` and `index` against our `pubkey` and `index`, so the
+/// registry subtree merkleizes to a different width and the roots cannot match
+/// yet. The vector is checked in so the work is staged rather than forgotten.
+#[test]
+#[ignore = "blocked on the dual-key Validator container; see the fixture header"]
+fn genesis_hash_tree_root_matches_spec_vector_populated_registry() {
+    let vector = SpecGenesisVector::load("genesis-2node-spec-vector.yaml");
+    let state = genesis_state(vector.genesis_time, vector.validators());
+
+    assert_eq!(state.num_validators(), 2);
+    assert_eq!(
+        hex::encode(state.hash_tree_root()),
+        vector.expected_root,
+        "genesis root diverges from {}",
+        vector.spec_revision,
+    );
+}
+
+/// The staged populated-registry vector is `#[ignore]`d until the dual-key
+/// `Validator` lands, so nothing would otherwise parse it. This keeps it
+/// honest: a pubkey that drifts out of `PublicKey`'s 52-byte shape fails here
+/// as a fixture error, rather than surfacing later as a mystifying root
+/// mismatch the moment the ignored test is switched on.
+#[test]
+fn staged_spec_vector_stays_parseable() {
+    let vector = SpecGenesisVector::load("genesis-2node-spec-vector.yaml");
+    let validators = vector.validators();
+    assert_eq!(validators.len(), 2);
+    assert_eq!(validators[1].index, ValidatorIndex::new(1));
+    assert!(!vector.expected_root.is_empty());
 }

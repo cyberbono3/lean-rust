@@ -87,6 +87,29 @@ pub(crate) fn sample_validators(n: u8) -> Validators {
     (0..n).map(sample_validator).collect()
 }
 
+/// Deterministic [`Validators`] registry sized by a `u64` count.
+///
+/// The registry length IS the validator-set size, so any builder that used to
+/// declare a scalar count must populate this instead — a state whose registry
+/// is shorter than the count it claims resolves proposers and attestation
+/// bounds against the registry, not the claim.
+///
+/// Pubkey bytes repeat the low byte of the index; only the index is
+/// load-bearing for count-derived logic.
+pub(crate) fn registry_of(n: u64) -> Validators {
+    (0..n)
+        .map(|i| {
+            // `& 0xff` makes this conversion infallible; the fallback is
+            // unreachable and exists only to keep the expression total.
+            let seed = u8::try_from(i & 0xff).unwrap_or(0);
+            Validator::new(
+                PublicKey::new([seed; PublicKey::LEN]),
+                ValidatorIndex::new(i),
+            )
+        })
+        .collect()
+}
+
 /// Deterministic [`Attestation`] keyed off `seed`.
 pub(crate) fn sample_attestation(seed: u64) -> Attestation {
     let byte = u8::try_from(seed & 0xff).unwrap_or(0);

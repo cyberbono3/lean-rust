@@ -218,8 +218,14 @@ fn synthetic_vector_roots_are_pinned() {
     const BLOCKBODY_ROOT: &str = "0a786852dc25250a5f62918d10bc7a2d19d448cd4b696f015d2ca3ad8942fe10";
     const SIGNED_BLOCK_ROOT: &str =
         "6210c7d3a20a8d046283fdbd2257543c3ee100f29342fa4c48d9095d19dfbf50";
+    // Moved when the in-state config dropped `num_validators`. Established
+    // side: the config container legitimately went from two fields to one, so
+    // the state's fixed part is 228 bytes, every tail offset shifts, and the
+    // root follows. Regenerated with `cargo run -p lean-wire --example
+    // regen_synthetic`; the other three roots here are unchanged, which is the
+    // evidence that only the `State` shape moved.
     const GENESIS_STATE_ROOT: &str =
-        "663a7142e12afccbb2bc78fc83c72bef1df8617bfaabd38a900486d0520bb05f";
+        "aef4c5885b6a13ac8598da56d93da0bd5fc3700203d0477dc16baa3a3a1c20d1";
 
     let signed: SignedAttestation =
         decode(fixture("validator3.signedattestation")).expect("decode signedattestation");

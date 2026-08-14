@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
 use config::Config as ChainConfig;
-use protocol::{Block, BlockBody, BlockHeader, ProtocolConfig, State, Validator};
+use protocol::{Block, BlockBody, State, Validator};
 use runtime::duties::{GenesisRegistry, ValidatorAssignments};
 use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
@@ -61,7 +61,12 @@ pub fn load_chain_config(path: Option<&Path>) -> Result<ChainConfig> {
 ///
 /// Returns an error when the file cannot be read or the SSZ decoder rejects
 /// the bytes.
-pub fn load_state(path: &Path) -> Result<State> {
+// NOTE: this decodes only — it does NOT enforce chain-config limits or the
+// non-empty-registry requirement. `load_or_synthesize_state` is the single
+// validation boundary and applies `validate_state_limits` to BOTH the supplied
+// and synthesized paths. Kept crate-private so that boundary cannot be
+// bypassed; promote it only together with the validation call.
+pub(crate) fn load_state(path: &Path) -> Result<State> {
     // Upper bound on the on-disk genesis state. The wire-format State for
     // devnet0's validator-registry-limit (4096) + historical-roots-limit
     // (262_144) bounds out well under this; the cap exists so an
@@ -111,7 +116,7 @@ pub fn load_state(path: &Path) -> Result<State> {
     };
     info!(
         path = %path.display(),
-        validators = state.config.num_validators,
+        validators = state.num_validators(),
         genesis_time = state.config.genesis_time,
         slot = state.slot.get(),
         "decoded genesis state SSZ",
@@ -145,17 +150,14 @@ pub fn load_or_synthesize_state(
                 validators_path.display()
             )
         })?;
-        // total_validators is the authoritative count and is ALWAYS carried into
-        // num_validators — even when no manifest is present — so the scalar count
-        // never regresses to 0. The registry is a SEPARATE population that is
-        // empty on the compat path and populated when a manifest exists.
-        let total = assignments.total_validators();
+        // The registry IS the validator count — `GenesisRegistry::load` has
+        // already checked its length against the assignment file's total.
         let validators = load_genesis_registry(validators_path, &assignments)?;
         let genesis_time = default_genesis_time(chain_config)?;
-        let state = synthesize_state(total, validators, genesis_time);
+        let state = synthesize_state(genesis_time, validators);
         info!(
             validator_registry_path = %validators_path.display(),
-            validators = state.config.num_validators,
+            validators = state.num_validators(),
             registry_len = state.validators.len(),
             genesis_time = state.config.genesis_time,
             "synthesized genesis state",
@@ -164,7 +166,7 @@ pub fn load_or_synthesize_state(
     };
     validate_state_limits(&state, chain_config)?;
     info!(
-        validators = state.config.num_validators,
+        validators = state.num_validators(),
         genesis_time = state.config.genesis_time,
         slot = state.slot.get(),
         "loaded genesis state",
@@ -215,11 +217,12 @@ pub fn anchor_block_for_state(state: &State) -> Result<Block> {
 }
 
 /// Loads the companion `genesis_validators.yaml` next to `validators_path` and
-/// builds the ordered registry. When the manifest is absent, logs a WARN and
-/// returns an empty registry (backward-compatible with pre-Part-12 genesis
-/// fixtures that carry no pubkeys — `num_validators` is still set from
-/// `total_validators` by the caller). When present, a count/format mismatch is a
-/// hard error — never a silent partial registry.
+/// builds the ordered registry.
+///
+/// The manifest is REQUIRED: `State.validators` is the sole source of the
+/// validator-set size, so an absent manifest would synthesize a chain with zero
+/// validators — one that cannot propose, attest, or justify. A count or format
+/// mismatch is likewise a hard error, never a silent partial registry.
 fn load_genesis_registry(
     validators_path: &Path,
     assignments: &ValidatorAssignments,
@@ -229,41 +232,37 @@ fn load_genesis_registry(
     // `load_optional` owns the absent-vs-present decision under ITS path
     // resolution — do NOT pre-probe with `Path::exists`, which resolves against
     // a different root and can silently disagree with the actual read.
-    let manifest = GenesisRegistry::load_optional(assignments, &manifest_path)
-        .with_context(|| format!("load genesis pubkey manifest {}", manifest_path.display()))?;
-    let Some(registry) = manifest else {
-        warn!(
-            path = %manifest_path.display(),
-            "no genesis_validators manifest beside validators.yaml; \
-             genesis State.validators left empty (pre-Part-12 compatibility)",
-        );
-        return Ok(Vec::new());
-    };
+    let registry = GenesisRegistry::load(assignments, &manifest_path).with_context(|| {
+        format!(
+            "load genesis pubkey manifest {}; the validator registry is the sole source of \
+             the validator count, so the manifest is required",
+            manifest_path.display(),
+        )
+    })?;
     Ok(registry.into_validators())
 }
 
-/// Builds the genesis [`State`]. `num_validators` is the authoritative scalar
-/// count (from `total_validators`); `validators` is either empty (compat path)
-/// or exactly `num_validators` entries. When non-empty the two MUST agree —
-/// [`GenesisRegistry::load`] guarantees `registry.len() == total_validators`.
-fn synthesize_state(num_validators: u64, validators: Vec<Validator>, genesis_time: u64) -> State {
-    debug_assert!(
-        validators.is_empty() || validators.len() as u64 == num_validators,
-        "registry length must match num_validators when populated",
-    );
-    State {
-        config: ProtocolConfig::new(num_validators, genesis_time),
-        validators,
-        latest_block_header: BlockHeader::genesis(),
-        ..State::default()
-    }
+/// Builds the genesis [`State`] from the ordered validator registry.
+///
+/// The registry length IS the validator count; there is no separate scalar to
+/// keep in step with it.
+fn synthesize_state(genesis_time: u64, validators: Vec<Validator>) -> State {
+    protocol::stf::genesis_state(genesis_time, validators)
 }
 
 fn validate_state_limits(state: &State, chain_config: &ChainConfig) -> Result<()> {
     ensure!(
-        state.config.num_validators <= chain_config.validator_registry_limit,
-        "genesis state contains {} validators, exceeding genesis config validator_registry_limit {}",
-        state.config.num_validators,
+        !state.validators.is_empty(),
+        "genesis anchor carries an empty validator registry: the registry is the sole source \
+         of the validator count, so a node anchored here rejects every attestation and can \
+         never propose or justify. Supply a genesis state whose validator registry is \
+         populated (note that the compact interop format carries no registry at all)",
+    );
+    let registry_len = u64::try_from(state.validators.len())
+        .context("genesis state validator-registry length does not fit in u64")?;
+    ensure!(
+        registry_len <= chain_config.validator_registry_limit,
+        "genesis state contains {registry_len} validators, exceeding genesis config validator_registry_limit {}",
         chain_config.validator_registry_limit,
     );
     // Defense-in-depth: the runtime `validator_registry_limit` is an operator
@@ -272,26 +271,9 @@ fn validate_state_limits(state: &State, chain_config: &ChainConfig) -> Result<()
     // zero hash — a silently-wrong, un-re-decodable genesis. Bound against the
     // SSZ cap regardless of the runtime knob.
     ensure!(
-        state.config.num_validators <= config::VALIDATOR_REGISTRY_LIMIT as u64,
-        "genesis state contains {} validators, exceeding the SSZ validator-registry cap {}",
-        state.config.num_validators,
+        registry_len <= config::VALIDATOR_REGISTRY_LIMIT as u64,
+        "genesis state contains {registry_len} validators, exceeding the SSZ validator-registry cap {}",
         config::VALIDATOR_REGISTRY_LIMIT,
-    );
-    // Bound the REGISTRY length itself, not only the scalar count: the two are
-    // coupled by construction (`synthesize_state` debug-asserts it), but that
-    // assert compiles out in release — this is the release-mode enforcement.
-    // An empty registry is the accepted compat path (no pubkey manifest).
-    let registry_len = u64::try_from(state.validators.len())
-        .context("genesis state validator-registry length does not fit in u64")?;
-    ensure!(
-        registry_len <= chain_config.validator_registry_limit,
-        "genesis state registry holds {registry_len} validators, exceeding genesis config validator_registry_limit {}",
-        chain_config.validator_registry_limit,
-    );
-    ensure!(
-        registry_len == 0 || registry_len == state.config.num_validators,
-        "genesis state registry holds {registry_len} validators but num_validators is {}; a populated registry must match the scalar count",
-        state.config.num_validators,
     );
     let historical_roots = u64::try_from(state.historical_block_hashes.len())
         .context("genesis state historical root count does not fit in u64")?;
@@ -301,7 +283,7 @@ fn validate_state_limits(state: &State, chain_config: &ChainConfig) -> Result<()
         chain_config.historical_roots_limit,
     );
     debug!(
-        validators = state.config.num_validators,
+        validators = state.num_validators(),
         validator_registry_limit = chain_config.validator_registry_limit,
         historical_roots,
         historical_roots_limit = chain_config.historical_roots_limit,
@@ -348,8 +330,11 @@ mod tests {
     fn dummy_registry(n: u64) -> Vec<Validator> {
         (0..n)
             .map(|i| {
+                // `& 0xff` makes this conversion infallible; the fallback is
+                // unreachable and exists only to keep the expression total.
+                let seed = u8::try_from(i & 0xff).unwrap_or(0);
                 Validator::new(
-                    PublicKey::new([u8::try_from(i).expect("test index fits u8"); PublicKey::LEN]),
+                    PublicKey::new([seed; PublicKey::LEN]),
                     ValidatorIndex::new(i),
                 )
             })
@@ -380,7 +365,7 @@ mod tests {
     fn loads_state_from_ssz() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path().join("genesis.ssz");
-        let state = synthesize_state(4, dummy_registry(4), 1_700_000_000);
+        let state = synthesize_state(1_700_000_000, dummy_registry(4));
         std::fs::write(&path, encode(&state)).expect("write state");
 
         let loaded = load_state(&path).expect("load state");
@@ -389,27 +374,10 @@ mod tests {
     }
 
     #[test]
-    fn validate_state_limits_rejects_registry_scalar_mismatch() {
-        // A populated registry whose LENGTH disagrees with the scalar
-        // `num_validators` is refused in release builds — the release-mode
-        // counterpart of `synthesize_state`'s debug_assert.
-        let mut state = synthesize_state(4, dummy_registry(4), 1_700_000_000);
-        state.validators.pop(); // registry len 3, but num_validators stays 4
-        let err = validate_state_limits(&state, &ChainConfig::default())
-            .expect_err("registry/scalar mismatch must be refused");
-        assert!(
-            err.to_string().contains("must match the scalar count"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn validate_state_limits_rejects_registry_over_limit() {
-        // The registry length itself is bounded, not only the scalar count:
-        // `num_validators` stays within the limit (scalar check passes) while
-        // the registry runs one past it, so the registry-length bound is what
-        // fires.
-        let mut state = synthesize_state(3, dummy_registry(3), 1_700_000_000);
+        // The registry length is the bound: a registry one past the configured
+        // limit is refused.
+        let mut state = synthesize_state(1_700_000_000, dummy_registry(3));
         state.validators.push(Validator::new(
             PublicKey::new([3u8; PublicKey::LEN]),
             ValidatorIndex::new(3),
@@ -437,7 +405,11 @@ mod tests {
         let loaded = load_state(&path).expect("load legacy state");
         let block = anchor_block_for_state(&loaded).expect("derive anchor block");
 
-        assert_eq!(loaded.config.num_validators, 2);
+        // The compact interop format carries no validators tail, so the legacy
+        // anchor has an EMPTY registry — the declared count is validated during
+        // decode and discarded. `validate_state_limits` refuses such a state as
+        // a chain anchor; this test exercises the decoder alone.
+        assert_eq!(loaded.num_validators(), 0);
         assert_eq!(loaded.config.genesis_time, 1_778_169_008);
         assert!(loaded.historical_block_hashes.is_empty());
         assert!(loaded.justified_slots.is_empty());
@@ -448,34 +420,43 @@ mod tests {
         assert_eq!(block.state_root, loaded.hash_tree_root().into());
         assert_eq!(
             hex::encode(loaded.hash_tree_root()),
-            "70ea466fb4da8f44f62612d7394bbe5f8c8e9afdd6488fbebd0ce44fa096be37"
+            // Moved when the in-state config dropped `num_validators`: the
+            // config container went from two fields to one, so the state root
+            // changes. The 145-byte devnet0 payload itself is unchanged.
+            "9bcc325e28fd8fb4882da3406303fb2048600463806fc9819b7ed527115b6f58"
         );
         assert_eq!(
             hex::encode(block.hash_tree_root()),
-            "c3906f614cec0cbd6488b15c09e9d3b55d6e7ac4f085de34658ecfb4d896626a"
+            // Anchor-block root follows the state root above (the block
+            // commits to `state_root`).
+            "cbe48721138a0e2b9dabcf556a039c10bd288a87fe8d02f12421631756e7bc4f"
         );
     }
 
     #[test]
-    fn synthesizes_state_from_validator_assignments() {
+    fn synthesis_requires_genesis_manifest() {
+        // Rewrite of the former `synthesizes_state_from_validator_assignments`,
+        // whose premise this change inverts: the registry IS the validator
+        // count, so an absent manifest would synthesize a zero-validator chain
+        // that can never propose or justify. It is now a hard error.
         let dir = tempfile::tempdir().expect("create temp dir");
         let validators = dir.path().join("validators.yaml");
         std::fs::write(&validators, "ream: [0, 1, 2, 3]\n").expect("write validators");
 
-        let state =
-            load_or_synthesize_state(None, &ChainConfig::default(), &validators).expect("state");
-
-        assert_eq!(state.config.num_validators, 4);
-        assert!(state.config.genesis_time > 0);
-        // Absent manifest → empty registry (compat), count still preserved.
-        assert!(state.validators.is_empty());
+        let err = load_or_synthesize_state(None, &ChainConfig::default(), &validators)
+            .expect_err("absent manifest must be refused");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("genesis_validators.yaml"),
+            "error must name the missing manifest, got: {rendered}"
+        );
     }
 
     #[test]
     fn synthesizes_state_with_pubkey_manifest_populates_registry() {
         // Write BOTH the assignment file and its sibling genesis_validators.yaml,
         // then synthesize: State.validators is populated and index-ordered, and
-        // num_validators still equals the assignment total.
+        // its length is the validator count.
         let dir = tempfile::tempdir().expect("temp dir");
         let validators = dir.path().join("validators.yaml");
         std::fs::write(&validators, "ream_0:\n  - 0\nleanrust_1:\n  - 1\n")
@@ -493,7 +474,7 @@ mod tests {
         let state =
             load_or_synthesize_state(None, &ChainConfig::default(), &validators).expect("state");
 
-        assert_eq!(state.config.num_validators, 2);
+        assert_eq!(state.num_validators(), 2);
         assert_eq!(state.validators.len(), 2);
         assert_eq!(state.validators[0].index, ValidatorIndex::new(0));
         assert_eq!(state.validators[1].index, ValidatorIndex::new(1));
@@ -528,7 +509,7 @@ mod tests {
 
     #[test]
     fn anchor_block_matches_state_root() {
-        let state = synthesize_state(4, dummy_registry(4), 1_700_000_000);
+        let state = synthesize_state(1_700_000_000, dummy_registry(4));
 
         let block = anchor_block_for_state(&state).expect("derive block");
 
@@ -540,7 +521,7 @@ mod tests {
     fn supplied_state_is_validated_against_chain_config() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path().join("genesis.ssz");
-        let state = synthesize_state(4, dummy_registry(4), 1_700_000_000);
+        let state = synthesize_state(1_700_000_000, dummy_registry(4));
         std::fs::write(&path, encode(&state)).expect("write state");
         let chain_config = ChainConfig {
             validator_registry_limit: 3,
@@ -557,26 +538,39 @@ mod tests {
     }
 
     #[test]
-    fn state_rejected_when_num_validators_exceeds_ssz_cap() {
+    fn validate_state_limits_rejects_registry_over_ssz_cap() {
         // A raised runtime knob must not admit a registry past the compile-time
-        // SSZ cap: num_validators above the cap is rejected even when the runtime
-        // validator_registry_limit is set higher.
-        let over_cap = config::VALIDATOR_REGISTRY_LIMIT as u64 + 1;
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("genesis.ssz");
-        // Empty registry + oversized scalar count isolates the num_validators bound.
-        let state = synthesize_state(over_cap, Vec::new(), 1_700_000_000);
-        std::fs::write(&path, encode(&state)).expect("write state");
+        // SSZ cap. The subject carries a REAL over-cap registry: the bound is
+        // registry-derived now, and an empty registry would trip the
+        // empty-registry check first. Calls `validate_state_limits` directly —
+        // routing through the load path would hit the SSZ decoder's own
+        // registry-limit check and surface a DecodeError instead.
+        let over_cap = config::VALIDATOR_REGISTRY_LIMIT + 1;
+        let state = synthesize_state(1_700_000_000, dummy_registry(over_cap as u64));
         let chain_config = ChainConfig {
-            validator_registry_limit: over_cap + 1_000,
+            validator_registry_limit: over_cap as u64 + 1_000,
             ..ChainConfig::default()
         };
 
-        let err = load_or_synthesize_state(Some(&path), &chain_config, dir.path())
-            .expect_err("num_validators exceeds SSZ cap");
+        let err =
+            validate_state_limits(&state, &chain_config).expect_err("registry exceeds SSZ cap");
 
         assert!(
             err.to_string().contains("SSZ validator-registry cap"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_state_limits_rejects_empty_registry() {
+        // An empty registry means a zero validator count: such a node rejects
+        // every attestation and can never propose. Refuse it as a chain anchor
+        // rather than starting a silent non-participant.
+        let state = synthesize_state(1_700_000_000, Vec::new());
+        let err = validate_state_limits(&state, &ChainConfig::default())
+            .expect_err("empty registry must be refused");
+        assert!(
+            err.to_string().contains("empty validator registry"),
             "unexpected error: {err:#}"
         );
     }

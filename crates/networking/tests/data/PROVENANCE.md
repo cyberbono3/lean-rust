@@ -53,7 +53,7 @@ and must not be read as such.
 | `validator3.signedattestation.ssz` | `SignedAttestation`          | 3252 | `f698770b0bf6ae48b597bee138698b4829b5452d762f4ba9b2db56a32c18fbeb` |
 | `two-attestations.blockbody.ssz`   | `BlockBody`                  |  276 | `0a786852dc25250a5f62918d10bc7a2d19d448cd4b696f015d2ca3ad8942fe10` |
 | `slot1-empty.signedblock.ssz`      | `SignedBlockWithAttestation` |  236 | `6210c7d3a20a8d046283fdbd2257543c3ee100f29342fa4c48d9095d19dfbf50` |
-| `genesis-4val.state.ssz`           | `State`                      |  478 | `663a7142e12afccbb2bc78fc83c72bef1df8617bfaabd38a900486d0520bb05f` |
+| `genesis-4val.state.ssz`           | `State`                      |  470 | `aef4c5885b6a13ac8598da56d93da0bd5fc3700203d0477dc16baa3a3a1c20d1` |
 
 The block-envelope refactor moves `slot1-empty.signedblock.ssz` here (from `wire-parity/`) as a
 self-generated devnet-1 vector, and re-shapes `two-attestations.blockbody.ssz`: the block body
@@ -66,6 +66,12 @@ the same reason: adding `validators: List[Validator, N]` to `State` changed the 
 decodes. There is no devnet-1 cross-client `State` blob to copy yet, so it is regenerated here as a
 genesis 4-validator state with a populated registry (4 × 60-byte `Validator` = 240-byte tail). It
 moves back under `wire-parity/` when a live devnet-1 peer supplies real bytes.
+
+Dropping `num_validators` from the in-state `Config` regenerated it again (478 → 470 bytes, new
+root): the config container went from two `u64` fields to one, shrinking the state's fixed part
+from 236 to 228 bytes and shifting every tail offset. The validator-set size now comes from the
+`validators` registry length, which is what the spec's `Config` — carrying only `genesis_time` —
+requires. The other three roots in the table are unchanged.
 
 They exist because the devnet-1 attestation wire has no published upstream corpus yet. The
 devnet-0 `SignedVote` blobs they replace (4136 and 8276 bytes) could not be re-encoded into the

@@ -196,6 +196,31 @@ impl Store {
         &self.config
     }
 
+    /// Validator-set size derived from the head block's post-state registry.
+    ///
+    /// The spec reads the head state's registry length at every use site
+    /// rather than caching a scalar, so a registry that changes at the head is
+    /// picked up without an explicit refresh.
+    ///
+    /// # Errors
+    /// [`ForkchoiceError::HeadStateNotFound`] when the head's post-state is
+    /// not tracked. Callers MUST propagate rather than substitute a default:
+    /// on the ingress path this count is the bound that keeps a peer from
+    /// flooding the vote pool with arbitrary validator ids, so an unknown
+    /// count has to fail closed.
+    ///
+    /// Only a corrupt store can reach the error: every real constructor
+    /// ([`Self::from_anchor`], [`Self::from_trusted_head`]) inserts the anchor
+    /// post-state under the head root. [`Store::default()`] does not, and is
+    /// documented as not a usable fork-choice state.
+    fn head_validator_count(&self) -> Result<u64, ForkchoiceError> {
+        let state = self
+            .states
+            .get(&self.head)
+            .ok_or(ForkchoiceError::HeadStateNotFound { root: self.head })?;
+        Ok(state.num_validators())
+    }
+
     /// Returns the current canonical head root.
     #[must_use]
     pub fn head(&self) -> Bytes32 {
@@ -353,15 +378,16 @@ impl Store {
     pub fn validate_attestation(&self, sv: &SignedAttestation) -> Result<(), ForkchoiceError> {
         let vote = &sv.message.data;
 
-        // Bound validator_id against config.num_validators BEFORE any
+        // Bound validator_id against the head post-state registry BEFORE any
         // block lookups. The vote pool is keyed by validator id; without
         // this gate a malicious peer can flood with arbitrary u64 ids
         // (multi-KB per pool entry) and OOM the process.
+        let num_validators = self.head_validator_count()?;
         let vid = sv.message.validator_id.get();
-        if vid >= self.config.num_validators {
+        if vid >= num_validators {
             return Err(ForkchoiceError::ValidatorIndexOutOfRange {
                 validator_id: vid,
-                num_validators: self.config.num_validators,
+                num_validators,
             });
         }
 
@@ -515,7 +541,7 @@ impl Store {
     pub(crate) fn update_safe_target(&mut self) -> Result<(), ForkchoiceError> {
         // Supermajority threshold: `ceil(2N/3)` — matches leanSpec's
         // `-(-N*2 // 3)`. Spelled with `u64::div_ceil` for overflow safety.
-        let min_target_score = self.config.num_validators.saturating_mul(2).div_ceil(3);
+        let min_target_score = self.head_validator_count()?.saturating_mul(2).div_ceil(3);
         let checkpoints = vote_head_checkpoints(&self.latest_new_votes);
         self.safe_target = get_fork_choice_head(
             &self.blocks,
@@ -1296,6 +1322,48 @@ mod attestation_tests {
             .lookup_block(missing, |root| ForkchoiceError::UnknownTargetBlock { root })
             .unwrap_err();
         assert_eq!(err, ForkchoiceError::UnknownTargetBlock { root: missing });
+    }
+
+    // -- validate_attestation: validator bound follows the head registry ---
+
+    #[test]
+    fn attestation_bound_follows_head_registry() {
+        // The bound is the head post-state's registry length, not a scalar
+        // snapshotted at the anchor.
+        let (store, roots) = store_with_chain_at_slot_3();
+        let target = Checkpoint::new(roots[2], Slot::new(2));
+        let source = Checkpoint::new(roots[0], Slot::ZERO);
+
+        let in_range = signed_vote(ValidatorIndex::new(3), target, target, source, Slot::new(2));
+        store.validate_attestation(&in_range).unwrap();
+
+        let out_of_range =
+            signed_vote(ValidatorIndex::new(4), target, target, source, Slot::new(2));
+        let err = store.validate_attestation(&out_of_range).unwrap_err();
+        assert_eq!(
+            err,
+            ForkchoiceError::ValidatorIndexOutOfRange {
+                validator_id: 4,
+                num_validators: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn validate_attestation_fails_closed_without_head_state() {
+        // A store with no tracked head post-state cannot know the bound. It
+        // must REJECT rather than admit the vote — this gate is what stops a
+        // peer flooding the pool with arbitrary validator ids.
+        let store = Store::default();
+        let target = Checkpoint::new(Bytes32::new([0xaa; 32]), Slot::ZERO);
+        let sv = signed_vote(ValidatorIndex::new(0), target, target, target, Slot::ZERO);
+        let err = store.validate_attestation(&sv).unwrap_err();
+        assert_eq!(
+            err,
+            ForkchoiceError::HeadStateNotFound {
+                root: Bytes32::zero()
+            }
+        );
     }
 
     // -- validate_attestation: rejection paths ----------------------------
