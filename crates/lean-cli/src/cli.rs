@@ -172,6 +172,16 @@ impl Cli {
     }
 }
 
+/// Parses the process arguments into a [`Cli`].
+///
+/// Exits the process on `--help`, `--version`, or a parse error, matching
+/// `clap`'s default behaviour. Exists so the binary entry point does not
+/// need `clap` in scope.
+#[must_use]
+pub fn parse() -> Cli {
+    Cli::parse()
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {

@@ -26,5 +26,6 @@ Source: [`diagrams/global-class.puml`](diagrams/global-class.puml).
   on `types`.
 - `runtime/chain` (lean-chain) is the integration hub of the runtime layer,
   composing `runtime/core`, `storage`, `forkchoice`, and `networking`.
-- `node` wires the runtime services together; `bin/lean-rust` is the thin entry
-  point over `lean-cli` and `node`.
+- `node` wires the runtime services together; `lean-cli` builds `node::Config`
+  and therefore sits over `node`; `bin/lean-rust` is the thin entry point over
+  `lean-cli`, holding only `main` and `run`.

@@ -9,11 +9,13 @@ run the node until shutdown. All reusable logic lives in `lean-cli` and the
 
 ## What it does
 
-1. Parses [`lean_cli::cli::Cli`] (`clap`).
-2. Installs tracing via [`lean_observability::init_tracing`] (verbosity,
-   optional rolling file sink).
+1. Parses [`lean_cli::cli::Cli`] via [`lean_cli::cli::parse`].
+2. Installs tracing via [`lean_cli::startup::init_tracing`], which wraps
+   `runtime::observability::init_tracing` (verbosity, optional rolling
+   file sink).
 3. Builds the genesis state/block and the libp2p identity
-   (`lean_cli::genesis`, `lean_cli::keygen`).
+   (`lean_cli::node_config`, backed by `lean_cli::genesis` and
+   `lean_cli::keygen`).
 4. Assembles the devnet `Node` with `node::new_devnet` and runs its
    lifecycle (`chain → p2p → sync → duties → http → metrics`), draining on
    the shutdown signal.
@@ -36,5 +38,6 @@ targets and `crates/fixtures/`.
 
 ## Dependencies
 
-Depends on `lean-cli`, `node`, `lean-core`, `lean-observability`,
-`lean-p2p-host`, and `clap`. No consensus logic of its own.
+Depends on `lean-cli`, `node`, `anyhow`, `tokio`, and `tracing`. No
+consensus logic and no wiring of its own — `main.rs` is `main` + `run`,
+and every helper it calls lives in `lean-cli`.

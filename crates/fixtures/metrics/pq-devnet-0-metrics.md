@@ -202,7 +202,7 @@ No regressions vs the doc; all devnet0-scale predictions hold.
 ## 7. Log warnings (full text)
 
 ```
-WARN lean_rust: --http-allow-origin is accepted for CLI compatibility but
+WARN lean_cli::startup: --http-allow-origin is accepted for CLI compatibility but
 NOT applied: no CORS layer is wired into the HTTP server. The HTTP API
 will respond with default axum headers regardless of this value. value="*"
 

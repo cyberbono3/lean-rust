@@ -5,13 +5,18 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "Library surface for the lean-rust binary: CLI parsing, genesis builders, identity keygen."
+description   = "Library surface for the lean-rust binary: CLI parsing, genesis builders, identity keygen, and the node composition wiring."
 
 [lints]
 workspace = true
 
 [dependencies]
 runtime            = { path = "../runtime" }
+# Composition root: `node::Config` and `node::StorageKind` appear in
+# `node_config::build_devnet_config`'s signature. The edge is acyclic —
+# `cargo tree -p node --edges normal,build,dev | grep -c lean-cli` is 0, and the
+# only crate depending on lean-cli is `bin/lean-rust`.
+node               = { path = "../node" }
 config             = { path = "../config" }
 protocol           = { path = "../protocol" }
 ssz                = { path = "../ssz" }
@@ -20,6 +25,9 @@ anyhow             = { workspace = true }
 clap               = { workspace = true }
 libp2p             = { workspace = true }
 tracing            = { workspace = true }
+# `shutdown::wait` installs the SIGINT/SIGTERM handlers. No feature list: the
+# workspace entry is `features = ["full"]`, which already includes `signal`.
+tokio              = { workspace = true }
 # ThreadRng via rand::rng() (production) + seeded StdRng (tests); rand 0.9,
 # matching crypto's port.
 rand               = { workspace = true }

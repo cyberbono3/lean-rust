@@ -2582,11 +2582,13 @@ dependencies = [
  "fixtures",
  "hex",
  "libp2p",
+ "node",
  "protocol",
  "rand 0.9.4",
  "runtime",
  "ssz",
  "tempfile",
+ "tokio",
  "tracing",
 ]
 
@@ -2595,15 +2597,8 @@ name = "lean-rust"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
- "config",
- "fixtures",
  "lean-cli",
  "node",
- "rand 0.9.4",
- "runtime",
- "ssz",
- "tempfile",
  "tokio",
  "tracing",
 ]

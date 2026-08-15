@@ -8,10 +8,6 @@ package "bin/lean-rust" #FFF4F4 {
   class Main <<bin>> {
     +main(): Result<()>  (#[tokio::main])
     -run(cli: Cli): Result<()>
-    -build_devnet_config(cli: &Cli): Result<node::Config>
-    -init_tracing(cli: &Cli): Result<TracingGuard>
-    -shutdown_signal(): Result<()>
-    +{static} AGENT_VERSION / DEFAULT_HTTP_ADDR / DEFAULT_METRICS_ADDR
   }
 }
 
@@ -48,6 +44,27 @@ package "lean-cli" #FFEEEE {
     +generate_and_write(path): Result<PeerId>
     +peer_id_from_file(path): Result<PeerId>
   }
+  class "startup fns" as Startup <<fns>> {
+    +init_tracing(cli: &Cli): Result<TracingGuard>
+    +log_startup_config(cli: &Cli)
+    +warn_unwired_flags(cli: &Cli)
+  }
+  class "commands fns" as Commands <<fns>> {
+    +dispatch(cli: &Cli): Result<Dispatch>
+  }
+  enum Dispatch <<enum>> {
+    Handled
+    RunNode
+  }
+  class "node_config fns" as NodeConfig <<fns>> {
+    +build_devnet_config(cli: &Cli): Result<node::Config>
+    +{static} AGENT_VERSION
+    -{static} DEFAULT_HTTP_ADDR / DEFAULT_IDENTITY_PATH
+    -{static} DEFAULT_METRICS_ADDR / DEFAULT_VALIDATORS_PATH
+  }
+  class "shutdown fns" as Shutdown <<fns>> {
+    +wait(): Result<()>
+  }
 }
 
 package "node" #FFE8E8 {
@@ -82,11 +99,16 @@ package "node" #FFE8E8 {
 
 ' relationships
 Main ..> Cli
+Main ..> Startup
+Main ..> Commands
+Main ..> NodeConfig
+Main ..> Shutdown
 Main ..> NewDevnet
-Main ..> NodeWireConfig
 Cli *-- Command
-Cli ..> Genesis
-Cli ..> Keygen
+Commands *-- Dispatch
+Commands ..> Keygen
+NodeConfig ..> Genesis
+NodeConfig ..> NodeWireConfig
 NewDevnet ..> NodeWireConfig
 NewDevnet ..> PublisherAdapter
 NewDevnet ..> GossipIngestService

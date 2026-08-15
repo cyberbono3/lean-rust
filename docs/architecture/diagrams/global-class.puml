@@ -144,6 +144,7 @@ node ..> "runtime/core (lean-core)"
 "lean-cli" ..> "runtime/duties (lean-duties)"
 "lean-cli" ..> "runtime/p2p (lean-p2p-host)"
 "lean-cli" ..> "observability (lean-observability)"
+"lean-cli" ..> node
 "bin/lean-rust" ..> "lean-cli"
 "bin/lean-rust" ..> node
 
