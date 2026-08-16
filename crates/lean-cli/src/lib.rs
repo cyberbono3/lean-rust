@@ -1,18 +1,7 @@
-//! Library surface for the `lean-rust` binary.
-//!
-//! Everything the binary does beyond `main` and `run` lives here, so the
-//! entry point at `bin/lean-rust/src/main.rs` is a genuinely thin shell:
-//!
-//! - [`cli`] — the `clap` parser and [`cli::parse`].
-//! - [`startup`] — tracing installation, the startup-configuration log
-//!   line, and warnings for accepted-but-unwired flags.
-//! - [`commands`] — subcommand dispatch (`devnet-config`, keygen, peer id).
-//! - [`node_config`] — CLI-to-node wiring: builds the devnet
-//!   [`node::Config`] handed to the composition root (`node::new_devnet`).
-//! - [`shutdown`] — SIGINT/SIGTERM handling.
-//! - [`genesis`], [`keygen`], [`validator_keygen`] — genesis builders and
-//!   offline key material.
-
+// The crate docs ARE the README. The module inventory used to be written out
+// in both, which meant every module added here had to be described twice —
+// `README.md` is now the single source.
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 pub mod cli;

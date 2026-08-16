@@ -2,10 +2,13 @@
 
 Library surface for the `lean-rust` binary.
 
-Carries the CLI parser, genesis builders, and identity keygen helpers so the
-binary entry-point (`bin/lean-rust/src/main.rs`) stays a thin shell that
-wires these into the runtime composition root (`node::new_devnet`). Kept as
-a library so the pieces are unit-testable without spawning the binary.
+Everything the binary does beyond `main` and `run` lives here, so the entry
+point (`bin/lean-rust/src/main.rs`) is a genuinely thin shell that wires
+these pieces into the runtime composition root (`node::new_devnet`). Kept as
+a library so each piece is unit-testable without spawning the binary.
+
+This file is also the crate documentation (`#![doc = include_str!]` in
+`src/lib.rs`), so the module inventory below has exactly one home.
 
 ## Scope
 
