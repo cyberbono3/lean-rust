@@ -22,7 +22,7 @@ else Ok(Dispatch::RunNode)
   Main -> Cli : node_config::build_devnet_config(&cli)
   Cli -> Gen : load_chain_config / load_or_synthesize_state / anchor_block_for_state
   Gen --> Cli : ChainConfig, State, Block
-  Cli --> Main : node::Config
+  Cli --> Main : Ok(node::Config)
   Main -> Devnet : new_devnet(config)
   activate Devnet
   Devnet -> Devnet : MemoryStore, Engine::from_anchor, ChainService
