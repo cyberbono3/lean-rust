@@ -23,7 +23,7 @@ a library so the pieces are unit-testable without spawning the binary.
   `startup configuration` log line, and warnings for flags that are
   accepted for CLI compatibility but not wired.
 - [`commands`](./src/commands.rs) — subcommand dispatch (`devnet-config`,
-  keygen, peer id) behind `dispatch(&Cli) -> Dispatch`.
+  keygen, peer id) behind `dispatch(&Cli) -> anyhow::Result<Dispatch>`.
 - [`node_config`](./src/node_config.rs) — CLI-to-node wiring: address
   defaults, identity-path precedence, storage-backend mapping, genesis
   synthesis, and validator-group selection, assembled into `node::Config`.
