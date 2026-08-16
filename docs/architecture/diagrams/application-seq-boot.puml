@@ -13,12 +13,12 @@ Main -> Cli : lean_cli::cli::parse()
 Cli --> Main : Cli
 Main -> Cli : startup::init_tracing(&cli)
 
-alt commands::dispatch(&cli) == Handled
+alt commands::dispatch(&cli) == Ok(Dispatch::Handled)
   Main -> Cli : commands::dispatch(&cli)
   Cli -> Gen : DevnetConfig | GeneratePrivateKey | PeerId | GenerateValidatorKeys
   Gen --> Cli : result
-  Cli --> Main : Dispatch::Handled (print result & return)
-else Dispatch::RunNode
+  Cli --> Main : Ok(Dispatch::Handled) (print result & return)
+else Ok(Dispatch::RunNode)
   Main -> Cli : node_config::build_devnet_config(&cli)
   Cli -> Gen : load_chain_config / load_or_synthesize_state / anchor_block_for_state
   Gen --> Cli : ChainConfig, State, Block
