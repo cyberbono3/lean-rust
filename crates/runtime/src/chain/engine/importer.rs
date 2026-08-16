@@ -1,6 +1,16 @@
 //! [`Engine::import_block`] and [`Engine::import_attestation`] — the network
 //! side of the engine surface.
 //!
+//! Votes reach fork choice through BOTH entry points, not only the second.
+//! `import_attestation` carries a gossip vote into the pending pool, while
+//! `import_block` folds the attestations a block carries in its BODY straight
+//! into the known pool. That second path is what lets a node which receives only
+//! blocks resolve the same head as one that also receives the gossip traffic.
+//!
+//! The envelope's `proposer_attestation` is deliberately NOT folded — it is
+//! covered by neither the block root nor the state root, so it is peer-mutable
+//! in a way body attestations are not. See `block_carried_votes`.
+//!
 //! Follows the upstream importer flow shape but uses
 //! Rust sum-type results: failures land inside the `Rejected` variant of
 //! the returned outcome instead of an `(outcome, error)` pair.
@@ -19,15 +29,22 @@
 //! - A `Rejected` from the state transition returns after
 //!   [`protocol::State::state_transition`] but before `track_block`.
 //!   `state_transition` is transactional (it computes the transition on a local
-//!   clone and swaps only on success — see `crates/protocol/src/state.rs:762`),
-//!   and `track_block` is the only subsequent mutator. So this `Rejected` arm
-//!   also leaves the store byte-equal.
+//!   clone at `crates/protocol/src/state.rs:834` and swaps at `:848`, only on
+//!   success), and `track_block` is the only mutator reachable before this
+//!   return. So this `Rejected` arm also leaves the store byte-equal.
+//! - The on-chain vote fold runs only AFTER `track_block` has committed, and it
+//!   returns no error. No rejection path can observe a partially folded pool,
+//!   and no on-chain vote can produce a rejection.
 
 use std::time::Instant;
 
 use forkchoice::Store;
-use protocol::{SignedAttestation, SignedBlockWithAttestation, State, Validators};
+use protocol::{
+    Attestation, BlockSignatures, BlockWithAttestation, SignedAttestation,
+    SignedBlockWithAttestation, State, Validators,
+};
 use ssz::HashTreeRoot;
+use tracing::warn;
 use types::Bytes32;
 
 use super::error::EngineError;
@@ -255,9 +272,145 @@ impl Engine {
     }
 }
 
-/// Runs the state transition, computes the post-state root, and tracks the
+/// Pairs each of the block's BODY attestations with the signature that belongs
+/// to it, in the positional layout [`verify_positional`] checks — body
+/// attestations first, index `i` to signature `i`.
+///
+/// # Why the proposer's attestation is NOT folded
+///
+/// `BlockWithAttestation::proposer_attestation` is deliberately excluded, and
+/// the exclusion is a security boundary rather than an oversight.
+///
+/// `block_root` — the value that identifies a block, deduplicates it on import,
+/// and anchors it in the store — is the hash-tree-root of the INNER
+/// [`protocol::Block`] alone. `proposer_attestation` is a sibling field of that
+/// block inside the envelope, so it enters no root the import path ever
+/// computes. The state transition does not read it either: it processes
+/// `block.body.attestations` and nothing else, so `state_root` cannot commit to
+/// it. The one gate that would cover it — the import-boundary signature verify —
+/// is inert whenever no verifier is injected, and the sync-backfill entry skips
+/// it structurally.
+///
+/// Folding it would therefore connect a peer-controlled field, covered by
+/// neither block identity nor the state root nor any active signature check,
+/// directly to the vote pool that head resolution scores. Two envelopes
+/// differing only in that field are indistinguishable to the duplicate check,
+/// so a peer could take an honest block, substitute an arbitrary vote for any
+/// validator index in the registry, and have it counted — while the honest copy
+/// of the same block is then discarded as a duplicate. The on-chain branch also
+/// evicts the victim's pending gossip vote, so the substitution deletes a real
+/// vote as well as adding a forged one.
+///
+/// Body attestations carry none of that exposure: they are inside
+/// `block.body`, hence inside `block_root`, and the state transition processes
+/// them, so a tampered body changes `state_root` and the block is rejected
+/// before this function is reached. Folding only the body keeps the invariant
+/// that what identifies a block is exactly what the fold ingests.
+///
+/// The cost is that a proposer's own vote still reaches fork choice only on the
+/// proposing node. That asymmetry closes on its own when the envelope is retired
+/// and the proposer's vote becomes an ordinary body entry — at which point it is
+/// covered by `block_root` and can be folded here for free.
+///
+/// # Signature pairing
+///
+/// The signature list is well-formed for the body when it holds at least
+/// `body.len()` entries. Block production signs only the proposer's own
+/// attestation and emits a ONE-element list regardless of body length, because
+/// assembling the full positional list is a later change, so a short list is the
+/// common case and each unpaired attestation falls back to a placeholder.
+///
+/// Fork-choice weight does not read the signature — the store scores the vote's
+/// `data.head` checkpoint — so a placeholder costs nothing today. It will stop
+/// being free once the positional list is assembled AND block production starts
+/// reading the pooled signature, because a placeholder written here would then
+/// be published in a produced block.
+///
+/// The paired signature is UNVERIFIED and, like the list length itself, is
+/// peer-controlled: `BlockSignatures` is not covered by `block_root` either.
+/// Nothing consumes the pooled signature today, so this is latent rather than
+/// exploitable — but whichever change starts consuming it MUST verify it rather
+/// than assume it was checked here.
+///
+/// Returns a lazy iterator rather than a `Vec` on purpose. A body at the
+/// attestation cap turns ~136 bytes of wire data per attestation into a
+/// 3252-byte `SignedAttestation`; collecting first would hold all of them live
+/// across `track_block` on a peer-controlled path. Streaming keeps at most one
+/// alive at a time, though every ACCEPTED vote is still retained by the store.
+fn block_carried_votes<'a>(
+    body: &'a [Attestation],
+    signatures: &'a BlockSignatures,
+) -> impl Iterator<Item = SignedAttestation> + 'a {
+    // `BlockSignatures` derefs to `[Signature]`.
+    body.iter()
+        .enumerate()
+        .map(move |(i, att)| SignedAttestation {
+            message: *att,
+            signature: signatures.get(i).cloned().unwrap_or_default(),
+        })
+}
+
+/// Folds `votes` into the store's KNOWN vote pool — the `is_from_block == true`
+/// branch of [`Store::process_attestation`], which is what the reference
+/// specification's `on_block` does (`forkchoice/store.py:562-:569 @ 0c9528ac`:
+/// block attestations go directly to the known payloads, which are the only ones
+/// `update_head` reads).
+///
+/// A vote that fails validation is SKIPPED, never propagated. The reference
+/// implementation applies no validity gate here at all, while this client's
+/// [`Store::validate_attestation`] caps a vote's slot against the LOCAL store
+/// clock. Propagating that error would let a node reject a block its own state
+/// transition accepted, purely because the sender's clock is ahead — two honest
+/// nodes would disagree about block validity, which is a permanent chain split.
+/// So this function returns nothing: there is no path from a bad on-chain vote
+/// to a `Rejected` import outcome.
+///
+/// Skipping is not free, and the cost is worth stating plainly. Because the slot
+/// cap is a function of the local clock, two honest nodes whose clocks differ by
+/// more than a slot fold DIFFERENT SUBSETS of the same block's attestations, and
+/// can therefore compute different heads until the laggard catches up. That is a
+/// soft, self-healing divergence, where propagating the error would be a hard,
+/// permanent one — it is the better trade, not a free one, and it is accepted
+/// deliberately here.
+///
+/// Reports one aggregated summary line per block rather than one line per
+/// failure: a body may carry up to `MAX_ATTESTATIONS` entries, all of which a
+/// peer can arrange to fail, and this runs while the caller holds the engine
+/// store lock.
+fn fold_block_attestations(store: &mut Store, votes: impl Iterator<Item = SignedAttestation>) {
+    let mut skipped = 0_usize;
+    let mut first_error = None;
+
+    for vote in votes {
+        let validator_id = vote.message.validator_id.get();
+        if let Err(error) = store.process_attestation(vote, true) {
+            skipped += 1;
+            if first_error.is_none() {
+                first_error = Some((validator_id, error));
+            }
+        }
+    }
+
+    if let Some((validator, error)) = first_error {
+        warn!(
+            skipped,
+            first_validator = validator,
+            first_error = %error,
+            "on-chain attestations skipped; block import continues",
+        );
+    }
+}
+
+/// Runs the state transition, folds the block's own attestations into the
+/// fork-choice vote pool, computes the post-state root, and tracks the
 /// `(block, post_state)` pair in `store`. Refreshes the canonical head on
 /// success. Returns the post-state root for the `Accepted` arm.
+///
+/// The fold sits between `track_block` and the head refresh, mirroring the
+/// reference specification's `forkchoice/store.py:562-:574 @ 0c9528ac`, and
+/// cannot fail — see [`fold_block_attestations`]. So this function's error paths
+/// are unchanged: the same three `?` sites can return early, and no new one is
+/// introduced.
 ///
 /// Timing is observation-only: the two `Instant` reads never influence control
 /// flow or the returned root. This function does not change the existing store
@@ -274,7 +427,40 @@ fn transition_and_track(
     let stf_elapsed = stf_start.elapsed();
 
     let post_state_root: Bytes32 = post_state.hash_tree_root().into();
-    store.track_block(signed_block.message.block, post_state)?;
+
+    // Split the envelope: `track_block` consumes the block by value, but the
+    // fold still needs the signature list. Only the body's attestation list is
+    // cloned — one wire-size copy, versus holding a `SignedAttestation` per
+    // attestation live across `track_block`. The clone cannot be avoided by
+    // reading the block back out of the store, because the fold needs
+    // `&mut store` and that borrow would conflict.
+    //
+    // The fold runs AFTER `track_block` for two reasons, neither of which is
+    // "so the block's own roots resolve" — `validate_attestation` resolves only
+    // `source.root` and `target.root`, and a body attestation cannot name its
+    // containing block anyway (its root is not known until the body is fixed).
+    // The actual reasons: `track_block` calls `adopt_post_state_checkpoints`,
+    // which can advance `latest_justified`, and the fold's
+    // `normalize_genesis_zero_source` reads exactly that; and folding earlier
+    // would break the mutation invariant documented at the top of this file,
+    // which states `track_block` is the only mutator reachable before the
+    // state-transition rejection path returns.
+    //
+    // `proposer_attestation` is dropped here, NOT folded. It is covered by
+    // neither `block_root` nor `state_root`, so folding it would make a
+    // peer-controlled field a fork-choice input — see [`block_carried_votes`].
+    let SignedBlockWithAttestation {
+        message: BlockWithAttestation { block, .. },
+        signature,
+    } = signed_block;
+    let body_attestations = block.body.attestations.clone();
+
+    store.track_block(block, post_state)?;
+
+    // The reference specification's `forkchoice/store.py:562-:574 @ 0c9528ac`
+    // folds the block's attestations into the known pool and THEN refreshes the
+    // head. The `accept_new_votes` below is that head refresh.
+    fold_block_attestations(store, block_carried_votes(&body_attestations, &signature));
 
     let fc_start = Instant::now();
     store.accept_new_votes()?;
@@ -757,5 +943,276 @@ mod tests {
         ));
         // The verifying path ran the gate once per positional element.
         assert_eq!(fake.call_count(), elements);
+    }
+
+    // -- block-carried attestation fold --------------------------------------
+
+    /// A vote at slot 1 whose three checkpoints are all `cp`. Only `head` carries
+    /// fork-choice weight; `validate_attestation` reads `source` and `target`.
+    fn vote(validator: u64, cp: Checkpoint) -> Attestation {
+        Attestation::new(
+            ValidatorIndex::new(validator),
+            AttestationData {
+                slot: Slot::new(1),
+                head: cp,
+                target: cp,
+                source: cp,
+            },
+        )
+    }
+
+    /// A signature filled with `byte`, distinguishable from every other one built
+    /// this way. Pairing bugs that swap or shift elements fail loudly instead of
+    /// passing by symmetry.
+    fn tagged_sig(byte: u8) -> Signature {
+        Signature::new([byte; Signature::LEN])
+    }
+
+    #[test]
+    fn block_carried_votes_pairs_positionally_when_lengths_match() {
+        let cp = Checkpoint::new(Bytes32::zero(), Slot::ZERO);
+        let body = [vote(0, cp), vote(1, cp)];
+        let signatures: BlockSignatures =
+            [tagged_sig(0xa1), tagged_sig(0xb2)].into_iter().collect();
+
+        let got: Vec<_> = block_carried_votes(&body, &signatures).collect();
+
+        assert_eq!(got.len(), 2, "only the body is folded; the proposer is not");
+        assert_eq!(got[0].message, body[0]);
+        assert_eq!(got[0].signature, tagged_sig(0xa1));
+        assert_eq!(got[1].message, body[1]);
+        assert_eq!(got[1].signature, tagged_sig(0xb2));
+    }
+
+    #[test]
+    fn block_carried_votes_falls_back_when_signature_list_is_short() {
+        // One element is what `Service::produce_block` emits today, regardless of
+        // body length. The first body attestation pairs with it; the rest fall
+        // back to the placeholder.
+        let cp = Checkpoint::new(Bytes32::zero(), Slot::ZERO);
+        let body = [vote(0, cp), vote(1, cp)];
+        let signatures: BlockSignatures = core::iter::once(tagged_sig(0xa1)).collect();
+
+        let got: Vec<_> = block_carried_votes(&body, &signatures).collect();
+
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].message, body[0]);
+        assert_eq!(got[0].signature, tagged_sig(0xa1));
+        assert_eq!(got[1].message, body[1]);
+        assert_eq!(
+            got[1].signature,
+            Signature::default(),
+            "an unpaired attestation takes the placeholder, never a mispaired signature",
+        );
+    }
+
+    #[test]
+    fn block_carried_votes_ignores_signatures_past_the_body() {
+        // An over-long list is what a well-formed positional block looks like to
+        // this helper: the trailing entry is the PROPOSER's signature, and since
+        // the proposer attestation is not folded, its signature must be dropped
+        // rather than mispaired onto a body attestation.
+        let cp = Checkpoint::new(Bytes32::zero(), Slot::ZERO);
+        let body = [vote(0, cp)];
+        let signatures: BlockSignatures =
+            [tagged_sig(0xa1), tagged_sig(0xff)].into_iter().collect();
+
+        let got: Vec<_> = block_carried_votes(&body, &signatures).collect();
+
+        assert_eq!(got.len(), 1, "one body attestation yields exactly one vote");
+        assert_eq!(got[0].signature, tagged_sig(0xa1));
+    }
+
+    #[test]
+    fn block_carried_votes_ignores_the_proposer_attestation() {
+        // The security boundary this change turns on: `proposer_attestation` is
+        // covered by neither `block_root` nor `state_root`, so it must never
+        // become a fork-choice input. An EMPTY body yields NO votes even though
+        // the envelope carries a proposer attestation and a signature for it.
+        let body: [Attestation; 0] = [];
+        let signatures: BlockSignatures = core::iter::once(tagged_sig(0xd4)).collect();
+
+        let got: Vec<_> = block_carried_votes(&body, &signatures).collect();
+
+        assert!(
+            got.is_empty(),
+            "an empty body must fold nothing; folding the proposer attestation \
+             would make a peer-controlled field a fork-choice input",
+        );
+    }
+
+    #[test]
+    fn fold_writes_to_the_known_pool_not_the_pending_pool() {
+        // Pins `is_from_block == true`, which no other test in this suite can
+        // distinguish: every other one starts from an empty pending pool, and
+        // `accept_new_votes` drains pending into known one statement after the
+        // fold, so both settings leave identical observable state.
+        //
+        // The asymmetry this exploits: the on-chain branch guards the known pool
+        // with `insert_if_newer`, so an OLDER vote loses. The gossip branch would
+        // instead park the older vote in pending, and `accept_new_votes` merges
+        // with `HashMap::extend`, which overwrites unconditionally — so the older
+        // vote would clobber the newer one.
+        let engine = engine_at_genesis(ENGINE_VALIDATORS);
+        let anchor = engine.head();
+        let anchor_cp = Checkpoint::new(anchor, Slot::ZERO);
+        let validator = ValidatorIndex::new(0);
+
+        // Seed the KNOWN pool with a slot-1 vote, directly rather than through
+        // the fold, so the seed is unaffected by the flag under test. Slot 1 is
+        // the newest admissible value: `validate_attestation` caps a vote at
+        // `current_vote_slot() + 1`, which is 1 on a genesis engine.
+        {
+            let mut store = engine.lock();
+            let newer = SignedAttestation {
+                message: Attestation::new(
+                    validator,
+                    AttestationData {
+                        slot: Slot::new(1),
+                        head: anchor_cp,
+                        target: anchor_cp,
+                        source: anchor_cp,
+                    },
+                ),
+                signature: Signature::default(),
+            };
+            assert!(store.process_attestation(newer, true).unwrap());
+        }
+
+        // Fold an OLDER vote (slot 0) for the same validator.
+        {
+            let mut store = engine.lock();
+            let older = SignedAttestation {
+                message: Attestation::new(
+                    validator,
+                    AttestationData {
+                        slot: Slot::ZERO,
+                        head: anchor_cp,
+                        target: anchor_cp,
+                        source: anchor_cp,
+                    },
+                ),
+                signature: Signature::default(),
+            };
+            fold_block_attestations(&mut store, core::iter::once(older));
+            store.accept_new_votes().unwrap();
+        }
+
+        let pooled_slot = engine.with_store(|s| {
+            s.latest_known_votes()
+                .get(&validator)
+                .map(|sv| sv.message.data.slot)
+        });
+        assert_eq!(
+            pooled_slot,
+            Some(Slot::new(1)),
+            "the on-chain branch must keep the NEWER known vote; seeing slot 0 \
+             means the fold wrote to the pending pool and accept_new_votes then \
+             clobbered the newer entry",
+        );
+    }
+
+    #[test]
+    fn invalid_on_chain_attestation_is_skipped_not_propagated() {
+        // Decision 2, tested against the fold directly rather than through
+        // `import_block`.
+        //
+        // Driving this through the import path is not possible, and the reason is
+        // worth recording: `process_block_header` writes the block header — which
+        // commits to the BODY root — into `state.latest_block_header`, and that
+        // field is inside the state's own hash-tree-root. So ANY hand-edit to
+        // `block.body.attestations` moves `state_root`, and the block is rejected
+        // as `StateRootMismatch` long before the fold runs — whether or not the
+        // STF would have tallied the vote. The body is structurally sealed
+        // against tampering, which is precisely why folding it is safe and why
+        // folding `proposer_attestation` would not be.
+        //
+        // That leaves the fold itself as the unit owning skip-on-invalid.
+        let engine = engine_at_genesis(ENGINE_VALIDATORS);
+        let anchor = engine.head();
+        let anchor_cp = Checkpoint::new(anchor, Slot::ZERO);
+
+        // First vote names an untracked target and fails `validate_attestation`;
+        // the second is valid against the anchor.
+        let bad = SignedAttestation {
+            message: Attestation::new(
+                ValidatorIndex::new(0),
+                AttestationData {
+                    slot: Slot::new(1),
+                    head: anchor_cp,
+                    target: Checkpoint::new(Bytes32::new([0xab; 32]), Slot::ZERO),
+                    source: anchor_cp,
+                },
+            ),
+            signature: Signature::default(),
+        };
+        let good = SignedAttestation {
+            message: vote(1, anchor_cp),
+            signature: Signature::default(),
+        };
+
+        {
+            let mut store = engine.lock();
+            // Returns `()` — there is no path from a bad on-chain vote to a
+            // `Rejected` import outcome, and the signature is what guarantees it.
+            fold_block_attestations(&mut store, [bad, good].into_iter());
+        }
+
+        // The bad vote was skipped and the good one still landed. A fold that
+        // aborted on the first error would leave this at 0.
+        assert_eq!(
+            StoreSnapshot::capture(&engine).known_votes_len,
+            1,
+            "a valid vote must survive a preceding invalid one",
+        );
+    }
+
+    #[test]
+    fn block_carried_vote_reaches_the_vote_pool() {
+        // The vote has to arrive in the body through the PRODUCTION path. A
+        // hand-appended vote that fork choice would accept is also one the STF
+        // tallies, which moves `state_root` and gets the block rejected before
+        // the fold runs. Producing the block instead means the body holds exactly
+        // what the producer's own pool contributed, and `state_root` is computed
+        // over that body.
+        let producer = engine_at_genesis(ENGINE_VALIDATORS);
+        let anchor = producer.head();
+        let anchor_cp = Checkpoint::new(anchor, Slot::ZERO);
+
+        assert!(matches!(
+            producer.import_attestation(SignedAttestation {
+                message: vote(0, anchor_cp),
+                signature: Signature::default(),
+            }),
+            AttestationImportResult::Accepted { .. }
+        ));
+        let signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
+        assert!(
+            !signed.message.block.body.attestations.is_empty(),
+            "precondition: the produced block must actually carry the vote, or \
+             the assertion below is vacuous",
+        );
+
+        // A fresh node that never saw the gossip vote.
+        let importer = engine_at_genesis(ENGINE_VALIDATORS);
+        let outcome = importer.import_block(signed);
+        assert!(
+            matches!(outcome, BlockImportResult::Accepted { .. }),
+            "{outcome:?}",
+        );
+
+        // Without the fold this is 0: the carried vote reaches no pool at all.
+        //
+        // What this CANNOT prove is which pool the fold wrote to. `accept_new_votes`
+        // runs one statement after the fold and drains pending into known, so both
+        // settings of `is_from_block` leave the same observable state here — and
+        // the same is true of both integration tests, which start from an empty
+        // pending pool. `fold_writes_to_the_known_pool_not_the_pending_pool` below
+        // is what actually pins that flag.
+        assert_eq!(
+            StoreSnapshot::capture(&importer).known_votes_len,
+            1,
+            "the block-carried vote must reach the vote pool; 0 means the fold never ran",
+        );
     }
 }
