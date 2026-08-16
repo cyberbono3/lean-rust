@@ -2,10 +2,13 @@
 
 Library surface for the `lean-rust` binary.
 
-Carries the CLI parser, genesis builders, and identity keygen helpers so the
-binary entry-point (`bin/lean-rust/src/main.rs`) stays a thin shell that
-wires these into the runtime composition root (`node::new_devnet`). Kept as
-a library so the pieces are unit-testable without spawning the binary.
+Everything the binary does beyond `main` and `run` lives here, so the entry
+point (`bin/lean-rust/src/main.rs`) is a genuinely thin shell that wires
+these pieces into the runtime composition root (`node::new_devnet`). Kept as
+a library so each piece is unit-testable without spawning the binary.
+
+This file is also the crate documentation (`#![doc = include_str!]` in
+`src/lib.rs`), so the module inventory below has exactly one home.
 
 ## Scope
 
@@ -19,10 +22,20 @@ a library so the pieces are unit-testable without spawning the binary.
   attestation-key generation and the coordinator-canonical `genesis_validators`
   pubkey manifest (the `generate-validator-keys` subcommand). Distinct from
   `keygen` (libp2p Ed25519 peer identity).
+- [`startup`](./src/startup.rs) — tracing installation, the one-shot
+  `startup configuration` log line, and warnings for flags that are
+  accepted for CLI compatibility but not wired.
+- [`commands`](./src/commands.rs) — subcommand dispatch (`devnet-config`,
+  keygen, peer id) behind `dispatch(&Cli) -> anyhow::Result<Dispatch>`.
+- [`node_config`](./src/node_config.rs) — CLI-to-node wiring: address
+  defaults, identity-path precedence, storage-backend mapping, genesis
+  synthesis, and validator-group selection, assembled into `node::Config`.
+- [`shutdown`](./src/shutdown.rs) — SIGINT/SIGTERM handling for the binary.
 
 ## Tier and dependencies
 
-Binary-support crate. Depends on `runtime`, `config`, `protocol`, `ssz`,
-`crypto` (the validator keygen port), `clap`, `libp2p`, `rand`, and `hex`. The
-runtime services themselves live in the `runtime/*` crates; this crate only
-assembles inputs for them.
+Binary-support crate. Depends on `runtime`, `node` (for `node::Config`,
+which it assembles), `config`, `protocol`, `ssz`, `crypto` (the validator
+keygen port), `clap`, `libp2p`, `tokio` (signal handling only), `rand`, and
+`hex`. The runtime services themselves live in `runtime`; this crate only
+assembles inputs for them and hands the result to `node::new_devnet`.

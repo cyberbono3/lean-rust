@@ -1,7 +1,7 @@
 # Application / Entry Layer
 
-Crates: `node` (composition root), `lean-cli` (argument parsing + subcommands),
-`bin/lean-rust` (binary entry point).
+Crates: `node` (composition root), `lean-cli` (argument parsing, subcommands,
+and the CLI-to-node boot wiring), `bin/lean-rust` (binary entry point).
 
 ## Class diagram
 
@@ -9,12 +9,14 @@ Crates: `node` (composition root), `lean-cli` (argument parsing + subcommands),
 
 Source: [`application-class.puml`](../diagrams/application-class.puml).
 
-- **`bin/lean-rust`** — `main` (`#[tokio::main]`) and the `run` boot routine:
-  `build_devnet_config`, `init_tracing`, `shutdown_signal`, plus default-address
-  constants.
-- **`lean-cli`** — the `Cli` flag struct, the `Command` subcommand enum
-  (`DevnetConfig`, `GeneratePrivateKey`, `PeerId`), and the `genesis` / `keygen`
-  helper functions.
+- **`bin/lean-rust`** — `main` (`#[tokio::main]`) and the `run` boot
+  routine, which delegates every step to `lean-cli`. Two functions, no
+  constants, no tests.
+- **`lean-cli`** — the `Cli` flag struct and `Command` subcommand enum, the
+  `genesis` / `keygen` helpers, and the boot wiring itself: `startup`
+  (tracing + startup log), `commands` (subcommand dispatch), `node_config`
+  (`build_devnet_config` and the default-address constants), and `shutdown`
+  (signal handling).
 - **`node`** — the node `Config` (wiring inputs), `new_devnet` (composition
   root), and the adapters that bridge ports to implementations:
   `PublisherAdapter` (duties `Publisher` → p2p), `RpcProviderAdapter` (p2p RPC →

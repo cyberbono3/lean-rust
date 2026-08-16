@@ -5,7 +5,7 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
-description   = "`lean-rust` binary entry-point: wires CLI + genesis + keygen into the runtime composition root."
+description   = "`lean-rust` binary entry-point: `main` + `run` only; all wiring lives in `lean-cli`."
 
 [[bin]]
 name          = "lean-rust"
@@ -17,15 +17,6 @@ workspace = true
 [dependencies]
 lean-cli           = { path = "../../crates/lean-cli" }
 node               = { path = "../../crates/node" }
-runtime = { path = "../../crates/runtime" }
-config             = { path = "../../crates/config" }
 anyhow             = { workspace = true }
-clap               = { workspace = true }
-rand               = { workspace = true }
 tokio              = { workspace = true }
 tracing            = { workspace = true }
-
-[dev-dependencies]
-fixtures = { path = "../../crates/fixtures" }
-tempfile = { workspace = true }
-ssz      = { path = "../../crates/ssz" }

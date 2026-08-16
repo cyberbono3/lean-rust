@@ -23,7 +23,7 @@ The default images are:
 | `LEAN_RUST_IMAGE` | `lean-rust:local` |
 | `GENESIS_GEN_IMAGE` | `ethpandaops/eth-beacon-genesis:pk910-leanchain` |
 | `GENESIS_OFFSET_SECS` | `60` |
-| `LEAN_RUST_RUST_LOG` | `info,lean_rust=debug,node=debug,runtime=debug,lean_wire=debug,libp2p_swarm=info,discv5=info` |
+| `LEAN_RUST_RUST_LOG` | `info,lean_rust=debug,lean_cli::startup=debug,lean_cli::node_config=debug,lean_cli::commands=debug,node=debug,runtime=debug,lean_wire=debug,libp2p_swarm=info,discv5=info` |
 
 ## Quick Start
 
