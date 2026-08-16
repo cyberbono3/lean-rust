@@ -6,8 +6,17 @@
 //! preimage, so a stored vote whose source was rewritten carries a signature over
 //! bytes the attester never signed.
 //!
-//! This test lives in `runtime` rather than beside the fix because `forkchoice`
-//! has no `crypto` dependency and the layer rules forbid adding one.
+//! This test lives in `runtime` rather than beside the fix because the derivation
+//! it pins — [`runtime::signing_domain::attestation_signing_inputs`], the single
+//! function BOTH the signer and the import-boundary verifier use — lives here, and
+//! `forkchoice` cannot reach it (no `runtime` dependency, and the layer rules
+//! forbid one). A byte-equality guard alone would fit in `forkchoice`; going
+//! through the shared derivation would not.
+//!
+//! What this does NOT establish: that anything verifies a pooled signature.
+//! `Engine::import_attestation` runs no verifier at all. The test proves the
+//! stored envelope still matches the signature it arrived with — not that the
+//! signature was ever valid.
 
 #![allow(
     missing_docs,
@@ -29,8 +38,14 @@ use types::{Bytes32, PublicKey, Signature};
 ///
 /// The message is `hash_tree_root(attestation)`, so ANY single-byte change
 /// anywhere in the attestation, `source.root` included, produces a different
-/// message and a rejection. That is what makes this a signature check rather than
-/// a field comparison.
+/// message and a rejection.
+///
+/// This is a byte comparison wearing the verify port's signature, not real
+/// cryptography — no leanSig runs here. It is nonetheless the right property:
+/// the HTR IS the signed preimage, so a real scheme rejects exactly when this
+/// fake does. Implementing [`Verifier`] rather than an inherent method keeps the
+/// fake's parameters pinned to the real port, so the two cannot drift apart
+/// silently.
 struct PinnedVerifier {
     epoch: u32,
     message: [u8; MESSAGE_LENGTH],

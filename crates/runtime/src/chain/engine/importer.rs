@@ -440,11 +440,10 @@ fn transition_and_track(
     // `source.root` and `target.root`, and a body attestation cannot name its
     // containing block anyway (its root is not known until the body is fixed).
     // The actual reasons: `track_block` calls `adopt_post_state_checkpoints`,
-    // which can advance `latest_justified`, and the fold's source resolution
-    // reads exactly that; and folding earlier
-    // would break the mutation invariant documented at the top of this file,
-    // which states `track_block` is the only mutator reachable before the
-    // state-transition rejection path returns.
+    // which can advance `latest_justified`, and the fold's source resolution reads
+    // exactly that; and folding earlier would break the mutation invariant
+    // documented at the top of this file, which states `track_block` is the only
+    // mutator reachable before the state-transition rejection path returns.
     //
     // `proposer_attestation` is dropped here, NOT folded. It is covered by
     // neither `block_root` nor `state_root`, so folding it would make a

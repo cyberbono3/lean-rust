@@ -369,10 +369,19 @@ impl Store {
     /// client tolerates a peer that does not, by resolving the source root for the
     /// lookup only — see [`Self::resolved_source_root`].
     ///
+    /// That resolution WIDENS this function's acceptance surface, which matters
+    /// because it is `pub`: a caller passing a genesis-placeholder vote now gets
+    /// `Ok(())` where it previously got [`ForkchoiceError::UnknownSourceBlock`].
+    /// The rejection used to happen here only because the caller had already
+    /// rewritten the vote; the resolution moved inward when that rewrite was
+    /// removed.
+    ///
     /// # Errors
-    /// - [`ForkchoiceError::UnknownSourceBlock`] when the vote's source root — as
-    ///   resolved by [`Self::resolved_source_root`], which is the declared root
-    ///   unless it is the genesis placeholder — is not tracked by the store.
+    /// - [`ForkchoiceError::UnknownSourceBlock`] when the vote's DECLARED source
+    ///   root is not tracked by the store. It always carries the declared root,
+    ///   never a resolved one: [`Self::resolved_source_root`] only substitutes when
+    ///   the justified root is already tracked, so a substituted root cannot fail
+    ///   this lookup.
     /// - [`ForkchoiceError::UnknownTargetBlock`] when the target checkpoint root
     ///   is not tracked by the store.
     /// - [`ForkchoiceError::SourceSlotExceedsTarget`] when either the
@@ -446,6 +455,16 @@ impl Store {
     /// byte-identical to the one that arrived or its signature verifies against
     /// nothing. A genesis-placeholder source is resolved for VALIDATION only —
     /// see [`Self::resolved_source_root`].
+    ///
+    /// Verbatim storage is NECESSARY for a pooled signature to be meaningful, not
+    /// SUFFICIENT for it to be trustworthy. Nothing on either ingress path verifies
+    /// it: the gossip caller runs no verifier at all, and the on-chain caller
+    /// SYNTHESIZES the envelope by pairing a body attestation with a positional
+    /// signature that no block root commits to, falling back to a default signature
+    /// when the list is short. So a pooled signature is peer-chosen or absent, and
+    /// whichever change starts CONSUMING it — publishing it in a produced block, or
+    /// forwarding it — MUST verify it rather than trusting that it arrived intact.
+    /// This function guarantees only that it was not corrupted after arrival.
     ///
     /// On-chain branch:
     /// 1. Insert into `latest_known_votes` only when strictly newer.

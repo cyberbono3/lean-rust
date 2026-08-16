@@ -220,14 +220,35 @@ impl Store {
     ///
     /// Filter (2) excludes a vote whose source is the all-zero genesis
     /// placeholder, because the store keeps such a vote verbatim rather than
-    /// rewriting it. That exclusion is deliberate. Including the vote would put a
-    /// body entry in the block that every node's state transition skips anyway —
-    /// three clauses of the `acceptable` conjunction fail for it
-    /// (`protocol::State::process_attestations`, `state.rs:751`, `:752`, `:754`),
-    /// and two of those failed even when the store still rewrote the source, so
-    /// such an entry has never carried weight. Once the producer assembles a full
-    /// positional signature list, the same entry would additionally publish a
-    /// signature made over bytes the attester never signed.
+    /// rewriting it. That exclusion is deliberate, and it has two distinct
+    /// consequences worth separating.
+    ///
+    /// It costs NOTHING in justification/finalization. `State::process_attestations`
+    /// skips such a vote on every node: for a genesis-anchored candidate its source
+    /// and target index are both 0, so three clauses of the `acceptable`
+    /// conjunction fail — the target's justified bit is already `true`, the source
+    /// root disagrees with `historical_block_hashes[0]`, and `target_slot >
+    /// source_slot` is `0 > 0`. Two of those failed even while the store still
+    /// rewrote the source, so the entry never contributed FFG weight either way.
+    ///
+    /// It DOES drop one real effect: LMD head weight on a blocks-only peer. Such a
+    /// peer folds body attestations into `latest_known_votes`, and `update_head`
+    /// scores `data.head` from that pool — a field no source resolution constrains.
+    /// So under the old rewrite the vote reached a blocks-only peer's head
+    /// computation, and now it does not. That is acceptable: the vote is cast at
+    /// slot 0 against the genesis anchor, any later vote from the same validator
+    /// supersedes it, and gossip still delivers it to every peer that subscribes.
+    /// Keeping it includable is not an option — once the producer assembles a full
+    /// positional signature list, the same entry would publish a signature made
+    /// over bytes the attester never signed.
+    ///
+    /// This filter is NOT a signature-integrity guard, and must not be mistaken for
+    /// one. It excludes one shape of unverifiable entry; it admits others. An
+    /// on-chain vote enters the pool with whatever signature the block-import path
+    /// paired with it — peer-supplied, and covered by no block root, or a default
+    /// when the list is short — and such a vote satisfies this filter cleanly.
+    /// Assembling the positional list therefore requires VERIFYING the pooled
+    /// signature at that point, not relying on anything here.
     ///
     /// The result is capped at `MAX_ATTESTATIONS - already_included.len()`
     /// so the candidate block never exceeds the SSZ list bound.
