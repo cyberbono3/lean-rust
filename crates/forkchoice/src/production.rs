@@ -218,6 +218,17 @@ impl Store {
     /// `latest_justified` (matches ream's `propose_block` pre-filter),
     /// (3) the vote must not already appear in `already_included`.
     ///
+    /// Filter (2) excludes a vote whose source is the all-zero genesis
+    /// placeholder, because the store keeps such a vote verbatim rather than
+    /// rewriting it. That exclusion is deliberate. Including the vote would put a
+    /// body entry in the block that every node's state transition skips anyway —
+    /// three clauses of the `acceptable` conjunction fail for it
+    /// (`protocol::State::process_attestations`, `state.rs:751`, `:752`, `:754`),
+    /// and two of those failed even when the store still rewrote the source, so
+    /// such an entry has never carried weight. Once the producer assembles a full
+    /// positional signature list, the same entry would additionally publish a
+    /// signature made over bytes the attester never signed.
+    ///
     /// The result is capped at `MAX_ATTESTATIONS - already_included.len()`
     /// so the candidate block never exceeds the SSZ list bound.
     fn collect_includable_votes(
@@ -296,7 +307,7 @@ mod tests {
     use super::*;
     use protocol::Slot;
 
-    use crate::test_fixtures::genesis_store;
+    use crate::test_fixtures::{genesis_store, signed_vote};
 
     /// Builds a 4-validator genesis store ready for `produce_block` /
     /// `produce_attestation_vote` calls.
@@ -470,6 +481,85 @@ mod tests {
                 state_slot: Slot::new(5),
                 target_slot: Slot::new(2),
             }
+        );
+    }
+
+    /// A vote carrying the genesis placeholder source must NOT be includable.
+    ///
+    /// The store resolves that placeholder for VALIDATION and stores the vote
+    /// verbatim, so its `source` stays `Checkpoint::default()` while the candidate
+    /// post-state's `latest_justified` is `(anchor_root, 0)`. The filter in
+    /// `collect_includable_votes` therefore rejects it — deliberately. Including it
+    /// would put an attestation in the body that every node's state transition
+    /// skips anyway, and that becomes an unverifiable entry once the producer
+    /// assembles a real positional signature list.
+    #[test]
+    fn a_genesis_placeholder_source_vote_is_not_includable() {
+        const PLACEHOLDER: ValidatorIndex = ValidatorIndex::new(0);
+        const CONTROL: ValidatorIndex = ValidatorIndex::new(2);
+
+        let (mut store, anchor) = produce_setup();
+        let anchor_checkpoint = Checkpoint::new(anchor, Slot::ZERO);
+
+        // Distinct indices: the pools are keyed by validator, so a shared index
+        // would make the second vote overwrite the first.
+        let placeholder = signed_vote(
+            PLACEHOLDER,
+            anchor_checkpoint,
+            anchor_checkpoint,
+            Checkpoint::default(),
+            Slot::ZERO,
+        );
+        let control = signed_vote(
+            CONTROL,
+            anchor_checkpoint,
+            anchor_checkpoint,
+            anchor_checkpoint,
+            Slot::ZERO,
+        );
+        assert!(store.process_attestation(placeholder, true).unwrap());
+        assert!(store.process_attestation(control, true).unwrap());
+
+        // Build the candidate post-state the producer actually filters against.
+        // `build_candidate_block` runs `process_block_header`, which seeds
+        // `latest_justified.root = parent_root` on the genesis transition. Do NOT
+        // substitute `dummy_state()` here — it returns a raw genesis state whose
+        // `latest_justified` is `Checkpoint::default()`, which would make the
+        // placeholder vote match the filter and invert this test.
+        let head_state = store
+            .state(&anchor)
+            .cloned()
+            .expect("the genesis anchor's post-state is tracked");
+        let (_, post_state) = build_candidate_block(
+            anchor,
+            Slot::new(1),
+            ValidatorIndex::new(1), // the round-robin proposer for slot 1 of 4
+            &head_state,
+            &[],
+        )
+        .expect("a candidate on the genesis anchor builds");
+        assert_eq!(
+            post_state.latest_justified, anchor_checkpoint,
+            "precondition: the candidate post-state must carry the SEEDED justified \
+             checkpoint, not the raw genesis zero — otherwise this test proves nothing",
+        );
+
+        let includable = store.collect_includable_votes(&post_state, &[]);
+        let included: Vec<ValidatorIndex> = includable
+            .iter()
+            .map(|sv| sv.message.validator_id)
+            .collect();
+
+        // The control proves the filter admits anything at all: an assertion that
+        // the placeholder is absent would otherwise pass on an empty result.
+        assert!(
+            included.contains(&CONTROL),
+            "control vote must be includable, got {included:?}",
+        );
+        assert!(
+            !included.contains(&PLACEHOLDER),
+            "a verbatim placeholder-source vote must NOT reach a produced block body, \
+             got {included:?}",
         );
     }
 }

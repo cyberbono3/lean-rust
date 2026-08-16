@@ -25,7 +25,10 @@ use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
 use config::INTERVALS_PER_SLOT;
-use protocol::{Block, Checkpoint, ProtocolConfig, SignedAttestation, Slot, State, ValidatorIndex};
+use protocol::{
+    AttestationData, Block, Checkpoint, ProtocolConfig, SignedAttestation, Slot, State,
+    ValidatorIndex,
+};
 use ssz::HashTreeRoot;
 use types::Bytes32;
 
@@ -359,12 +362,19 @@ impl Store {
     /// satisfy before [`Self::process_attestation`] will route it into
     /// either vote pool.
     ///
-    /// Mirrors leanSpec `forkchoice/store.py::Store.validate_attestation`.
+    /// Mirrors leanSpec `forkchoice/store.py::Store.validate_attestation`. The
+    /// source-root resolution below is a divergence introduced here: the reference
+    /// normalizes nothing on ingress (`store.py:299`, `:313`) because its producer
+    /// substitutes the genesis root before signing (`store.py:1289-:1295`). This
+    /// client tolerates a peer that does not, by resolving the source root for the
+    /// lookup only — see [`Self::resolved_source_root`].
     ///
     /// # Errors
-    /// - [`ForkchoiceError::UnknownSourceBlock`] /
-    ///   [`ForkchoiceError::UnknownTargetBlock`] when either checkpoint
-    ///   root is not tracked by the store.
+    /// - [`ForkchoiceError::UnknownSourceBlock`] when the vote's source root — as
+    ///   resolved by [`Self::resolved_source_root`], which is the declared root
+    ///   unless it is the genesis placeholder — is not tracked by the store.
+    /// - [`ForkchoiceError::UnknownTargetBlock`] when the target checkpoint root
+    ///   is not tracked by the store.
     /// - [`ForkchoiceError::SourceSlotExceedsTarget`] when either the
     ///   resolved source block's slot exceeds the resolved target block's
     ///   slot or `vote.source.slot > vote.target.slot`.
@@ -391,7 +401,7 @@ impl Store {
             });
         }
 
-        let source_block = self.lookup_block(vote.source.root, |root| {
+        let source_block = self.lookup_block(self.resolved_source_root(vote), |root| {
             ForkchoiceError::UnknownSourceBlock { root }
         })?;
         let target_block = self.lookup_block(vote.target.root, |root| {
@@ -431,6 +441,12 @@ impl Store {
     /// otherwise. Re-applying the same vote at the same `vote.slot` is a
     /// no-op (idempotency).
     ///
+    /// The envelope is stored VERBATIM. `source.root` is inside the signed
+    /// preimage (`hash_tree_root(attestation)`), so a vote must reach the pool
+    /// byte-identical to the one that arrived or its signature verifies against
+    /// nothing. A genesis-placeholder source is resolved for VALIDATION only —
+    /// see [`Self::resolved_source_root`].
+    ///
     /// On-chain branch:
     /// 1. Insert into `latest_known_votes` only when strictly newer.
     /// 2. Evict from `latest_new_votes` only when the pending entry is
@@ -446,10 +462,9 @@ impl Store {
     /// Forwards any error from [`Self::validate_attestation`].
     pub fn process_attestation(
         &mut self,
-        mut signed_vote: SignedAttestation,
+        signed_vote: SignedAttestation,
         is_from_block: bool,
     ) -> Result<bool, ForkchoiceError> {
-        self.normalize_genesis_zero_source(&mut signed_vote);
         self.validate_attestation(&signed_vote)?;
 
         let validator = signed_vote.message.validator_id;
@@ -478,23 +493,42 @@ impl Store {
         Slot::new(self.time.slot())
     }
 
-    /// Ream local-pq slot-0 gossip votes use a zero source checkpoint root
-    /// while targeting the genesis anchor. lean-rust stores the slot-0
-    /// justified checkpoint at the anchor root, so normalize exactly that
-    /// genesis shape before validation/storage. Non-genesis zero roots still
-    /// fail normal source lookup.
-    fn normalize_genesis_zero_source(&self, signed_vote: &mut SignedAttestation) {
-        let vote = &mut signed_vote.message.data;
-        if vote.source == Checkpoint::default()
+    /// Resolves the block root a vote's `source` checkpoint refers to, WITHOUT
+    /// editing the vote.
+    ///
+    /// Some peers emit a slot-0 vote whose source checkpoint is still the all-zero
+    /// placeholder, because their producer had not yet substituted the real genesis
+    /// root. This store keeps the slot-0 justified checkpoint at the anchor root
+    /// ([`Self::from_anchor`]), so that placeholder means "the anchor" here, and
+    /// resolving it keeps such a vote admissible.
+    ///
+    /// The resolution is READ-ONLY by necessity, not by preference. A vote's
+    /// signature is made over `hash_tree_root(attestation)` and `source.root` is
+    /// inside that preimage, so writing a resolved root back into the vote would
+    /// leave a stored envelope whose signature verifies against nothing — and, once
+    /// the producer assembles a full positional signature list, would publish that
+    /// envelope in a block. The reference implementation substitutes on the
+    /// PRODUCER side (`forkchoice/store.py:1289-:1295 @ 0c9528ac`), before anything
+    /// is signed, and never edits a payload on ingress
+    /// (`store.py:363`, `:388-:390`).
+    ///
+    /// The guard stays narrow: only an all-zero source against a slot-0 anchor this
+    /// store has actually tracked resolves. Every other zero root falls through and
+    /// fails the normal source lookup.
+    fn resolved_source_root(&self, vote: &AttestationData) -> Bytes32 {
+        let is_genesis_placeholder = vote.source == Checkpoint::default()
             && vote.target.slot.is_zero()
             && vote.target.root == self.latest_justified.root
             && self.latest_justified.slot.is_zero()
             && self
                 .blocks
                 .get(&self.latest_justified.root)
-                .is_some_and(|block| block.slot.is_zero())
-        {
-            vote.source.root = self.latest_justified.root;
+                .is_some_and(|block| block.slot.is_zero());
+
+        if is_genesis_placeholder {
+            self.latest_justified.root
+        } else {
+            vote.source.root
         }
     }
 
@@ -1106,6 +1140,7 @@ mod tick_interval_tests {
 mod attestation_tests {
     use super::*;
     use protocol::{Checkpoint, Slot, ValidatorIndex};
+    use ssz::encode;
     use types::Signature;
 
     use crate::test_fixtures::{pinned_chain, signed_vote, signed_vote_at};
@@ -1253,7 +1288,37 @@ mod attestation_tests {
     }
 
     #[test]
-    fn gossip_normalizes_ream_genesis_zero_source_vote() {
+    fn resolved_source_root_maps_the_genesis_placeholder_to_the_anchor() {
+        let (store, roots) = store_with_chain_at_slot_3();
+        let anchor = Checkpoint::new(roots[0], Slot::ZERO);
+        let vote = AttestationData {
+            slot: Slot::ZERO,
+            head: anchor,
+            target: anchor,
+            source: Checkpoint::default(),
+        };
+
+        assert_eq!(store.resolved_source_root(&vote), roots[0]);
+    }
+
+    #[test]
+    fn resolved_source_root_leaves_a_declared_root_untouched() {
+        // The negative case: without it the guard could widen into "always
+        // return latest_justified" and every test above would still pass.
+        let (store, roots) = store_with_chain_at_slot_3();
+        let declared = Checkpoint::new(roots[1], Slot::ONE);
+        let vote = AttestationData {
+            slot: Slot::ONE,
+            head: declared,
+            target: declared,
+            source: declared,
+        };
+
+        assert_eq!(store.resolved_source_root(&vote), roots[1]);
+    }
+
+    #[test]
+    fn gossip_accepts_genesis_placeholder_source_without_rewriting_it() {
         let (mut store, roots) = store_with_chain_at_slot_3();
         let anchor = Checkpoint::new(roots[0], Slot::ZERO);
         let vote = signed_vote(
@@ -1268,8 +1333,61 @@ mod attestation_tests {
         let stored = store
             .latest_new_votes()
             .get(&ValidatorIndex::new(0))
-            .expect("normalized vote should enter pending pool");
-        assert_eq!(stored.message.data.source, anchor);
+            .expect("the placeholder-source vote should enter the pending pool");
+        // The stored source is the exact INPUT value, not the resolved one. This
+        // is an identity property, so it rules out ANY rewrite rather than one
+        // particular rewrite target.
+        assert_eq!(stored.message.data.source, Checkpoint::default());
+    }
+
+    #[test]
+    fn signed_attestation_round_trips_byte_identical() {
+        // The two pools are written by different statements, so both branches are
+        // covered: `true` inserts into `latest_known_votes`, `false` into
+        // `latest_new_votes`.
+        let cases: [(&str, bool); 2] = [("gossip branch", false), ("on-chain branch", true)];
+
+        for (name, is_from_block) in cases {
+            let (mut store, roots) = store_with_chain_at_slot_3();
+            let anchor = Checkpoint::new(roots[0], Slot::ZERO);
+
+            // The genesis-placeholder shape: an all-zero source against the anchor.
+            // This is the ONLY input the resolution touches, so a vote that did not
+            // trigger it would pass before and after the fix.
+            let mut before = signed_vote(
+                ValidatorIndex::new(0),
+                anchor,
+                anchor,
+                Checkpoint::default(),
+                Slot::ZERO,
+            );
+            // `signed_vote` hardcodes `Signature::zero()`, and an all-zero signature
+            // cannot distinguish a preserved one from a dropped one.
+            before.signature = Signature::new([0x5a; Signature::LEN]);
+            let wire_before = encode(&before);
+
+            assert!(
+                store
+                    .process_attestation(before.clone(), is_from_block)
+                    .expect("the genesis-placeholder source must still resolve"),
+                "case {name}: the vote must be accepted, not merely left unmodified",
+            );
+
+            let pool = if is_from_block {
+                store.latest_known_votes()
+            } else {
+                store.latest_new_votes()
+            };
+            let stored = pool.get(&ValidatorIndex::new(0)).unwrap_or_else(|| {
+                panic!("case {name}: the accepted vote is missing from the pool")
+            });
+
+            assert_eq!(
+                encode(stored),
+                wire_before,
+                "case {name}: the stored envelope must be byte-identical to the one that arrived",
+            );
+        }
     }
 
     #[test]
