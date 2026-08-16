@@ -4,7 +4,7 @@
 //! precedence, storage-backend mapping, genesis synthesis, and
 //! validator-group selection.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -22,9 +22,15 @@ use crate::genesis;
 /// `bin/lean-rust/tests/agent_version.rs` pins the two together.
 pub const AGENT_VERSION: &str = concat!("lean-rust/", env!("CARGO_PKG_VERSION"));
 
-const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:5052";
+const DEFAULT_HTTP_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5052);
 const DEFAULT_IDENTITY_PATH: &str = "p2p_priv_key";
-const DEFAULT_METRICS_ADDR: &str = "127.0.0.1:9090";
+const DEFAULT_METRICS_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9090);
+
+// Not the same default as `runtime::duties::DEFAULT_VALIDATORS_PATH`, and this
+// one wins: `build_devnet_config` always overrides the field, so the `runtime`
+// default is only ever seen by callers that build a `duties::Config`
+// themselves. Kept separate because that one resolves relative to `runtime`'s
+// own manifest dir, while this one is made absolute by `workspace_path`.
 const DEFAULT_VALIDATORS_PATH: &str = "crates/runtime/tests/duties_fixtures/validators.yaml";
 
 /// Assembles the devnet node configuration from the parsed CLI.
@@ -32,20 +38,20 @@ const DEFAULT_VALIDATORS_PATH: &str = "crates/runtime/tests/duties_fixtures/vali
 /// # Errors
 ///
 /// Returns an error if no listen address was configured, if genesis cannot
-/// be loaded or synthesized, if the libp2p host options are invalid, if a
-/// socket address fails to parse, or if `--storage persistent` was given
+/// be loaded or synthesized, if the libp2p host options are invalid, if the
+/// duties inputs are rejected, or if `--storage persistent` was given
 /// without `--storage-path`.
 pub fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
-    let listen_address = selected_listen_address(cli)?;
+    let listen_address = listen_address(cli)?;
     let chain_config = genesis::load_chain_config(cli.genesis_config.as_deref())?;
-    let validators_path = selected_validators_path(cli);
+    let validators_path = validators_path(cli);
     let genesis_state = genesis::load_or_synthesize_state(
         cli.genesis_state.as_deref(),
         &chain_config,
         &validators_path,
     )?;
     let genesis_block = genesis::anchor_block_for_state(&genesis_state)?;
-    let identity_path = selected_identity_path(cli);
+    let identity_path = identity_path(cli);
 
     let p2p = HostOptions::try_new(
         listen_address,
@@ -55,33 +61,20 @@ pub fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
     )
     .context("build p2p host options")?;
 
-    let duties = runtime::duties::Config::default()
+    // `--node-id` is the only override: leaving it unset keeps the group that
+    // `Config::default` already carries, rather than reading that default back
+    // out and feeding it through the validating builder again.
+    let mut duties = runtime::duties::Config::default()
         .with_validators_path(validators_path)
-        .context("build duties config")?
-        .with_validator_group(selected_validator_group(cli))
-        .context("build duties config")?
-        .with_genesis_time_unix(runtime::duties::GenesisTimeUnix::new(
-            genesis_state.config.genesis_time,
-        ));
-
-    let storage = match cli.storage {
-        StorageBackend::Memory => {
-            if let Some(path) = cli.storage_path.as_deref() {
-                warn!(
-                    path = %path.display(),
-                    "--storage-path is ignored because --storage is memory; pass --storage persistent to use it",
-                );
-            }
-            node::StorageKind::Memory
-        }
-        StorageBackend::Persistent => {
-            let path = cli
-                .storage_path
-                .clone()
-                .context("--storage persistent requires --storage-path")?;
-            node::StorageKind::Persistent(path)
-        }
-    };
+        .context("set duties validators path")?;
+    if let Some(group) = cli.node_id.as_deref() {
+        duties = duties
+            .with_validator_group(group)
+            .context("set duties validator group")?;
+    }
+    let duties = duties.with_genesis_time_unix(runtime::duties::GenesisTimeUnix::new(
+        genesis_state.config.genesis_time,
+    ));
 
     // `--metrics` is accepted for local-pq CLI compatibility. Metrics are
     // already always wired into the current devnet node composition.
@@ -89,20 +82,16 @@ pub fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
         node: NodeConfig::default(),
         p2p,
         duties,
-        http_addr: selected_socket_addr(cli.http_address, cli.http_port, DEFAULT_HTTP_ADDR)?,
-        metrics_addr: selected_socket_addr(
-            cli.metrics_address,
-            cli.metrics_port,
-            DEFAULT_METRICS_ADDR,
-        )?,
+        http_addr: socket_addr(cli.http_address, cli.http_port, DEFAULT_HTTP_ADDR),
+        metrics_addr: socket_addr(cli.metrics_address, cli.metrics_port, DEFAULT_METRICS_ADDR),
         genesis_state,
         genesis_block,
-        storage,
+        storage: storage_kind(cli)?,
         validator_secrets_dir: cli.validator_secrets_dir.clone(),
     })
 }
 
-fn selected_listen_address(cli: &Cli) -> Result<&str> {
+fn listen_address(cli: &Cli) -> Result<&str> {
     let listen_address = cli
         .listen_address()
         .context("--devnet-listen-addresses must include at least one address")?;
@@ -116,38 +105,33 @@ fn selected_listen_address(cli: &Cli) -> Result<&str> {
     Ok(listen_address)
 }
 
-fn parse_socket_addr(raw: &str) -> Result<SocketAddr> {
-    raw.parse()
-        .with_context(|| format!("parse socket address {raw:?}"))
-}
-
-fn selected_socket_addr(
-    address: Option<IpAddr>,
-    port: Option<u16>,
-    default_raw: &str,
-) -> Result<SocketAddr> {
-    let default = parse_socket_addr(default_raw)?;
-    Ok(SocketAddr::new(
+fn socket_addr(address: Option<IpAddr>, port: Option<u16>, default: SocketAddr) -> SocketAddr {
+    SocketAddr::new(
         address.unwrap_or_else(|| default.ip()),
         port.unwrap_or(default.port()),
-    ))
+    )
 }
 
-fn selected_validators_path(cli: &Cli) -> PathBuf {
+fn storage_kind(cli: &Cli) -> Result<node::StorageKind> {
+    // A `--storage-path` given under the memory backend is ignored, with a
+    // warning from `startup::warn_unwired_flags`.
+    match cli.storage {
+        StorageBackend::Memory => Ok(node::StorageKind::Memory),
+        StorageBackend::Persistent => Ok(node::StorageKind::Persistent(
+            cli.storage_path
+                .clone()
+                .context("--storage persistent requires --storage-path")?,
+        )),
+    }
+}
+
+fn validators_path(cli: &Cli) -> PathBuf {
     cli.validator_registry_path
         .clone()
         .unwrap_or_else(|| workspace_path(DEFAULT_VALIDATORS_PATH))
 }
 
-fn selected_validator_group(cli: &Cli) -> String {
-    cli.node_id.clone().unwrap_or_else(|| {
-        runtime::duties::Config::default()
-            .validator_group()
-            .to_owned()
-    })
-}
-
-fn selected_identity_path(cli: &Cli) -> PathBuf {
+fn identity_path(cli: &Cli) -> PathBuf {
     if let Some(path) = &cli.private_key_path {
         path.clone()
     } else if let Some(data_dir) = &cli.data_dir {
@@ -195,8 +179,15 @@ mod tests {
         path
     }
 
-    fn parse_path(path: &Path) -> &str {
+    fn as_str(path: &Path) -> &str {
         path.to_str().expect("test path must be utf-8")
+    }
+
+    /// Parses `args` and builds the config, for the cases that expect both to
+    /// succeed. Tests asserting a failure call the two steps directly.
+    fn config_from<const N: usize>(args: [&str; N]) -> node::Config {
+        let cli = Cli::try_parse_from(args).expect("parse CLI args");
+        build_devnet_config(&cli).expect("build config")
     }
 
     #[test]
@@ -206,9 +197,7 @@ mod tests {
 
     #[test]
     fn build_devnet_config_synthesizes_genesis_when_state_is_absent() {
-        let cli = Cli::try_parse_from(["lean-rust"]).expect("parse defaults");
-
-        let config = build_devnet_config(&cli).expect("build config");
+        let config = config_from(["lean-rust"]);
 
         assert_eq!(config.genesis_state.num_validators(), 30);
         assert_eq!(
@@ -221,16 +210,13 @@ mod tests {
     fn build_devnet_config_uses_validator_registry_and_node_id() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let validators_path = write_validator_registry(dir.path());
-        let cli = Cli::try_parse_from([
+        let config = config_from([
             "lean-rust",
             "--validator-registry-path",
-            parse_path(&validators_path),
+            as_str(&validators_path),
             "--node-id",
             "leanrust_1",
-        ])
-        .expect("parse local-pq duties flags");
-
-        let config = build_devnet_config(&cli).expect("build config");
+        ]);
 
         assert_eq!(config.duties.validators_path(), validators_path.as_path());
         assert_eq!(config.duties.validator_group(), "leanrust_1");
@@ -241,10 +227,7 @@ mod tests {
     fn build_devnet_config_uses_data_dir_for_default_identity_path() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let data_dir = dir.path().join("node-data");
-        let cli = Cli::try_parse_from(["lean-rust", "--data-dir", parse_path(&data_dir)])
-            .expect("parse data dir");
-
-        let config = build_devnet_config(&cli).expect("build config");
+        let config = config_from(["lean-rust", "--data-dir", as_str(&data_dir)]);
 
         assert_eq!(
             config.p2p.identity_path().as_path(),
@@ -257,16 +240,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("create temp dir");
         let data_dir = dir.path().join("node-data");
         let private_key_path = dir.path().join("keys/node1.key");
-        let cli = Cli::try_parse_from([
+        let config = config_from([
             "lean-rust",
             "--data-dir",
-            parse_path(&data_dir),
+            as_str(&data_dir),
             "--private-key-path",
-            parse_path(&private_key_path),
-        ])
-        .expect("parse identity flags");
-
-        let config = build_devnet_config(&cli).expect("build config");
+            as_str(&private_key_path),
+        ]);
 
         assert_eq!(
             config.p2p.identity_path().as_path(),
@@ -276,7 +256,7 @@ mod tests {
 
     #[test]
     fn build_devnet_config_wires_http_and_metrics_addresses() {
-        let cli = Cli::try_parse_from([
+        let config = config_from([
             "lean-rust",
             "--http-address",
             "0.0.0.0",
@@ -287,34 +267,31 @@ mod tests {
             "127.0.0.1",
             "--metrics-port",
             "8081",
-        ])
-        .expect("parse api flags");
-
-        let config = build_devnet_config(&cli).expect("build config");
+        ]);
 
         assert_eq!(config.http_addr, "0.0.0.0:5053".parse().expect("addr"));
         assert_eq!(config.metrics_addr, "127.0.0.1:8081".parse().expect("addr"));
     }
 
     #[test]
-    fn build_devnet_config_metrics_flag_is_compatibility_noop() {
-        let without_metrics =
-            Cli::try_parse_from(["lean-rust"]).expect("parse without metrics flag");
-        let with_metrics =
-            Cli::try_parse_from(["lean-rust", "--metrics"]).expect("parse with metrics flag");
+    fn build_devnet_config_falls_back_to_the_default_addresses() {
+        let config = config_from(["lean-rust"]);
 
-        let without_metrics =
-            build_devnet_config(&without_metrics).expect("build config without metrics flag");
-        let with_metrics =
-            build_devnet_config(&with_metrics).expect("build config with metrics flag");
+        assert_eq!(config.http_addr, DEFAULT_HTTP_ADDR);
+        assert_eq!(config.metrics_addr, DEFAULT_METRICS_ADDR);
+    }
+
+    #[test]
+    fn build_devnet_config_metrics_flag_is_compatibility_noop() {
+        let without_metrics = config_from(["lean-rust"]);
+        let with_metrics = config_from(["lean-rust", "--metrics"]);
 
         assert_eq!(without_metrics.metrics_addr, with_metrics.metrics_addr);
     }
 
     #[test]
     fn build_devnet_config_defaults_to_memory_storage() {
-        let cli = Cli::try_parse_from(["lean-rust"]).expect("parse defaults");
-        let config = build_devnet_config(&cli).expect("build config");
+        let config = config_from(["lean-rust"]);
         assert!(matches!(config.storage, node::StorageKind::Memory));
     }
 
@@ -322,9 +299,7 @@ mod tests {
     fn memory_backend_ignores_storage_path() {
         // --storage-path under the memory backend is ignored (with a startup
         // warning); the resolved backend stays Memory.
-        let cli = Cli::try_parse_from(["lean-rust", "--storage-path", "/tmp/ignored"])
-            .expect("parse memory with stray storage path");
-        let config = build_devnet_config(&cli).expect("build config");
+        let config = config_from(["lean-rust", "--storage-path", "/tmp/ignored"]);
         assert!(matches!(config.storage, node::StorageKind::Memory));
     }
 
@@ -338,15 +313,13 @@ mod tests {
 
     #[test]
     fn build_devnet_config_maps_persistent_storage_path() {
-        let cli = Cli::try_parse_from([
+        let config = config_from([
             "lean-rust",
             "--storage",
             "persistent",
             "--storage-path",
             "/tmp/lean-store",
-        ])
-        .expect("parse persistent storage flags");
-        let config = build_devnet_config(&cli).expect("build config");
+        ]);
         assert!(matches!(
             config.storage,
             node::StorageKind::Persistent(ref p) if p == Path::new("/tmp/lean-store")

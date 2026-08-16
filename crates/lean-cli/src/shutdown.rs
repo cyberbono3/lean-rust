@@ -32,6 +32,5 @@ pub async fn wait() -> Result<()> {
 /// Returns an error if the `SIGINT` listener fails.
 #[cfg(not(unix))]
 pub async fn wait() -> Result<()> {
-    tokio::signal::ctrl_c().await.context("listen for SIGINT")?;
-    Ok(())
+    tokio::signal::ctrl_c().await.context("listen for SIGINT")
 }

@@ -1,15 +1,16 @@
 //! Startup sequencing for the `lean-rust` binary.
 //!
 //! Three steps, in this order: install tracing, emit the one-shot
-//! `startup configuration` line, then warn about flags that are accepted
-//! for CLI compatibility but not wired to anything. Tracing must come
-//! first — everything after it logs.
+//! `startup configuration` line, then warn about flags that parsed but
+//! will not be applied — accepted-for-compatibility flags and flags the
+//! chosen mode ignores. Tracing must come first — everything after it
+//! logs.
 
 use anyhow::{bail, Context, Result};
 use runtime::observability::{FileSink, TracingGuard};
 use tracing::{info, warn};
 
-use crate::cli::Cli;
+use crate::cli::{Cli, StorageBackend};
 
 const DEFAULT_LOG_PREFIX: &str = "lean-rust";
 
@@ -30,14 +31,12 @@ pub fn init_tracing(cli: &Cli) -> Result<TracingGuard> {
 
 /// Emits the single `startup configuration` line summarising the resolved CLI.
 pub fn log_startup_config(cli: &Cli) {
-    let rust_log = std::env::var_os("RUST_LOG");
-    let rust_log_present = rust_log.is_some();
-    let rust_log_non_empty = rust_log.as_deref().is_some_and(|value| !value.is_empty());
-
     info!(
         effective_verbosity = %cli.verbosity(),
-        rust_log_present,
-        rust_log_non_empty,
+        // The value, not two booleans about it: `RUST_LOG` overrides
+        // `effective_verbosity` entirely, so its content is what explains
+        // the levels an operator then sees.
+        rust_log = ?std::env::var_os("RUST_LOG"),
         data_dir = ?cli.data_dir,
         genesis_config = ?cli.genesis_config,
         genesis_state = ?cli.genesis_state,
@@ -53,12 +52,12 @@ pub fn log_startup_config(cli: &Cli) {
         metrics_address = ?cli.metrics_address,
         metrics_port = ?cli.metrics_port,
         log_dir_path = ?cli.log_dir_path,
-        log_dir_prefix = ?selected_log_prefix(cli),
+        log_dir_prefix = ?active_log_prefix(cli),
         "startup configuration",
     );
 }
 
-/// Warns about flags accepted for CLI compatibility that have no effect.
+/// Warns about flags that were accepted but will not be applied.
 pub fn warn_unwired_flags(cli: &Cli) {
     if let Some(origin) = cli.http_allow_origin.as_deref() {
         warn!(
@@ -66,12 +65,23 @@ pub fn warn_unwired_flags(cli: &Cli) {
             "--http-allow-origin is accepted for CLI compatibility but NOT applied: no CORS layer is wired into the HTTP server. The HTTP API will respond with default axum headers regardless of this value.",
         );
     }
+
+    if matches!(cli.storage, StorageBackend::Memory) {
+        if let Some(path) = cli.storage_path.as_deref() {
+            warn!(
+                path = %path.display(),
+                "--storage-path is ignored because --storage is memory; pass --storage persistent to use it",
+            );
+        }
+    }
 }
 
-fn selected_log_prefix(cli: &Cli) -> Option<&str> {
-    cli.log_dir_path
-        .as_ref()
-        .map(|_| cli.log_dir_prefix.as_deref().unwrap_or(DEFAULT_LOG_PREFIX))
+fn log_prefix(cli: &Cli) -> &str {
+    cli.log_dir_prefix.as_deref().unwrap_or(DEFAULT_LOG_PREFIX)
+}
+
+fn active_log_prefix(cli: &Cli) -> Option<&str> {
+    cli.log_dir_path.as_ref().map(|_| log_prefix(cli))
 }
 
 fn file_sink(cli: &Cli) -> Result<Option<FileSink<'_>>> {
@@ -84,10 +94,7 @@ fn file_sink(cli: &Cli) -> Result<Option<FileSink<'_>>> {
 
     // Daily rotation by default (see `LogRotation`): an operator who
     // opted into `--log.dir.path` gets bounded per-file growth.
-    Ok(Some(FileSink::new(
-        dir,
-        cli.log_dir_prefix.as_deref().unwrap_or(DEFAULT_LOG_PREFIX),
-    )))
+    Ok(Some(FileSink::new(dir, log_prefix(cli))))
 }
 
 #[cfg(test)]
