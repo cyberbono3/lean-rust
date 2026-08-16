@@ -22,15 +22,28 @@ use crate::genesis;
 /// `bin/lean-rust/tests/agent_version.rs` pins the two together.
 pub const AGENT_VERSION: &str = concat!("lean-rust/", env!("CARGO_PKG_VERSION"));
 
+/// HTTP endpoint used when neither `--http-address` nor `--http-port` is given.
+///
+/// Each half is overridden independently, so a bare `--http-port` keeps this
+/// address and vice versa.
 const DEFAULT_HTTP_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5052);
+
+/// Filename of the libp2p identity key, joined onto `--data-dir` when
+/// `--private-key-path` is absent, or used bare in the working directory.
 const DEFAULT_IDENTITY_PATH: &str = "p2p_priv_key";
+
+/// Metrics endpoint used when neither `--metrics-address` nor `--metrics-port`
+/// is given. Overridden per half, as with [`DEFAULT_HTTP_ADDR`].
 const DEFAULT_METRICS_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9090);
 
-// Not the same default as `runtime::duties::DEFAULT_VALIDATORS_PATH`, and this
-// one wins: `build_devnet_config` always overrides the field, so the `runtime`
-// default is only ever seen by callers that build a `duties::Config`
-// themselves. Kept separate because that one resolves relative to `runtime`'s
-// own manifest dir, while this one is made absolute by `workspace_path`.
+/// Validator registry used when `--validator-registry-path` is absent,
+/// resolved against the repository root by [`workspace_path`].
+///
+/// Not the same default as `runtime::duties::DEFAULT_VALIDATORS_PATH`, and
+/// this one wins: [`build_devnet_config`] always overrides the field, so the
+/// `runtime` default is only ever seen by callers that build a
+/// `duties::Config` themselves. Kept separate because that one resolves
+/// relative to `runtime`'s own manifest dir, while this one is made absolute.
 const DEFAULT_VALIDATORS_PATH: &str = "crates/runtime/tests/duties_fixtures/validators.yaml";
 
 /// Assembles the devnet node configuration from the parsed CLI.
@@ -91,6 +104,13 @@ pub fn build_devnet_config(cli: &Cli) -> Result<node::Config> {
     })
 }
 
+/// Returns the single listen address the runtime will bind, warning when the
+/// CLI supplied more than one.
+///
+/// # Errors
+///
+/// Returns an error when `--devnet-listen-addresses` resolved to an empty
+/// list, which leaves the node with nothing to bind.
 fn listen_address(cli: &Cli) -> Result<&str> {
     let listen_address = cli
         .listen_address()
@@ -105,6 +125,8 @@ fn listen_address(cli: &Cli) -> Result<&str> {
     Ok(listen_address)
 }
 
+/// Combines an optional address and an optional port with `default`, taking
+/// each half from `default` independently when its flag was not given.
 fn socket_addr(address: Option<IpAddr>, port: Option<u16>, default: SocketAddr) -> SocketAddr {
     SocketAddr::new(
         address.unwrap_or_else(|| default.ip()),
@@ -112,9 +134,16 @@ fn socket_addr(address: Option<IpAddr>, port: Option<u16>, default: SocketAddr) 
     )
 }
 
+/// Maps `--storage` and `--storage-path` onto the backend the node will open.
+///
+/// A `--storage-path` given under the memory backend is ignored, with a
+/// warning from [`crate::startup::warn_unwired_flags`].
+///
+/// # Errors
+///
+/// Returns an error when `--storage persistent` was given without the
+/// `--storage-path` it requires; there is no default on-disk location.
 fn storage_kind(cli: &Cli) -> Result<node::StorageKind> {
-    // A `--storage-path` given under the memory backend is ignored, with a
-    // warning from `startup::warn_unwired_flags`.
     match cli.storage {
         StorageBackend::Memory => Ok(node::StorageKind::Memory),
         StorageBackend::Persistent => Ok(node::StorageKind::Persistent(
@@ -125,12 +154,17 @@ fn storage_kind(cli: &Cli) -> Result<node::StorageKind> {
     }
 }
 
+/// Returns the validator registry path, falling back to
+/// [`DEFAULT_VALIDATORS_PATH`] under the repository root.
 fn validators_path(cli: &Cli) -> PathBuf {
     cli.validator_registry_path
         .clone()
         .unwrap_or_else(|| workspace_path(DEFAULT_VALIDATORS_PATH))
 }
 
+/// Resolves the libp2p identity file, in precedence order:
+/// `--private-key-path`, then `--data-dir` joined with
+/// [`DEFAULT_IDENTITY_PATH`], then that filename in the working directory.
 fn identity_path(cli: &Cli) -> PathBuf {
     if let Some(path) = &cli.private_key_path {
         path.clone()
@@ -141,12 +175,14 @@ fn identity_path(cli: &Cli) -> PathBuf {
     }
 }
 
-// Pops exactly two ancestors of the compiling crate's manifest directory.
-// That reaches the repository root from `crates/lean-cli` (-> `crates` ->
-// root) and, by coincidence of equal nesting depth, also reached it from
-// the previous home at `bin/lean-rust` (-> `bin` -> root). The
-// `workspace_path_resolves_repo_file` test below is the guard on that
-// assumption: move this function to any other nesting depth and it breaks.
+/// Resolves `relative` against the repository root.
+///
+/// Pops exactly two ancestors of the compiling crate's manifest directory.
+/// That reaches the repository root from `crates/lean-cli` (-> `crates` ->
+/// root) and, by coincidence of equal nesting depth, also reached it from
+/// the previous home at `bin/lean-rust` (-> `bin` -> root). The
+/// `workspace_path_resolves_repo_file` test below is the guard on that
+/// assumption: move this function to any other nesting depth and it breaks.
 fn workspace_path(relative: &str) -> PathBuf {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     match manifest_dir.parent().and_then(|crates| crates.parent()) {
@@ -162,6 +198,8 @@ mod tests {
     use clap::Parser;
     use ssz::HashTreeRoot;
 
+    /// Writes a two-validator registry plus its genesis pubkey manifest into
+    /// `dir` and returns the registry path.
     fn write_validator_registry(dir: &Path) -> PathBuf {
         let path = dir.join("validators.yaml");
         std::fs::write(&path, "ream_0:\n  - 0\nleanrust_1:\n  - 1\n")
@@ -179,6 +217,7 @@ mod tests {
         path
     }
 
+    /// Borrows `path` as a `&str` for the CLI argument arrays below.
     fn as_str(path: &Path) -> &str {
         path.to_str().expect("test path must be utf-8")
     }

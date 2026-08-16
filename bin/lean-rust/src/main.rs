@@ -7,11 +7,26 @@ use lean_cli::cli::{self, Cli};
 use lean_cli::commands::{self, Dispatch};
 use lean_cli::{node_config, shutdown, startup};
 
+/// Parses the process arguments and hands them to [`run`].
+///
+/// Kept free of everything else so the argument source is the only thing
+/// that separates a real process from the `run` path under test.
 #[tokio::main]
 async fn main() -> Result<()> {
     run(cli::parse()).await
 }
 
+/// Runs one `lean-rust` invocation to completion.
+///
+/// Either dispatches a subcommand and returns, or builds the devnet node,
+/// starts it, and drives it until a shutdown signal arrives. Every step
+/// beyond the sequencing lives in `lean_cli`.
+///
+/// # Errors
+///
+/// Returns an error if tracing cannot be installed, if a subcommand fails,
+/// if the node cannot be configured or constructed, or if starting,
+/// awaiting the shutdown signal, or stopping the node fails.
 async fn run(cli: Cli) -> Result<()> {
     let _tracing_guard = startup::init_tracing(&cli)?;
     startup::log_startup_config(&cli);

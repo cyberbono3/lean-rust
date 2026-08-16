@@ -12,6 +12,8 @@ use tracing::{info, warn};
 
 use crate::cli::{Cli, StorageBackend};
 
+/// Filename prefix for the rolling file sink when `--log.dir.prefix` is not
+/// given. Only ever reached once `--log.dir.path` selected a directory.
 const DEFAULT_LOG_PREFIX: &str = "lean-rust";
 
 /// Installs the global tracing subscriber and returns its RAII guard.
@@ -76,14 +78,27 @@ pub fn warn_unwired_flags(cli: &Cli) {
     }
 }
 
+/// Returns the file-log prefix, defaulted. Says nothing about whether file
+/// logging is on — see [`active_log_prefix`] for that.
 fn log_prefix(cli: &Cli) -> &str {
     cli.log_dir_prefix.as_deref().unwrap_or(DEFAULT_LOG_PREFIX)
 }
 
+/// Returns the prefix that will actually be written with, or `None` when no
+/// `--log.dir.path` was given and so no file is opened at all. This is the
+/// form the startup-configuration line reports, so a logged prefix always
+/// means a real file.
 fn active_log_prefix(cli: &Cli) -> Option<&str> {
     cli.log_dir_path.as_ref().map(|_| log_prefix(cli))
 }
 
+/// Builds the optional rolling file sink from the `--log.dir.*` flags.
+///
+/// # Errors
+///
+/// Returns an error when `--log.dir.prefix` was given without
+/// `--log.dir.path`: the prefix would silently do nothing, which is more
+/// likely a typo than an intent.
 fn file_sink(cli: &Cli) -> Result<Option<FileSink<'_>>> {
     let Some(dir) = cli.log_dir_path.as_deref() else {
         if cli.log_dir_prefix.is_some() {
