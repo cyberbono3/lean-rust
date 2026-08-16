@@ -12,7 +12,6 @@ use crate::{keygen, validator_keygen};
 
 /// Outcome of [`dispatch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[must_use]
 pub enum Dispatch {
     /// A subcommand ran to completion; the caller should exit successfully.
     Handled,
