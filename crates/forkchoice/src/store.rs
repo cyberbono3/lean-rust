@@ -24,7 +24,7 @@
 use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
-use config::INTERVALS_PER_SLOT;
+use config::{INTERVALS_PER_SLOT, JUSTIFICATION_LOOKBACK_SLOTS};
 use protocol::{
     AttestationData, Block, Checkpoint, ProtocolConfig, SignedAttestation, Slot, State,
     ValidatorIndex,
@@ -358,16 +358,31 @@ impl Store {
     // Attestation processing
     // ==================================================================
 
-    /// Validates the structural and timing rules a [`SignedAttestation`] must
-    /// satisfy before [`Self::process_attestation`] will route it into
+    /// Validates the structural and timing rules an [`AttestationData`] must
+    /// satisfy before [`Self::process_attestation`] will route its envelope into
     /// either vote pool.
     ///
-    /// Mirrors leanSpec `forkchoice/store.py::Store.validate_attestation`. The
-    /// source-root resolution below is a divergence introduced here: the reference
+    /// Mirrors leanSpec `forkchoice/store.py::Store.validate_attestation`
+    /// (`:277-:325 @ 0c9528ac`) predicate for predicate, in the reference's four
+    /// groups: availability, topology, consistency, time. Like the reference it
+    /// takes DATA rather than a signed envelope — the predicates are
+    /// signature-agnostic. This client's extra validator-index bound is NOT here;
+    /// it lives in [`Self::validate_validator_index`], which
+    /// [`Self::process_attestation`] runs first. These two are a PAIR: this
+    /// function alone will happily validate a vote carrying a forged `u64`
+    /// validator id, because the id is not part of [`AttestationData`]. Any
+    /// caller driving them directly — a gossip validation callback deciding
+    /// whether to propagate, say — must run the bound first or it forwards
+    /// exactly what the bound exists to stop.
+    ///
+    /// One divergence: the source root is RESOLVED before lookup. The reference
     /// normalizes nothing on ingress (`store.py:299`, `:313`) because its producer
     /// substitutes the genesis root before signing (`store.py:1289-:1295`). This
-    /// client tolerates a peer that does not, by resolving the source root for the
-    /// lookup only — see [`Self::resolved_source_root`].
+    /// client tolerates a peer that does not, for the lookup only — see
+    /// [`Self::resolved_source_root`]. The head checkpoint gets NO such
+    /// tolerance: the reference builds it from `self.head`
+    /// (`store.py:1299-:1302`), so a well-formed vote never carries a placeholder
+    /// head, and widening the guard would buy no interop case.
     ///
     /// That resolution WIDENS this function's acceptance surface, which matters
     /// because it is `pub`: a caller passing a genesis-placeholder vote now gets
@@ -386,49 +401,76 @@ impl Store {
     ///   cannot reach this error.
     /// - [`ForkchoiceError::UnknownTargetBlock`] when the target checkpoint root
     ///   is not tracked by the store.
+    /// - [`ForkchoiceError::UnknownAttestationHeadBlock`] when the head
+    ///   checkpoint root is not tracked by the store.
     /// - [`ForkchoiceError::SourceSlotExceedsTarget`] when either the
     ///   resolved source block's slot exceeds the resolved target block's
     ///   slot or `vote.source.slot > vote.target.slot`.
+    /// - [`ForkchoiceError::HeadSlotBelowTarget`] when
+    ///   `vote.head.slot < vote.target.slot`.
     /// - [`ForkchoiceError::SourceCheckpointSlotMismatch`] /
-    ///   [`ForkchoiceError::TargetCheckpointSlotMismatch`] when the
-    ///   declared checkpoint slot disagrees with the resolved block's slot.
+    ///   [`ForkchoiceError::TargetCheckpointSlotMismatch`] /
+    ///   [`ForkchoiceError::HeadCheckpointSlotMismatch`] when a declared
+    ///   checkpoint slot disagrees with its resolved block's slot.
     /// - [`ForkchoiceError::AttestationFutureLimitOverflow`] when
     ///   `current_vote_slot() + 1` would overflow `u64`.
     /// - [`ForkchoiceError::AttestationTooFarInFuture`] when
     ///   `vote.slot > current_vote_slot() + 1`.
-    pub fn validate_attestation(&self, sv: &SignedAttestation) -> Result<(), ForkchoiceError> {
-        let vote = &sv.message.data;
-
-        // Bound validator_id against the head post-state registry BEFORE any
-        // block lookups. The vote pool is keyed by validator id; without
-        // this gate a malicious peer can flood with arbitrary u64 ids
-        // (multi-KB per pool entry) and OOM the process.
-        let num_validators = self.head_validator_count()?;
-        let vid = sv.message.validator_id.get();
-        if vid >= num_validators {
-            return Err(ForkchoiceError::ValidatorIndexOutOfRange {
-                validator_id: vid,
-                num_validators,
-            });
-        }
-
+    pub fn validate_attestation(&self, vote: &AttestationData) -> Result<(), ForkchoiceError> {
+        // Availability — a vote cannot be counted for blocks this store has not
+        // seen (`store.py:299-:301`).
         let source_block = self.lookup_block(self.resolved_source_root(vote), |root| {
             ForkchoiceError::UnknownSourceBlock { root }
         })?;
         let target_block = self.lookup_block(vote.target.root, |root| {
             ForkchoiceError::UnknownTargetBlock { root }
         })?;
+        let head_block = self.lookup_block(vote.head.root, |root| {
+            ForkchoiceError::UnknownAttestationHeadBlock { root }
+        })?;
 
+        // Topology — history is linear and monotonic: source <= target <= head,
+        // so `head >= source` follows by transitivity (`store.py:307-:308`).
         if source_block.slot > target_block.slot || vote.source.slot > vote.target.slot {
             return Err(ForkchoiceError::SourceSlotExceedsTarget);
         }
-        if source_block.slot != vote.source.slot {
-            return Err(ForkchoiceError::SourceCheckpointSlotMismatch);
-        }
-        if target_block.slot != vote.target.slot {
-            return Err(ForkchoiceError::TargetCheckpointSlotMismatch);
+        if vote.head.slot < vote.target.slot {
+            return Err(ForkchoiceError::HeadSlotBelowTarget {
+                head_slot: vote.head.slot,
+                target_slot: vote.target.slot,
+            });
         }
 
+        // Consistency — a declared checkpoint slot must be the block's own slot
+        // (`store.py:313-:318`). One comparison written once, applied to the
+        // three checkpoints in the reference's order. This stays INSIDE the
+        // consistency group, so it does not interleave the spec's groups the way
+        // a per-checkpoint resolve-and-check helper would.
+        let consistency = [
+            (
+                source_block.slot,
+                vote.source.slot,
+                ForkchoiceError::SourceCheckpointSlotMismatch,
+            ),
+            (
+                target_block.slot,
+                vote.target.slot,
+                ForkchoiceError::TargetCheckpointSlotMismatch,
+            ),
+            (
+                head_block.slot,
+                vote.head.slot,
+                ForkchoiceError::HeadCheckpointSlotMismatch,
+            ),
+        ];
+        for (block_slot, declared_slot, mismatch) in consistency {
+            if block_slot != declared_slot {
+                return Err(mismatch);
+            }
+        }
+
+        // Time — one slot of clock disparity is tolerated, no further
+        // (`store.py:324-:325`).
         let current = self.current_vote_slot();
         let limit = current
             .advance()
@@ -439,6 +481,46 @@ impl Store {
             return Err(ForkchoiceError::AttestationTooFarInFuture {
                 vote_slot: vote.slot,
                 limit,
+            });
+        }
+        Ok(())
+    }
+
+    /// Bounds a vote's `validator_id` against the head post-state's registry.
+    ///
+    /// NOT a leanSpec predicate: the reference binds its own index check to
+    /// signature verification against the target block's state
+    /// (`forkchoice/store.py:370-:372 @ 0c9528ac`), and
+    /// [`Self::validate_attestation`] stays signature-agnostic. This guard
+    /// exists because the vote pools are keyed by validator id — without it a
+    /// peer can flood them with arbitrary `u64` ids at roughly 3.2 KiB per
+    /// entry. It fails closed when the head post-state is unknown.
+    ///
+    /// CALLER CONTRACT: anyone driving the predicate set directly MUST call this
+    /// BEFORE [`Self::validate_attestation`], which is what keeps a forged `u64`
+    /// id from reaching a block lookup at all. [`Self::process_attestation`]
+    /// does; a caller that skips it gets the predicates without the bound.
+    ///
+    /// # Errors
+    /// - [`ForkchoiceError::HeadStateNotFound`] forwarded from
+    ///   [`Self::head_validator_count`] when the head's post-state is untracked.
+    /// - [`ForkchoiceError::ValidatorIndexOutOfRange`] when the id is at or past
+    ///   the head registry length.
+    ///
+    /// `pub` for the same reason [`Self::validate_attestation`] is: any caller
+    /// that can reach the predicates must be able to reach this bound too. A
+    /// gossip validation callback that ran the predicates alone would forward
+    /// votes carrying forged `u64` ids to the rest of the network.
+    pub fn validate_validator_index(
+        &self,
+        validator_id: ValidatorIndex,
+    ) -> Result<(), ForkchoiceError> {
+        let num_validators = self.head_validator_count()?;
+        let vid = validator_id.get();
+        if vid >= num_validators {
+            return Err(ForkchoiceError::ValidatorIndexOutOfRange {
+                validator_id: vid,
+                num_validators,
             });
         }
         Ok(())
@@ -480,13 +562,16 @@ impl Store {
     /// [`Self::accept_new_votes`].
     ///
     /// # Errors
-    /// Forwards any error from [`Self::validate_attestation`].
+    /// Forwards any error from [`Self::validate_validator_index`], which runs
+    /// FIRST so a forged validator id is rejected before any block lookup, then
+    /// from [`Self::validate_attestation`].
     pub fn process_attestation(
         &mut self,
         signed_vote: SignedAttestation,
         is_from_block: bool,
     ) -> Result<bool, ForkchoiceError> {
-        self.validate_attestation(&signed_vote)?;
+        self.validate_validator_index(signed_vote.message.validator_id)?;
+        self.validate_attestation(&signed_vote.message.data)?;
 
         let validator = signed_vote.message.validator_id;
         let vote_slot = signed_vote.message.data.slot;
@@ -696,36 +781,137 @@ impl Store {
         Ok(self.head)
     }
 
-    /// Walks from the current head toward the safe-target depth, at most
-    /// three hops, returning the resulting [`Checkpoint`]. Mirrors
-    /// leanSpec `forkchoice/store.py::Store.get_vote_target`.
+    /// Selects this node's attestation target: walk back from the head toward
+    /// the safe target, then back further until the slot is justifiable.
+    ///
+    /// Mirrors leanSpec `forkchoice/store.py::Store.get_attestation_target`
+    /// (`:1202-:1259 @ 0c9528ac`), whose two walks are reproduced in order: at
+    /// most [`JUSTIFICATION_LOOKBACK_SLOTS`] steps toward the safe target
+    /// (`:1241-:1245`), then an unbounded walk until
+    /// [`Slot::is_justifiable_after`] holds against the finalized slot
+    /// (`:1251-:1254`).
+    ///
+    /// One divergence, deliberate: both walks are floored at the finalized
+    /// checkpoint. The reference's second loop is unbounded because
+    /// `Slot.is_justifiable_after` ASSERTS the candidate is at or after the
+    /// finalized slot (`containers/slot.py:50`); this client's port returns
+    /// `false` instead, which would turn the same input into a walk off the
+    /// bottom of the chain. The input is reachable:
+    /// [`Self::adopt_post_state_checkpoints`] advances `latest_finalized`
+    /// without refreshing `safe_target`, so walk 1 can land below the finalized
+    /// slot. The floor makes termination a property of this function rather than
+    /// of the caller's store hygiene. It does NOT rest on slot monotonicity along
+    /// `parent_root`: [`Self::track_block`] never checks `block.slot >
+    /// parent.slot`, so that is an expectation, not an invariant. What terminates
+    /// the walk is that the parent edge is a hash link — a cycle would need a
+    /// hash fixed point — over a finite block map, so every walk reaches the
+    /// floor, reaches genesis, or dies on [`ForkchoiceError::ParentBlockNotFound`].
+    /// The bound is a SLOT comparison, not root-equality: the finalized block
+    /// need not lie on the cursor's ancestry.
+    ///
+    /// The floor bounds TERMINATION, not the post-condition, and the two cases
+    /// differ:
+    ///
+    /// - The finalized block IS on the head's ancestry. Then the walk stops
+    ///   exactly at it — distance 0 is justifiable — and every returned slot is
+    ///   justifiable after the finalized slot.
+    /// - It is NOT. [`Self::update_head`] descends from `latest_justified` while
+    ///   [`Self::adopt_post_state_checkpoints`] takes `latest_finalized` from any
+    ///   tracked post-state, so the two can sit on different branches. A single
+    ///   parent step can then skip from above the finalized slot to below it, and
+    ///   both loops exit on the floor with a target that is NOT justifiable.
+    ///
+    /// That undershoot is left visible rather than papered over. Substituting
+    /// `self.latest_finalized` would be worse — that checkpoint is on the other
+    /// branch, so the node would attest off its own head's ancestry — and no
+    /// choice of target is correct on a store whose head and finalized checkpoint
+    /// have diverged. The behaviour is pinned by
+    /// `target_selection_undershoots_when_finalized_is_off_ancestry` so it stays
+    /// deliberate, and the underlying divergence is tracked separately.
+    ///
+    /// One thing neither walk bounds: `latest_justified`. The producer pairs this
+    /// target with `latest_justified` as the vote's source
+    /// ([`Self::produce_attestation_vote`]), and nothing here keeps the target at
+    /// or above the justified slot — so on a store whose `safe_target` is stale
+    /// relative to a freshly adopted justified checkpoint, this node can emit a
+    /// vote its OWN [`Self::validate_attestation`] rejects with
+    /// [`ForkchoiceError::SourceSlotExceedsTarget`].
+    ///
+    /// That staleness is not a rare invariant break; it is a race with a fixed
+    /// address, and the address does not depend on how the driver's tick index
+    /// happens to align with this store's clock. `safe_target` is written by
+    /// exactly one thing — [`Self::tick_interval`] dispatching
+    /// `Phase::UpdateSafeTarget` — and the consensus loop calls `tick_interval`
+    /// LAST in each tick body, after `drain_gossip()` and after the attester
+    /// pass (`crates/node/src/consensus_loop.rs`). So on the tick that attests,
+    /// gossip is drained after the most recent possible `safe_target` refresh
+    /// and before this walk runs: any justification-advancing block delivered
+    /// into that drain moves `latest_justified` inside the window, and a peer
+    /// controls delivery timing. The vote is then dropped identically by every
+    /// conformant node, so the cost is one lost vote for one slot rather than a
+    /// split. Flooring this walk at the
+    /// justified slot would only narrow that: when the justified checkpoint sits
+    /// ABOVE the head, no target on the head's ancestry can satisfy
+    /// `source <= target` at all. The real fix is the source derivation — the
+    /// reference takes it from the HEAD STATE's justified checkpoint
+    /// (`store.py:1289-:1297`), which is bounded by the head slot by
+    /// construction, where this client takes it from the store — and that is
+    /// tracked separately.
     ///
     /// # Errors
     /// - [`ForkchoiceError::UnknownHeadBlock`] when `self.head` is not in
     ///   the block map.
     /// - [`ForkchoiceError::UnknownSafeTarget`] when `self.safe_target` is
     ///   not in the block map.
-    /// - [`ForkchoiceError::ParentBlockNotFound`] when the walk steps past
+    /// - [`ForkchoiceError::ParentBlockNotFound`] when either walk steps past
     ///   a block whose parent is absent from the block map.
     pub fn get_vote_target(&self) -> Result<Checkpoint, ForkchoiceError> {
-        let head_block =
-            self.lookup_block(self.head, |root| ForkchoiceError::UnknownHeadBlock { root })?;
+        let mut cursor = self.head;
+        let mut cursor_block =
+            self.lookup_block(cursor, |root| ForkchoiceError::UnknownHeadBlock { root })?;
         let safe_slot = self
             .lookup_block(self.safe_target, |root| {
                 ForkchoiceError::UnknownSafeTarget { root }
             })?
             .slot;
+        let finalized_slot = self.latest_finalized.slot;
+        let floor_slot = safe_slot.max(finalized_slot);
 
-        let (mut cursor, mut cursor_block) = (self.head, head_block);
-        for _ in 0..3 {
-            if cursor_block.slot <= safe_slot {
+        // Walk 1 — toward the safe target, bounded by the lookback window.
+        for _ in 0..JUSTIFICATION_LOOKBACK_SLOTS {
+            if cursor_block.slot <= floor_slot {
                 break;
             }
-            cursor = cursor_block.parent_root;
-            cursor_block =
-                self.lookup_block(cursor, |root| ForkchoiceError::ParentBlockNotFound { root })?;
+            (cursor, cursor_block) = self.parent_of(cursor_block)?;
         }
+
+        // Walk 2 — back until the slot can be justified. The loop cannot run
+        // past the floor: either the cursor reaches `finalized_slot` (distance
+        // zero, justifiable) or a step lands below it, and both exits are
+        // guarded. The second case is the documented undershoot above.
+        while cursor_block.slot > finalized_slot
+            && !cursor_block.slot.is_justifiable_after(finalized_slot)
+        {
+            (cursor, cursor_block) = self.parent_of(cursor_block)?;
+        }
+
+        // A cursor below `finalized_slot` here means the finalized checkpoint is
+        // off the head's ancestry — documented above, pinned by
+        // `target_selection_undershoots_when_finalized_is_off_ancestry`. NOT an
+        // assertion: the condition is peer-reachable, no target is correct on a
+        // diverged store, and this function must still return one.
         Ok(Checkpoint::new(cursor, cursor_block.slot))
+    }
+
+    /// Resolves a block's parent, returning the `(root, block)` pair. Shared by
+    /// both walks in [`Self::get_vote_target`] so the step and its error variant
+    /// are written once.
+    fn parent_of(&self, block: &Block) -> Result<(Bytes32, &Block), ForkchoiceError> {
+        let parent_root = block.parent_root;
+        let parent_block = self.lookup_block(parent_root, |root| {
+            ForkchoiceError::ParentBlockNotFound { root }
+        })?;
+        Ok((parent_root, parent_block))
     }
 
     /// Test-only builder that overrides the constructor-seeded time.
@@ -1517,22 +1703,21 @@ mod attestation_tests {
         assert_eq!(err, ForkchoiceError::UnknownTargetBlock { root: missing });
     }
 
-    // -- validate_attestation: validator bound follows the head registry ---
+    // -- validate_validator_index: bound follows the head registry ---------
 
     #[test]
-    fn attestation_bound_follows_head_registry() {
+    fn validator_index_bound_follows_head_registry() {
         // The bound is the head post-state's registry length, not a scalar
-        // snapshotted at the anchor.
-        let (store, roots) = store_with_chain_at_slot_3();
-        let target = Checkpoint::new(roots[2], Slot::new(2));
-        let source = Checkpoint::new(roots[0], Slot::ZERO);
+        // snapshotted at the anchor. Only the id is read, so no vote is built.
+        let (store, _roots) = store_with_chain_at_slot_3();
 
-        let in_range = signed_vote(ValidatorIndex::new(3), target, target, source, Slot::new(2));
-        store.validate_attestation(&in_range).unwrap();
+        store
+            .validate_validator_index(ValidatorIndex::new(3))
+            .unwrap();
 
-        let out_of_range =
-            signed_vote(ValidatorIndex::new(4), target, target, source, Slot::new(2));
-        let err = store.validate_attestation(&out_of_range).unwrap_err();
+        let err = store
+            .validate_validator_index(ValidatorIndex::new(4))
+            .unwrap_err();
         assert_eq!(
             err,
             ForkchoiceError::ValidatorIndexOutOfRange {
@@ -1543,14 +1728,14 @@ mod attestation_tests {
     }
 
     #[test]
-    fn validate_attestation_fails_closed_without_head_state() {
+    fn validate_validator_index_fails_closed_without_head_state() {
         // A store with no tracked head post-state cannot know the bound. It
         // must REJECT rather than admit the vote — this gate is what stops a
         // peer flooding the pool with arbitrary validator ids.
         let store = Store::default();
-        let target = Checkpoint::new(Bytes32::new([0xaa; 32]), Slot::ZERO);
-        let sv = signed_vote(ValidatorIndex::new(0), target, target, target, Slot::ZERO);
-        let err = store.validate_attestation(&sv).unwrap_err();
+        let err = store
+            .validate_validator_index(ValidatorIndex::new(0))
+            .unwrap_err();
         assert_eq!(
             err,
             ForkchoiceError::HeadStateNotFound {
@@ -1573,7 +1758,7 @@ mod attestation_tests {
             bad_source,
             Slot::new(2),
         );
-        let err = store.validate_attestation(&sv).unwrap_err();
+        let err = store.validate_attestation(&sv.message.data).unwrap_err();
         assert_eq!(
             err,
             ForkchoiceError::UnknownSourceBlock {
@@ -1584,6 +1769,10 @@ mod attestation_tests {
 
     #[test]
     fn validate_unknown_target() {
+        // Head and target share a checkpoint here, so this vote violates the head
+        // predicate too and the asserted variant is what pins target-before-head
+        // in the availability group. Do NOT give it a distinct valid head: the
+        // assertion would still pass and the ordering coverage would be gone.
         let (store, roots) = store_with_chain_at_slot_3();
         let source = Checkpoint::new(roots[0], Slot::ZERO);
         let bad_target = Checkpoint::new(Bytes32::new([0xbb; 32]), Slot::new(2));
@@ -1594,7 +1783,7 @@ mod attestation_tests {
             source,
             Slot::new(2),
         );
-        let err = store.validate_attestation(&sv).unwrap_err();
+        let err = store.validate_attestation(&sv.message.data).unwrap_err();
         assert_eq!(
             err,
             ForkchoiceError::UnknownTargetBlock {
@@ -1610,7 +1799,7 @@ mod attestation_tests {
         let target = Checkpoint::new(roots[1], Slot::new(1));
         let sv = signed_vote(ValidatorIndex::new(0), target, target, source, Slot::new(2));
         assert_eq!(
-            store.validate_attestation(&sv).unwrap_err(),
+            store.validate_attestation(&sv.message.data).unwrap_err(),
             ForkchoiceError::SourceSlotExceedsTarget
         );
     }
@@ -1629,13 +1818,17 @@ mod attestation_tests {
             Slot::new(2),
         );
         assert_eq!(
-            store.validate_attestation(&sv).unwrap_err(),
+            store.validate_attestation(&sv.message.data).unwrap_err(),
             ForkchoiceError::SourceCheckpointSlotMismatch
         );
     }
 
     #[test]
     fn validate_target_checkpoint_slot_mismatch() {
+        // Head and target share a checkpoint here, so this vote violates the head
+        // predicate too and the asserted variant is what pins target-before-head
+        // in the consistency group. Do NOT give it a distinct valid head: the
+        // assertion would still pass and the ordering coverage would be gone.
         let (store, roots) = store_with_chain_at_slot_3();
         let source = Checkpoint::new(roots[0], Slot::ZERO);
         // Target root resolves to slot 2, but checkpoint claims slot 3.
@@ -1648,7 +1841,7 @@ mod attestation_tests {
             Slot::new(3),
         );
         assert_eq!(
-            store.validate_attestation(&sv).unwrap_err(),
+            store.validate_attestation(&sv.message.data).unwrap_err(),
             ForkchoiceError::TargetCheckpointSlotMismatch
         );
     }
@@ -1665,7 +1858,7 @@ mod attestation_tests {
             Checkpoint::new(roots[0], Slot::ZERO),
         );
         assert_eq!(
-            store.validate_attestation(&sv).unwrap_err(),
+            store.validate_attestation(&sv.message.data).unwrap_err(),
             ForkchoiceError::AttestationTooFarInFuture {
                 vote_slot: Slot::new(5),
                 limit: Slot::new(4),
@@ -1678,6 +1871,269 @@ mod attestation_tests {
     // INTERVALS_PER_SLOT` is bounded by `u64::MAX / 4`, so `Slot::advance`
     // always succeeds. The variant is retained as defense-in-depth for
     // future `Slot` constructors that bypass the clock.
+
+    // -- validate_attestation: the full predicate set ----------------------
+
+    /// One case in [`validate_attestation_predicate_matrix`]. Named fields
+    /// rather than a six-wide tuple: a positional row of three `Checkpoint`s
+    /// reads as `(b2, b1, anchor)` at the call site, where nothing distinguishes
+    /// head from target from source.
+    struct PredicateCase {
+        name: &'static str,
+        head: Checkpoint,
+        target: Checkpoint,
+        source: Checkpoint,
+        vote_slot: Slot,
+        /// `None` asserts acceptance; `Some(err)` asserts the exact variant.
+        want: Option<ForkchoiceError>,
+    }
+
+    /// Accept/reject coverage for the nine predicates leanSpec asserts in
+    /// `forkchoice/store.py:299-:325 @ 0c9528ac`.
+    ///
+    /// ONE accept row covers eight of the nine by construction — a vote that
+    /// satisfies everything is simultaneously the accept side of P1-P4 and
+    /// P6-P9, and nine near-identical accept rows would be duplication rather
+    /// than coverage. P5 earns a second accept row because its boundary
+    /// (`head.slot == target.slot`, the equality edge of `>=`) is a distinct
+    /// input from the strict-inequality baseline.
+    ///
+    /// Every reject row isolates its own predicate — a vote that violates two
+    /// proves only that the earlier group fires — with ONE labelled exception,
+    /// the ordering row, whose whole point is to violate two.
+    ///
+    /// Ordering coverage, which is what stops a reordering of the checks from
+    /// going unnoticed, lives in three places and nowhere else:
+    ///
+    /// - source before target: the ordering row here.
+    /// - target before head, availability group: `validate_unknown_target`.
+    /// - target before head, consistency group:
+    ///   `validate_target_checkpoint_slot_mismatch`.
+    ///
+    /// Those two standalone tests carry it only because each passes the SAME
+    /// checkpoint as head and target, so each violates a second predicate and
+    /// still reports the variant it asserts. Give either one a distinct valid
+    /// head — a natural-looking cleanup now that head is validated — and the
+    /// coverage disappears silently.
+    ///
+    /// The other four standalone reject tests (`validate_unknown_source`,
+    /// `validate_source_slot_after_target`,
+    /// `validate_source_checkpoint_slot_mismatch`,
+    /// `validate_rejects_attestation_beyond_plus_one`) violate exactly one
+    /// predicate each and duplicate rows P1, P4, P6 and P9. They are kept as
+    /// independent single-predicate regressions, not because the matrix needs
+    /// them.
+    /// The twelve rows, built from a chain fixture's roots. Split out so the
+    /// assertion loop stays readable — and so the table can be read as data.
+    // `too_many_lines` targets branching complexity; this function has none — it
+    // is one array literal of twelve data rows, already split out of the test so
+    // the assertion loop stays short. Compressing it further would mean either
+    // dropping the per-row names that make a failure readable or splitting the
+    // spec's four predicate groups across two builders, both of which cost more
+    // than the lint buys here.
+    #[allow(clippy::too_many_lines)]
+    fn predicate_cases(roots: &[Bytes32]) -> [PredicateCase; 12] {
+        let anchor = Checkpoint::new(roots[0], Slot::ZERO);
+        let b1 = Checkpoint::new(roots[1], Slot::ONE);
+        let b2 = Checkpoint::new(roots[2], Slot::new(2));
+        let untracked = Checkpoint::new(Bytes32::new([0xaa; 32]), Slot::ZERO);
+        // A second untracked checkpoint, declared at a slot that SATISFIES P5
+        // against the target. Reusing the slot-0 one as a head would trip P5 as
+        // well as P3, and the row would then prove only that availability is
+        // checked before topology — the group order it is supposed to be
+        // independent of.
+        let untracked_head = Checkpoint::new(Bytes32::new([0xab; 32]), Slot::new(2));
+        // A third, for the one ordering row below: a vote whose source AND target
+        // are both untracked must report the SOURCE, which is what pins the
+        // reference's source-before-target order inside the availability group.
+        let untracked_target = Checkpoint::new(Bytes32::new([0xac; 32]), Slot::ONE);
+
+        // Expected variants, hoisted so each row below reads as one line of data.
+        let no_source = ForkchoiceError::UnknownSourceBlock {
+            root: untracked.root,
+        };
+        let no_target = ForkchoiceError::UnknownTargetBlock {
+            root: untracked.root,
+        };
+        let no_head = ForkchoiceError::UnknownAttestationHeadBlock {
+            root: untracked_head.root,
+        };
+        let head_below = ForkchoiceError::HeadSlotBelowTarget {
+            head_slot: Slot::ONE,
+            target_slot: Slot::new(2),
+        };
+        let too_far = ForkchoiceError::AttestationTooFarInFuture {
+            vote_slot: Slot::new(5),
+            limit: Slot::new(4),
+        };
+
+        // The clock sits at slot 3, so slot 4 is the highest admissible vote slot.
+        let vote_slot = Slot::new(2);
+        let case = |name, head, target, source, want| PredicateCase {
+            name,
+            head,
+            target,
+            source,
+            vote_slot,
+            want,
+        };
+
+        [
+            case("accept: all nine satisfied", b2, b1, anchor, None),
+            case(
+                "P1 reject: source untracked",
+                b2,
+                b1,
+                untracked,
+                Some(no_source),
+            ),
+            case(
+                "P2 reject: target untracked",
+                b2,
+                untracked,
+                anchor,
+                Some(no_target),
+            ),
+            case(
+                "P3 reject: head untracked",
+                untracked_head,
+                b1,
+                anchor,
+                Some(no_head),
+            ),
+            case(
+                "P4 reject: source slot exceeds target",
+                b2,
+                anchor,
+                b1,
+                Some(ForkchoiceError::SourceSlotExceedsTarget),
+            ),
+            case(
+                "P5 reject: head older than target",
+                b1,
+                b2,
+                anchor,
+                Some(head_below),
+            ),
+            case(
+                "P5 accept: head at the target's own slot",
+                b1,
+                b1,
+                anchor,
+                None,
+            ),
+            case(
+                "P6 reject: source checkpoint slot mismatch",
+                b2,
+                b1,
+                Checkpoint::new(roots[0], Slot::ONE),
+                Some(ForkchoiceError::SourceCheckpointSlotMismatch),
+            ),
+            case(
+                "P7 reject: target checkpoint slot mismatch",
+                b2,
+                Checkpoint::new(roots[1], Slot::new(2)),
+                anchor,
+                Some(ForkchoiceError::TargetCheckpointSlotMismatch),
+            ),
+            case(
+                "P8 reject: head checkpoint slot mismatch",
+                Checkpoint::new(roots[2], Slot::ONE),
+                b1,
+                anchor,
+                Some(ForkchoiceError::HeadCheckpointSlotMismatch),
+            ),
+            // NOT an isolation row: the only row that deliberately violates two
+            // predicates, because the variant it reports is the assertion.
+            case(
+                "ordering: source before target when both are untracked",
+                b2,
+                untracked_target,
+                untracked,
+                Some(ForkchoiceError::UnknownSourceBlock {
+                    root: untracked.root,
+                }),
+            ),
+            PredicateCase {
+                name: "P9 reject: vote slot beyond current + 1",
+                head: b2,
+                target: b1,
+                source: anchor,
+                vote_slot: Slot::new(5),
+                want: Some(too_far),
+            },
+        ]
+    }
+
+    #[test]
+    fn validate_attestation_predicate_matrix() {
+        let (store, roots) = store_with_chain_at_slot_3();
+
+        for PredicateCase {
+            name,
+            head,
+            target,
+            source,
+            vote_slot,
+            want,
+        } in predicate_cases(&roots)
+        {
+            let sv = signed_vote(ValidatorIndex::new(0), head, target, source, vote_slot);
+            let got = store.validate_attestation(&sv.message.data);
+            match (want, got) {
+                (None, Ok(())) => {}
+                (None, Err(err)) => panic!("case {name}: expected accept, got {err:?}"),
+                (Some(want), Err(err)) => {
+                    assert_eq!(err, want, "case {name}: wrong rejection variant");
+                }
+                (Some(want), Ok(())) => {
+                    panic!("case {name}: expected rejection {want:?}, got accept")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn process_attestation_bounds_the_validator_before_touching_blocks() {
+        // The validator-index guard must run AHEAD of the block lookups. This
+        // store has neither a head post-state nor any tracked block, so the two
+        // orders report different errors: guard-first fails closed with
+        // HeadStateNotFound, lookup-first would report UnknownSourceBlock. That
+        // difference is the whole assertion — it is the only test that fails if
+        // the two calls in `process_attestation` are swapped.
+        let mut store = Store::default();
+        let cp = Checkpoint::new(Bytes32::new([0xaa; 32]), Slot::ZERO);
+        let sv = signed_vote(ValidatorIndex::new(0), cp, cp, cp, Slot::ZERO);
+
+        assert_eq!(
+            store.process_attestation(sv, false).unwrap_err(),
+            ForkchoiceError::HeadStateNotFound {
+                root: Bytes32::zero()
+            },
+        );
+    }
+
+    #[test]
+    fn an_accepted_vote_with_a_distinct_head_enters_the_pending_pool() {
+        // The matrix asserts `validate_attestation` returns Ok; this asserts the
+        // accepted vote actually lands where `process_attestation` says it does.
+        // Every other pool test uses `self_referential_vote`, which collapses
+        // head == target == source and so satisfies P3, P5 and P8 by
+        // construction — none of them shows that a vote with a DISTINCT,
+        // correctly-slotted head still enters the pool.
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let anchor = Checkpoint::new(roots[0], Slot::ZERO);
+        let b1 = Checkpoint::new(roots[1], Slot::ONE);
+        let b2 = Checkpoint::new(roots[2], Slot::new(2));
+        let sv = signed_vote(ValidatorIndex::new(0), b2, b1, anchor, Slot::new(2));
+
+        assert!(store.process_attestation(sv.clone(), false).unwrap());
+        assert_eq!(
+            store.latest_new_votes().get(&ValidatorIndex::new(0)),
+            Some(&sv),
+            "an accepted vote must reach the pending pool unchanged",
+        );
+    }
 
     /// Fork choice weighs participation from plain `Attestation` data only —
     /// never from `signature` bytes. Two independent stores over the identical
@@ -2049,5 +2505,152 @@ mod store_extensions_tests {
         store.head = Bytes32::new([0xff; 32]);
         let err = store.get_vote_target().unwrap_err();
         assert!(matches!(err, ForkchoiceError::UnknownHeadBlock { .. }));
+    }
+
+    // -- get_vote_target: the justifiability walk --------------------------
+
+    #[test]
+    fn target_selection_matches_spec() {
+        // The fixture is chosen so the two walks DISAGREE, which is the only
+        // shape that can tell walk 2 apart from no walk 2 at all.
+        //
+        // Chain of 11 blocks at slots 0..=10, finalization and the safe target
+        // both at genesis, head at slot 10.
+        //   walk 1: three hops (JUSTIFICATION_LOOKBACK_SLOTS) -> slot 7
+        //   slot 7 is NOT justifiable after slot 0: delta 7 is not <= 5, not a
+        //   perfect square, not pronic (crates/protocol/src/slot.rs)
+        //   walk 2: one hop -> slot 6, delta 6 = 2*3, pronic -> justifiable
+        let (mut store, roots) = pinned_chain(11, 4, Time::new(10 * INTERVALS_PER_SLOT));
+        // No test-only setters: `accept_new_votes` refreshes the head through
+        // the normal LMD-GHOST walk, and `from_anchor` already seeded the safe
+        // target and the finalized checkpoint at genesis.
+        store.accept_new_votes().expect("head refresh");
+        assert_eq!(
+            store.head(),
+            roots[10],
+            "fixture precondition: head at slot 10"
+        );
+        assert_eq!(
+            store.safe_target(),
+            roots[0],
+            "fixture precondition: safe target at genesis"
+        );
+        assert_eq!(store.latest_finalized().slot, Slot::ZERO);
+
+        let target = store.get_vote_target().expect("target selection");
+
+        assert_eq!(
+            target,
+            Checkpoint::new(roots[6], Slot::new(6)),
+            "walk 2 must step back from the walk-1 landing at slot 7 to slot 6",
+        );
+        // The two properties the assertion above depends on, pinned separately so
+        // a failure says WHICH one broke.
+        assert!(
+            !Slot::new(7).is_justifiable_after(Slot::ZERO),
+            "fixture is vacuous unless the walk-1 landing is non-justifiable",
+        );
+        assert!(
+            target.slot.is_justifiable_after(Slot::ZERO),
+            "the selected slot must be justifiable after the finalized slot",
+        );
+    }
+
+    #[test]
+    fn target_selection_stops_at_the_finalized_checkpoint() {
+        // Regression for the store shape that made a literal port of the spec
+        // walk step off the bottom of the chain: `adopt_post_state_checkpoints`
+        // advances `latest_finalized` without refreshing `safe_target`, so walk 1
+        // can descend BELOW the finalized slot, where `is_justifiable_after` is
+        // false for every ancestor and the walk runs out of chain.
+        let (mut store, roots, states) = linear_chain(2, 2);
+        let checkpoint = Checkpoint::new(roots[1], Slot::ONE);
+        let mut post_state = states[0].clone();
+        post_state.latest_justified = checkpoint;
+        post_state.latest_finalized = checkpoint;
+
+        let block = Block {
+            slot: Slot::new(2),
+            proposer_index: ValidatorIndex::new(0),
+            parent_root: roots[1],
+            state_root: post_state.hash_tree_root().into(),
+            body: BlockBody::default(),
+        };
+        store.track_block(block, post_state).expect("track");
+        store.accept_new_votes().expect("head refresh");
+
+        // safe_target is still genesis (slot 0) while finalization is at slot 1.
+        assert_eq!(store.safe_target(), roots[0]);
+        let target = store
+            .get_vote_target()
+            .expect("must not walk past finalized");
+        assert_eq!(
+            target, checkpoint,
+            "the walk must stop at the finalized checkpoint, not step past genesis",
+        );
+    }
+
+    #[test]
+    fn target_selection_undershoots_when_finalized_is_off_ancestry() {
+        // The floor bounds TERMINATION, not the post-condition. When the
+        // finalized checkpoint sits on a branch the head does not descend from,
+        // one parent step can skip from above the finalized slot to below it and
+        // both loops exit on the floor with a NON-justifiable target. This test
+        // pins that as deliberate documented behaviour rather than an accident;
+        // the divergence that produces it is tracked as its own issue.
+        let (mut store, anchor) = genesis_store(4);
+
+        // Two children of genesis at different slots, so whichever is NOT the
+        // head sits at a slot the head's ancestry does not contain.
+        let (block_a, state_a) = fresh_block_and_state(anchor, 4);
+        let (block_b, state_b) = fresh_block_and_state(anchor, 2);
+        let root_a: Bytes32 = block_a.hash_tree_root().into();
+        let root_b: Bytes32 = block_b.hash_tree_root().into();
+        store.track_block(block_a, state_a).expect("track a");
+        store.track_block(block_b, state_b).expect("track b");
+        store.accept_new_votes().expect("head refresh");
+
+        // The head is decided by the (weight, root) tie-break, so the test READS
+        // it rather than assuming it, and finalizes the other branch. Both
+        // orientations undershoot: a head above the finalized slot walks past it,
+        // and a head below it is already under the floor.
+        let head = store.head();
+        let (off_root, off_slot) = if head == root_a {
+            (root_b, Slot::new(2))
+        } else {
+            assert_eq!(head, root_b, "head must be one of the two children");
+            (root_a, Slot::new(4))
+        };
+
+        // Adopt the off-ancestry checkpoint the way ordinary operation does: a
+        // block on that branch whose post-state names it finalized. Built by hand
+        // because `state_root` must commit to the MODIFIED state — the same
+        // reason `track_block_adopts_newer_known_post_state_checkpoints` does.
+        let mut post_state = crate::test_fixtures::genesis_anchor(4).0;
+        post_state.latest_finalized = Checkpoint::new(off_root, off_slot);
+        let follower = Block {
+            slot: Slot::new(5),
+            proposer_index: ValidatorIndex::new(1),
+            parent_root: off_root,
+            state_root: post_state.hash_tree_root().into(),
+            body: BlockBody::default(),
+        };
+        store
+            .track_block(follower, post_state)
+            .expect("track the follower that carries the finalized checkpoint");
+        assert_eq!(store.latest_finalized().root, off_root);
+        assert_eq!(store.head(), head, "tracking must not move the head");
+
+        let target = store.get_vote_target().expect("the walk must still return");
+        assert!(
+            target.slot < store.latest_finalized().slot,
+            "documented undershoot: the target sits below the finalized slot",
+        );
+        assert!(
+            !target
+                .slot
+                .is_justifiable_after(store.latest_finalized().slot),
+            "and it is NOT justifiable — the residual this test exists to make visible",
+        );
     }
 }

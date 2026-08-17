@@ -39,6 +39,14 @@ pub use devnet0::{Config, ConfigError, DEVNET_CONFIG};
 /// chain-config knob.
 pub const INTERVALS_PER_SLOT: u64 = 4;
 
+/// Maximum number of parent steps an attester walks back from the head toward
+/// the safe target when selecting its vote target (devnet0 = `3`).
+///
+/// Not part of [`Config`]: this is fixed forkchoice topology, not a chain-config
+/// knob. Mirrors the reference specification's `chain/config.py:19 @ 0c9528ac`
+/// (`JUSTIFICATION_LOOKBACK_SLOTS: Final = Uint64(3)`).
+pub const JUSTIFICATION_LOOKBACK_SLOTS: u64 = 3;
+
 /// Interval duration in seconds (`DEVNET_CONFIG.seconds_per_slot /
 /// INTERVALS_PER_SLOT` = `1`).
 ///

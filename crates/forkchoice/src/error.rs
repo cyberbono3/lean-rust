@@ -67,12 +67,39 @@ pub enum ForkchoiceError {
     SourceSlotExceedsTarget,
 
     /// `vote.source.slot` disagrees with the resolved source block's slot.
-    #[error("forkchoice source checkpoint slot mismatches anchor block slot")]
+    #[error("forkchoice source checkpoint slot mismatches the resolved source block slot")]
     SourceCheckpointSlotMismatch,
 
     /// `vote.target.slot` disagrees with the resolved target block's slot.
-    #[error("forkchoice target checkpoint slot mismatches anchor block slot")]
+    #[error("forkchoice target checkpoint slot mismatches the resolved target block slot")]
     TargetCheckpointSlotMismatch,
+
+    /// An attestation referenced a `head` checkpoint whose `root` is not
+    /// tracked by the store.
+    ///
+    /// Distinct from [`ForkchoiceError::UnknownHeadBlock`], which reports the
+    /// STORE's own head root missing — a local invariant break. This variant is
+    /// a peer-supplied value failing validation, and the two must stay
+    /// separable in an operator's log.
+    #[error("forkchoice unknown attestation head block at {root:?}")]
+    UnknownAttestationHeadBlock {
+        /// `vote.head.root` declared by the attester.
+        root: Bytes32,
+    },
+
+    /// An attestation's `head` checkpoint is older than its `target`. History
+    /// is linear and monotonic: `source <= target <= head`.
+    #[error("forkchoice attestation head slot {head_slot} below target slot {target_slot}")]
+    HeadSlotBelowTarget {
+        /// `vote.head.slot` declared by the attester.
+        head_slot: Slot,
+        /// `vote.target.slot` declared by the attester.
+        target_slot: Slot,
+    },
+
+    /// `vote.head.slot` disagrees with the resolved head block's slot.
+    #[error("forkchoice head checkpoint slot mismatches the resolved head block slot")]
+    HeadCheckpointSlotMismatch,
 
     /// `vote.slot` is more than one slot ahead of the store's
     /// `current_vote_slot()`.
