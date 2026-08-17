@@ -2383,9 +2383,12 @@ mod state_transition_tests {
         //
         // The length assertion below does NOT falsify that — a header that
         // back-filled an existing index on the ninth block would leave the length
-        // at 8 and pass. Its contribution is pinning the length as exactly 8,
-        // which bounds the range check and rules out a fixture where a target
-        // above slot 7 would be in range. The back-fill cases are caught
+        // at 8 and pass. Its contribution is pinning the extension pattern: any
+        // change that grows or shrinks the bitlist per block breaks it here,
+        // where the cause is obvious, rather than downstream. Note it does not
+        // bound the range check at the vote's own processing point, which sees
+        // length 9 after the slot-9 header write and so admits a target at slot
+        // 8. The back-fill cases are caught
         // downstream instead: a wrongly-set bit 7 fails the `get(7)` assertion in
         // the skip test, and a wrongly-set bit 6 or a cleared bit 0 fails the
         // positive control's `latest_justified` assertions, because the votes
@@ -2586,7 +2589,7 @@ mod state_transition_tests {
         assert_eq!(post.justified_slots.get(6), Some(true));
         assert_eq!(post.latest_justified.root, pronic_target);
         assert_eq!(post.latest_justified.slot, Slot::new(6));
-        // ... and the stale one left no trace anywhere.
+        // ... and the unusable ones left no trace anywhere.
         assert_eq!(post.justified_slots.get(7), Some(false));
         assert_post_states_agree_except_body_root(&post, &carrier, &baseline);
     }
