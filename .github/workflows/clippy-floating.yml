@@ -1,0 +1,58 @@
+name: clippy (floating toolchain)
+
+# Advisory only. The `clippy` job in ci.yml pins the MSRV toolchain (1.87), which
+# freezes the lint set: combined with `clippy::all = deny`, a future MSRV bump
+# would land a year of accumulated new lints as CI failures all at once. This job
+# runs the same check on latest stable so that backlog is visible continuously
+# and a bump is a known quantity.
+#
+# It is deliberately NOT on push/pull_request:
+#   - It would double clippy compute on every PR for information nobody reads
+#     per-commit.
+#   - Once stable diverges from the pin it is permanently amber, and an
+#     always-amber required check trains people to ignore it.
+#
+# Weekly is the right cadence because the input changes at Rust's six-week
+# release rhythm, not at this repository's commit rhythm. Run it on demand from
+# the Actions tab (workflow_dispatch) before proposing an MSRV bump.
+#
+# Owner: whoever proposes the next toolchain bump reads the most recent run and
+# folds its findings into that PR. It must never gate a merge — an upstream
+# clippy release adding a lint is not a defect in this repository.
+
+on:
+  schedule:
+    # Mondays 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  clippy-floating:
+    name: clippy (latest stable, advisory)
+    runs-on: ubuntu-latest
+    # Advisory: a finding here is a heads-up about a future toolchain, never a
+    # failure of the commit under test.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install latest stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+      # `-D warnings` is kept so the log is a clean list of exactly what an MSRV
+      # bump would surface; `continue-on-error` above is what makes it advisory.
+      - name: cargo clippy (advisory)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Report toolchain under test
+        if: always()
+        run: |
+          echo "Advisory run against: $(cargo clippy --version)"
+          echo "ci.yml pins: 1.87.0 (see rust-toolchain.toml)"
