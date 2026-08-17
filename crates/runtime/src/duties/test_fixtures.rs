@@ -76,6 +76,7 @@ const FIXTURE_SEED: u64 = 0x00C0_FFEE;
 /// Unlike a real signer this has NO one-time-key watermark, so it accepts the
 /// same (validator, slot) twice. A test covering double-sign rejection therefore
 /// needs real key material.
+#[derive(Debug)]
 pub struct StubSigner;
 
 impl AttestationSigner for StubSigner {

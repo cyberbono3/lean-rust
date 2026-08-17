@@ -37,6 +37,15 @@ pub struct OtsSigner {
     store: Arc<dyn WatermarkStore>,
 }
 
+// Hand-written and redacted on purpose. `inner` wraps live signing material and
+// `store` is the durable watermark sink; neither is printable and neither should
+// be. The guard's own identity is the whole of the useful debug output.
+impl std::fmt::Debug for OtsSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OtsSigner").finish_non_exhaustive()
+    }
+}
+
 impl OtsSigner {
     /// Builds the guard over `inner` (the local signer) and `store` (the durable
     /// persistence sink). `inner` is a [`PersistableSigner`] by construction: a

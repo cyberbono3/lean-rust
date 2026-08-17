@@ -43,6 +43,14 @@ pub enum RpcProvider {
     },
 }
 
+// The `Chain` variant holds `Arc<ChainService>` and a block store, neither
+// printable.
+impl std::fmt::Debug for RpcProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RpcProvider").finish_non_exhaustive()
+    }
+}
+
 impl RpcProvider {
     /// Builds the production provider over the chain service and block
     /// store.

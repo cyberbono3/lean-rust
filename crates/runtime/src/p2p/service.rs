@@ -82,6 +82,13 @@ pub struct P2pService {
     registry: Arc<PeerRegistry>,
 }
 
+// Holds `Mutex<State>` over the swarm handle. Does not lock.
+impl std::fmt::Debug for P2pService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("P2pService").finish_non_exhaustive()
+    }
+}
+
 enum State {
     /// Constructed but not yet started. Holds the assembled `Swarm`
     /// and the bootnodes pending dial.

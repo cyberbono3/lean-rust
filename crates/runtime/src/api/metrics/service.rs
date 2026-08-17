@@ -27,6 +27,13 @@ pub struct MetricsService {
     server: EndpointServer,
 }
 
+// Wraps a `FrozenRecorder` and an axum server, neither of which is printable.
+impl std::fmt::Debug for MetricsService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MetricsService").finish_non_exhaustive()
+    }
+}
+
 impl MetricsService {
     /// Constructs a service that will bind `listen_addr` at `start` and
     /// serve metrics from the frozen `recorder`.

@@ -77,11 +77,20 @@ pub struct Loop {
 }
 
 impl core::fmt::Debug for Loop {
+    /// Uses `try_lock`, never `lock`. `Service::start` and `Service::stop` both
+    /// hold the `run` guard while doing real work, so a `{:?}` evaluated inside
+    /// either — a `tracing` field, a panic message, an assertion — would
+    /// deadlock against a plain `lock()`. Reporting the state as unknown is the
+    /// correct outcome when the lock is held: a debug render must never be able
+    /// to hang the caller it is describing.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Loop")
-            .field("config", &self.config)
-            .field("running", &self.run.lock().is_some())
-            .finish_non_exhaustive()
+        let mut out = f.debug_struct("Loop");
+        out.field("config", &self.config);
+        match self.run.try_lock() {
+            Some(guard) => out.field("running", &guard.is_some()),
+            None => out.field("running", &"<locked>"),
+        };
+        out.finish_non_exhaustive()
     }
 }
 

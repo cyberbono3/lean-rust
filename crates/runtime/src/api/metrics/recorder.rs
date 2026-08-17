@@ -19,7 +19,7 @@ use super::error::MetricsError;
 /// leak through this crate's public API. Cheap to clone (`Arc`-backed); a clone
 /// injected into a producer records observations that the sibling clone held by
 /// the recorder exports on scrape.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ObservedHistogram {
     inner: Histogram,
 }
@@ -61,6 +61,14 @@ pub struct Recorder {
     metrics: Vec<MetricDefinition>,
 }
 
+// `MetricDefinition` holds provider closures behind `Arc`, which are not
+// printable.
+impl std::fmt::Debug for Recorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Recorder").finish_non_exhaustive()
+    }
+}
+
 /// Immutable, cheaply cloneable snapshot of the registered metric
 /// providers, consumed by the running metrics service.
 ///
@@ -70,6 +78,13 @@ pub struct Recorder {
 #[derive(Clone)]
 pub struct FrozenRecorder {
     metrics: Arc<[MetricDefinition]>,
+}
+
+// Same as `Recorder`: the definition set holds provider closures.
+impl std::fmt::Debug for FrozenRecorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FrozenRecorder").finish_non_exhaustive()
+    }
 }
 
 enum MetricDefinition {
@@ -391,12 +406,9 @@ mod tests {
         recorder.gauge("lean_dup", "First.", || 1);
         recorder.gauge("lean_dup", "Second.", || 2);
 
-        // `FrozenRecorder` holds provider closures and is not `Debug`,
-        // so use `.err()` rather than `expect_err`.
         let err = recorder
             .freeze()
-            .err()
-            .expect("duplicate name should fail freeze");
+            .expect_err("duplicate name should fail freeze");
         assert!(
             matches!(&err, MetricsError::DuplicateMetric { name } if name == "lean_dup"),
             "got {err:?}",
@@ -437,8 +449,7 @@ mod tests {
 
         let err = recorder
             .freeze()
-            .err()
-            .expect("duplicate histogram name should fail freeze");
+            .expect_err("duplicate histogram name should fail freeze");
         assert!(
             matches!(&err, MetricsError::DuplicateMetric { name } if name == "lean_dup_hist"),
             "got {err:?}",

@@ -31,6 +31,14 @@ pub struct HttpService {
     server: EndpointServer,
 }
 
+// `Arc<dyn Store>` has no Debug bound and the axum server holds no printable
+// state.
+impl std::fmt::Debug for HttpService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpService").finish_non_exhaustive()
+    }
+}
+
 impl HttpService {
     /// Constructs a service that will bind `listen_addr` at `start` and
     /// serve head queries against `store`.

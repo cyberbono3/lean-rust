@@ -21,6 +21,15 @@ pub struct MemoryStore {
     inner: RwLock<Inner>,
 }
 
+// Deliberately does not lock: printing a store's contents is never wanted, and
+// acquiring the read lock inside `fmt` would hang if the caller already holds the
+// write lock — a `{:?}` inside a locked scope is exactly that case.
+impl std::fmt::Debug for MemoryStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryStore").finish_non_exhaustive()
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     blocks: HashMap<Bytes32, SignedBlockWithAttestation>,
