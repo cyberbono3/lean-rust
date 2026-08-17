@@ -368,7 +368,12 @@ impl Store {
     /// takes DATA rather than a signed envelope — the predicates are
     /// signature-agnostic. This client's extra validator-index bound is NOT here;
     /// it lives in [`Self::validate_validator_index`], which
-    /// [`Self::process_attestation`] runs first.
+    /// [`Self::process_attestation`] runs first. These two are a PAIR: this
+    /// function alone will happily validate a vote carrying a forged `u64`
+    /// validator id, because the id is not part of [`AttestationData`]. Any
+    /// caller driving them directly — a gossip validation callback deciding
+    /// whether to propagate, say — must run the bound first or it forwards
+    /// exactly what the bound exists to stop.
     ///
     /// One divergence: the source root is RESOLVED before lookup. The reference
     /// normalizes nothing on ingress (`store.py:299`, `:313`) because its producer
@@ -830,7 +835,18 @@ impl Store {
     /// or above the justified slot — so on a store whose `safe_target` is stale
     /// relative to a freshly adopted justified checkpoint, this node can emit a
     /// vote its OWN [`Self::validate_attestation`] rejects with
-    /// [`ForkchoiceError::SourceSlotExceedsTarget`]. Flooring this walk at the
+    /// [`ForkchoiceError::SourceSlotExceedsTarget`].
+    ///
+    /// That staleness is not a rare invariant break; it is a one-interval race
+    /// with a fixed address. `safe_target` is refreshed by the `tick_interval`
+    /// that advances into `Phase::UpdateSafeTarget` (interval 2), and the node's
+    /// attester pass runs on the NEXT tick — the one at
+    /// `VOTE_DUE_INTERVAL`, which drains gossip BEFORE it runs the attesters
+    /// (`crates/node/src/consensus_loop.rs`). Any justification-advancing block
+    /// that lands in that drain moves `latest_justified` after the last
+    /// `safe_target` refresh and before this walk runs, and a peer controls
+    /// delivery timing. The vote is then dropped identically by every conformant
+    /// node, so the cost is one lost vote for one slot rather than a split. Flooring this walk at the
     /// justified slot would only narrow that: when the justified checkpoint sits
     /// ABOVE the head, no target on the head's ancestry can satisfy
     /// `source <= target` at all. The real fix is the source derivation — the
