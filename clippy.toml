@@ -38,7 +38,8 @@ doc-valid-idents = [
 # door open to enabling `clippy::dbg_macro` later without churning tests.
 allow-dbg-in-tests = true
 
-# Byte threshold above which clippy's stack-size lints treat a value as large.
-# The workspace routinely moves multi-KB SSZ payloads and 4000-byte signature
-# placeholders across the stack.
-too-large-for-stack = 128
+# NOTE: `too-large-for-stack` is deliberately NOT set here. It feeds
+# `clippy::useless_vec` and `clippy::boxed_local`, both members of `clippy::all`
+# which this workspace denies, and both fire only when a value is *below* the
+# threshold. Lowering clippy's 512-byte default would therefore narrow two
+# already-denied lints rather than tighten anything.
