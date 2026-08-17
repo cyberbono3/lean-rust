@@ -489,8 +489,12 @@ impl Store {
     /// [`Self::validate_attestation`] stays signature-agnostic. This guard
     /// exists because the vote pools are keyed by validator id — without it a
     /// peer can flood them with arbitrary `u64` ids at roughly 3.2 KiB per
-    /// entry. It therefore runs FIRST, ahead of any block lookup, and fails
-    /// closed when the head post-state is unknown.
+    /// entry. It fails closed when the head post-state is unknown.
+    ///
+    /// CALLER CONTRACT: anyone driving the predicate set directly MUST call this
+    /// BEFORE [`Self::validate_attestation`], which is what keeps a forged `u64`
+    /// id from reaching a block lookup at all. [`Self::process_attestation`]
+    /// does; a caller that skips it gets the predicates without the bound.
     ///
     /// # Errors
     /// - [`ForkchoiceError::HeadStateNotFound`] forwarded from
@@ -1746,6 +1750,10 @@ mod attestation_tests {
 
     #[test]
     fn validate_unknown_target() {
+        // Head and target share a checkpoint here, so this vote violates the head
+        // predicate too and the asserted variant is what pins target-before-head
+        // in the availability group. Do NOT give it a distinct valid head: the
+        // assertion would still pass and the ordering coverage would be gone.
         let (store, roots) = store_with_chain_at_slot_3();
         let source = Checkpoint::new(roots[0], Slot::ZERO);
         let bad_target = Checkpoint::new(Bytes32::new([0xbb; 32]), Slot::new(2));
@@ -1798,6 +1806,10 @@ mod attestation_tests {
 
     #[test]
     fn validate_target_checkpoint_slot_mismatch() {
+        // Head and target share a checkpoint here, so this vote violates the head
+        // predicate too and the asserted variant is what pins target-before-head
+        // in the consistency group. Do NOT give it a distinct valid head: the
+        // assertion would still pass and the ordering coverage would be gone.
         let (store, roots) = store_with_chain_at_slot_3();
         let source = Checkpoint::new(roots[0], Slot::ZERO);
         // Target root resolves to slot 2, but checkpoint claims slot 3.
@@ -1867,17 +1879,31 @@ mod attestation_tests {
     /// (`head.slot == target.slot`, the equality edge of `>=`) is a distinct
     /// input from the strict-inequality baseline.
     ///
-    /// Every reject row isolates its own predicate: a vote that violates two
-    /// proves only that the earlier group fires.
+    /// Every reject row isolates its own predicate — a vote that violates two
+    /// proves only that the earlier group fires — with ONE labelled exception,
+    /// the ordering row, whose whole point is to violate two.
     ///
-    /// The six standalone reject tests above are NOT redundant with rows P1, P2,
-    /// P4, P6, P7 and P9, and must not be deleted as duplicates. Two of them —
-    /// `validate_unknown_target` and `validate_target_checkpoint_slot_mismatch` —
-    /// pass the SAME checkpoint as head and target, so each violates a second
-    /// predicate (P3 and P8 respectively) and still reports the variant it
-    /// asserts. That is the only coverage of the reference's WITHIN-group order
-    /// (source before target before head), which the isolated rows here
-    /// deliberately cannot exercise.
+    /// Ordering coverage, which is what stops a reordering of the checks from
+    /// going unnoticed, lives in three places and nowhere else:
+    ///
+    /// - source before target: the ordering row here.
+    /// - target before head, availability group: `validate_unknown_target`.
+    /// - target before head, consistency group:
+    ///   `validate_target_checkpoint_slot_mismatch`.
+    ///
+    /// Those two standalone tests carry it only because each passes the SAME
+    /// checkpoint as head and target, so each violates a second predicate and
+    /// still reports the variant it asserts. Give either one a distinct valid
+    /// head — a natural-looking cleanup now that head is validated — and the
+    /// coverage disappears silently.
+    ///
+    /// The other four standalone reject tests (`validate_unknown_source`,
+    /// `validate_source_slot_after_target`,
+    /// `validate_source_checkpoint_slot_mismatch`,
+    /// `validate_rejects_attestation_beyond_plus_one`) violate exactly one
+    /// predicate each and duplicate rows P1, P4, P6 and P9. They are kept as
+    /// independent single-predicate regressions, not because the matrix needs
+    /// them.
     /// The eleven rows, built from a chain fixture's roots. Split out so the
     /// assertion loop stays readable — and so the table can be read as data.
     // `too_many_lines` targets branching complexity; this function has none — it
@@ -1887,7 +1913,7 @@ mod attestation_tests {
     // spec's four predicate groups across two builders, both of which cost more
     // than the lint buys here.
     #[allow(clippy::too_many_lines)]
-    fn predicate_cases(roots: &[Bytes32]) -> [PredicateCase; 11] {
+    fn predicate_cases(roots: &[Bytes32]) -> [PredicateCase; 12] {
         let anchor = Checkpoint::new(roots[0], Slot::ZERO);
         let b1 = Checkpoint::new(roots[1], Slot::ONE);
         let b2 = Checkpoint::new(roots[2], Slot::new(2));
@@ -1898,6 +1924,10 @@ mod attestation_tests {
         // checked before topology — the group order it is supposed to be
         // independent of.
         let untracked_head = Checkpoint::new(Bytes32::new([0xab; 32]), Slot::new(2));
+        // A third, for the one ordering row below: a vote whose source AND target
+        // are both untracked must report the SOURCE, which is what pins the
+        // reference's source-before-target order inside the availability group.
+        let untracked_target = Checkpoint::new(Bytes32::new([0xac; 32]), Slot::ONE);
 
         // Expected variants, hoisted so each row below reads as one line of data.
         let no_source = ForkchoiceError::UnknownSourceBlock {
@@ -1993,6 +2023,17 @@ mod attestation_tests {
                 b1,
                 anchor,
                 Some(ForkchoiceError::HeadCheckpointSlotMismatch),
+            ),
+            // NOT an isolation row: the only row that deliberately violates two
+            // predicates, because the variant it reports is the assertion.
+            case(
+                "ordering: source before target when both are untracked",
+                b2,
+                untracked_target,
+                untracked,
+                Some(ForkchoiceError::UnknownSourceBlock {
+                    root: untracked.root,
+                }),
             ),
             PredicateCase {
                 name: "P9 reject: vote slot beyond current + 1",
