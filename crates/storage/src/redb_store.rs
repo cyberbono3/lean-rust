@@ -40,6 +40,14 @@ pub struct RedbStore {
     db: Database,
 }
 
+// `redb::Database` has no Debug impl and its internals are not useful in a log
+// line.
+impl std::fmt::Debug for RedbStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedbStore").finish_non_exhaustive()
+    }
+}
+
 impl RedbStore {
     /// Opens (creating if absent) a persistent store at `path`.
     ///

@@ -38,6 +38,24 @@ pub struct Node {
     pub(crate) state: Mutex<Option<Vec<NamedService>>>,
 }
 
+// `Service` is declared `Send + Sync + 'static` with no Debug supertrait, so
+// `dyn Service` cannot be derived over. Reports which slots are wired and does
+// not lock `state`.
+impl std::fmt::Debug for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Node")
+            .field(
+                "wired",
+                &SLOT_ORDER
+                    .iter()
+                    .filter(|(_, get)| get(self).is_some())
+                    .map(|(name, _)| *name)
+                    .collect::<Vec<_>>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl Node {
     /// Builds an empty node carrying `config`. Slots are populated via the
     /// `with_*` builder methods.

@@ -26,7 +26,7 @@ use crate::api::metrics::ObservedHistogram;
 /// a sub-phase inside `protocol::State::state_transition` and cannot be observed
 /// at the runtime boundary without adding timing inside `protocol`. The
 /// whole-transition wall time is the coarse trigger.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct ChainMetrics {
     fork_choice_block_processing: Option<ObservedHistogram>,
     state_transition: Option<ObservedHistogram>,

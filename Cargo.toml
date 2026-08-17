@@ -36,6 +36,9 @@ missing_docs = "warn"
 # back as `pub`. Enabling the nursery group would put the two in direct conflict
 # over ~109 sites. If nursery is ever wanted, exclude `redundant_pub_crate`.
 unreachable_pub = "warn"
+# A type with no Debug cannot appear in the `{:?}` of any struct containing it,
+# which silently degrades every error and tracing payload downstream.
+missing_debug_implementations = "warn"
 # `loom` is an opt-in concurrency-model cfg (see lean-chain tests/loom_import.rs);
 # register it so the default `-D warnings` build does not flag it as unexpected.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

@@ -177,6 +177,20 @@ pub struct LocalSigner {
     keys: BTreeMap<ValidatorIndex, ProdSigningKey>,
 }
 
+// Hand-written and redacted on purpose — NEVER `#[derive(Debug)]` here. The map
+// values are `ProdSigningKey`, i.e. live signing material, and a derived impl
+// would render every one of them into any log line, panic message, or tracing
+// field that formats a struct containing this signer. Only the validator index
+// set is disclosed, which is already public in the genesis manifest.
+impl std::fmt::Debug for LocalSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalSigner")
+            .field("validators", &self.keys.len())
+            .field("indices", &self.keys.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
+}
+
 impl LocalSigner {
     /// An empty signer holding no keys — used by observer nodes (no local
     /// validators). Any [`sign_attestation`](Self::sign_attestation) call returns
@@ -384,6 +398,51 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let pubs = write_validator_secrets(dir.path(), indices, MIN_ACTIVE_EPOCHS);
         (dir, pubs)
+    }
+
+    /// Runs in CI (no keygen). Pins the redacted SHAPE by exact equality, which
+    /// is what makes it able to fail: `#[derive(Debug)]` on `LocalSigner` would
+    /// render `LocalSigner { keys: {} }` and mismatch immediately. An
+    /// absence-of-substring assertion would NOT — an empty key map discloses
+    /// nothing under either impl, so it would pass against a fully leaking derive.
+    #[test]
+    fn local_signer_debug_shape_is_redacted() {
+        let signer = LocalSigner::empty();
+        assert_eq!(
+            format!("{signer:?}"),
+            "LocalSigner { validators: 0, indices: [], .. }"
+        );
+    }
+
+    /// The same guard with real key material loaded. `ProdScheme` keygen is
+    /// CPU-heavy, so this is `#[ignore]` per this file's precedent and runs via
+    /// `cargo test -p runtime -- --ignored`; the shape test above is the one CI
+    /// executes. Asserts a positive property plus a length bound — a serialized
+    /// `ProdSigningKey` is orders of magnitude larger than this ceiling, so a
+    /// leaking impl cannot squeeze under it.
+    #[test]
+    #[ignore = "leanSig ProdScheme keygen is CPU-heavy; run explicitly with --ignored"]
+    fn local_signer_debug_never_discloses_loaded_key_material() {
+        let (dir, _pubs) = make_secret_dir(&[0, 1]);
+        let signer =
+            LocalSigner::load(dir.path(), [ValidatorIndex::new(0), ValidatorIndex::new(1)])
+                .unwrap();
+
+        let rendered = format!("{signer:?}");
+
+        assert!(
+            rendered.starts_with("LocalSigner { validators: 2, indices: ["),
+            "unexpected shape: {rendered}"
+        );
+        assert!(
+            rendered.ends_with(".. }"),
+            "impl must stay non-exhaustive: {rendered}"
+        );
+        assert!(
+            rendered.len() < 128,
+            "render is {} bytes — key material is leaking: {rendered}",
+            rendered.len()
+        );
     }
 
     #[test]
