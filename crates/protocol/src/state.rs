@@ -680,8 +680,11 @@ impl State {
     /// Range checks (out-of-range source/target slot, validator id past
     /// `num_validators`) abort the whole call with an error. Semantic
     /// filters (source not yet justified, target already justified, root
-    /// mismatch, target not justifiable) cause the offending vote to be
-    /// silently skipped.
+    /// mismatch, target at or before its source, target not justifiable
+    /// after the finalized slot) cause the offending vote to be silently
+    /// skipped: the rest of the batch still applies, and so does the block
+    /// that carried it. A skipped vote contributes no weight and moves
+    /// neither justification nor finalization.
     ///
     /// All mutation is staged in working copies and committed atomically
     /// after the loop, so an `Err` return leaves the state byte-equal to
@@ -1272,7 +1275,10 @@ mod attestation_tests {
         }
     }
 
-    fn attestation(
+    /// Shared with `state_transition_tests`, which builds the same votes at
+    /// block level. `head` is set equal to `target` because
+    /// `process_attestations` never reads it.
+    pub(super) fn attestation(
         validator_id: u64,
         source_root: Bytes32,
         source_slot: u64,
@@ -1290,7 +1296,7 @@ mod attestation_tests {
         }
     }
 
-    fn root(byte: u8) -> Bytes32 {
+    pub(super) fn root(byte: u8) -> Bytes32 {
         Bytes32::new([byte; 32])
     }
 
@@ -1406,6 +1412,116 @@ mod attestation_tests {
         let votes = vec![attestation(0, root(0), 0, root(7), 7)];
         state.process_attestations(&votes).unwrap();
         assert_eq!(state, snapshot);
+    }
+
+    #[test]
+    fn justifiable_boundary_counts_pronic_six_and_skips_seven() {
+        // delta = 6 is pronic (2*3), so the target IS justifiable. delta = 7 is
+        // neither within the small window nor a square nor pronic, and is the
+        // SMALLEST non-justifiable distance. Every other filter sees identical
+        // input on both rows, so the pair isolates the justifiability filter
+        // and nothing else.
+        struct Case {
+            name: &'static str,
+            /// Doubles as the history index, so `root(target_slot)` is the root
+            /// recorded for that slot. `u8` keeps the conversion infallible.
+            target_slot: u8,
+            counted: bool,
+        }
+        let cases = [
+            Case {
+                name: "delta 6 is pronic",
+                target_slot: 6,
+                counted: true,
+            },
+            Case {
+                name: "delta 7 is neither square nor pronic",
+                target_slot: 7,
+                counted: false,
+            },
+        ];
+
+        for case in cases {
+            let history: Vec<Bytes32> = (0_u8..8).map(root).collect();
+            let mut pattern = vec![false; 8];
+            pattern[0] = true;
+            let mut state = populated_state(4, history, &pattern, Slot::ZERO);
+            let target_root = root(case.target_slot);
+            let votes = vec![attestation(
+                0,
+                root(0),
+                0,
+                target_root,
+                u64::from(case.target_slot),
+            )];
+
+            state.process_attestations(&votes).unwrap();
+
+            if case.counted {
+                assert_eq!(
+                    state.justifications_roots,
+                    vec![target_root],
+                    "case {}: the vote must be tallied",
+                    case.name,
+                );
+                assert_eq!(
+                    state.justifications_validators.get(0),
+                    Some(true),
+                    "case {}: validator 0's bit must be set",
+                    case.name,
+                );
+            } else {
+                assert!(
+                    state.justifications_roots.is_empty(),
+                    "case {}: the vote must be skipped",
+                    case.name,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn target_at_finalized_slot_follows_the_justification_bit() {
+        // The reference treats every slot at or before the finalized boundary as
+        // implicitly justified, so a target there is skipped by the
+        // already-justified filter and never reaches the justifiability filter
+        // at all. This client indexes its justification bitlist absolutely and
+        // READS the bit, so the two arms below differ: with the bit set the vote
+        // is skipped as the reference skips it; with the bit clear the vote is
+        // tallied, because distance zero IS justifiable.
+        //
+        // Arm 2 is LATENT, not live. No state reachable through the state
+        // transition has an unjustified finalized slot: `latest_finalized` is
+        // only ever assigned a vote's source, and a vote reaches that assignment
+        // only past the source-is-justified filter; bits are only ever raised,
+        // and the genesis block raises index 0. So arm 2 is constructible only on
+        // a hand-built state, and the divergence it records goes live only if a
+        // finalized-anchored justification window or a checkpoint-sync entry
+        // point lands. It is pinned here so that change cannot happen silently,
+        // and it is NOT evidence of a defect reachable today.
+        for bit in [true, false] {
+            let history: Vec<Bytes32> = (0_u8..8).map(root).collect();
+            let mut pattern = vec![false; 8];
+            pattern[0] = true;
+            pattern[3] = bit;
+            let mut state = populated_state(4, history, &pattern, Slot::new(3));
+            let votes = vec![attestation(0, root(0), 0, root(3), 3)];
+
+            state.process_attestations(&votes).unwrap();
+
+            if bit {
+                assert!(
+                    state.justifications_roots.is_empty(),
+                    "bit set: the already-justified filter fires first",
+                );
+            } else {
+                assert_eq!(
+                    state.justifications_roots,
+                    vec![root(3)],
+                    "bit clear: distance zero is justifiable, so the vote is tallied",
+                );
+            }
+        }
     }
 
     // -- Tally and supermajority --------------------------------------------
@@ -2109,9 +2225,18 @@ mod state_transition_tests {
     }
 
     /// Two-phase build: produce a `SignedBlockWithAttestation` for `state`
-    /// whose body is empty and whose `state_root` matches the post-state
-    /// reached by applying the transition on a clone of `state`.
-    fn build_signed_block(state: &State, slot: Slot) -> SignedBlockWithAttestation {
+    /// whose body carries `attestations` and whose `state_root` matches the
+    /// post-state reached by applying the transition on a clone of `state`.
+    ///
+    /// The `attestations` bound is the CALLER's: this is a direct constructor,
+    /// so it bypasses the decode-boundary check against `MAX_ATTESTATIONS`
+    /// that [`BlockBody`] documents. A caller passing more than that builds a
+    /// block no decoder would accept.
+    fn build_signed_block(
+        state: &State,
+        slot: Slot,
+        attestations: Vec<Attestation>,
+    ) -> SignedBlockWithAttestation {
         let proposer_index = ValidatorIndex::new(slot.get() % state.num_validators());
 
         // Phase 1: compute the post-state with `state_root = zero`.
@@ -2123,7 +2248,7 @@ mod state_transition_tests {
             proposer_index,
             parent_root,
             state_root: Bytes32::zero(),
-            body: BlockBody::default(),
+            body: BlockBody { attestations },
         };
         probe.process_block_header(&block).unwrap();
         probe
@@ -2150,11 +2275,72 @@ mod state_transition_tests {
         let mut walker = start.clone();
         for i in 1..=n {
             let slot = Slot::new(i as u64);
-            let sb = build_signed_block(&walker, slot);
+            let sb = build_signed_block(&walker, slot, Vec::new());
             walker.state_transition(&sb, true).unwrap();
             chain.push(sb);
         }
         chain
+    }
+
+    /// Asserts that `post` — the state after applying a block that CARRIES one
+    /// extra attestation — agrees with `baseline`, the state after applying the
+    /// same block WITHOUT it, everywhere that attestation could have had an
+    /// effect.
+    ///
+    /// Full `State` equality cannot hold: the two bodies have different
+    /// hash-tree-roots, and `process_block_header` commits that root into
+    /// `latest_block_header.body_root`. So pin that one field to the body that
+    /// produced it, assert the two sides genuinely differ there, then compare
+    /// the WHOLE state — which keeps the assertion honest as `State` grows
+    /// fields, where a hand-enumerated field list would not.
+    ///
+    /// The claim is bounded, not absolute: this cannot mask a difference in any
+    /// field other than the one it names, and the named field's VALUE is
+    /// asserted against `carrier`'s body rather than merely asserted to differ.
+    /// Without that first assertion a `body_root` mis-committed by
+    /// `process_block_header` would be consistently wrong on both sides, and
+    /// the post-state-root check would not catch it either, because the
+    /// two-phase builder derives `state_root` through the same code path.
+    fn assert_post_states_agree_except_body_root(
+        post: &State,
+        carrier: &SignedBlockWithAttestation,
+        baseline: &State,
+    ) {
+        let want_body_root: Bytes32 = carrier.message.block.body.hash_tree_root().into();
+        assert_eq!(
+            post.latest_block_header.body_root, want_body_root,
+            "the committed body_root must be the root of the body that was applied",
+        );
+        assert_ne!(
+            post.latest_block_header.body_root, baseline.latest_block_header.body_root,
+            "fixture is wrong: the two blocks must carry different bodies",
+        );
+        let mut normalized = post.clone();
+        normalized.latest_block_header.body_root = baseline.latest_block_header.body_root;
+        assert_eq!(normalized, *baseline);
+    }
+
+    /// Eight empty-body blocks from a four-validator genesis, with the
+    /// preconditions the stale-target tests depend on asserted rather than
+    /// assumed. A fixture that skipped the vote for the wrong reason would make
+    /// those tests pass while proving nothing.
+    fn chain_of_eight() -> State {
+        let mut state = genesis_state(4);
+        for sb in build_chain(&state, 8) {
+            state.state_transition(&sb, true).unwrap();
+        }
+
+        assert_eq!(state.slot, Slot::new(8));
+        assert_eq!(state.latest_finalized.slot, Slot::ZERO);
+        assert_eq!(state.historical_block_hashes.len(), 8);
+        assert_eq!(state.justified_slots.get(0), Some(true));
+        assert_eq!(state.justified_slots.get(6), Some(false));
+        assert_eq!(state.justified_slots.get(7), Some(false));
+        // Sixth precondition: the tally starts empty, so a later
+        // `justifications_roots` entry can only have come from a vote the test
+        // supplied.
+        assert!(state.justifications_roots.is_empty());
+        state
     }
 
     // -- Composition --------------------------------------------------------
@@ -2163,7 +2349,7 @@ mod state_transition_tests {
     fn composes_slots_block_attestations_in_order() {
         let mut driven = genesis_state(4);
         let mut hand = driven.clone();
-        let sb = build_signed_block(&driven, Slot::new(1));
+        let sb = build_signed_block(&driven, Slot::new(1), Vec::new());
         let block = sb.message.block.clone();
 
         driven.state_transition(&sb, true).unwrap();
@@ -2179,7 +2365,7 @@ mod state_transition_tests {
     #[test]
     fn state_root_mismatch_when_validation_on_and_root_tampered() {
         let mut state = genesis_state(4);
-        let mut sb = build_signed_block(&state, Slot::new(1));
+        let mut sb = build_signed_block(&state, Slot::new(1), Vec::new());
         let want = sb.message.block.state_root;
         // Flip a byte in the declared post-state root.
         let mut tampered = want;
@@ -2197,7 +2383,7 @@ mod state_transition_tests {
     #[test]
     fn state_root_validation_off_skips_root_check() {
         let mut state = genesis_state(4);
-        let mut sb = build_signed_block(&state, Slot::new(1));
+        let mut sb = build_signed_block(&state, Slot::new(1), Vec::new());
         sb.message.block.state_root.0[0] ^= 0xff;
         // With validation off the tampered root is ignored.
         state.state_transition(&sb, false).unwrap();
@@ -2209,7 +2395,7 @@ mod state_transition_tests {
     #[test]
     fn propagates_block_header_error() {
         let mut state = genesis_state(4);
-        let mut sb = build_signed_block(&state, Slot::new(1));
+        let mut sb = build_signed_block(&state, Slot::new(1), Vec::new());
         sb.message.block.parent_root = Bytes32::new([0xab; 32]);
         let err = state.state_transition(&sb, true).unwrap_err();
         assert!(matches!(
@@ -2224,12 +2410,12 @@ mod state_transition_tests {
     fn error_path_leaves_state_unchanged_on_header_error() {
         // Pre-state is non-trivial: advance by one valid block first.
         let mut state = genesis_state(4);
-        let sb0 = build_signed_block(&state, Slot::new(1));
+        let sb0 = build_signed_block(&state, Slot::new(1), Vec::new());
         state.state_transition(&sb0, true).unwrap();
         let snapshot = state.clone();
 
         // Now attempt a block with a corrupted parent_root.
-        let mut sb = build_signed_block(&state, Slot::new(2));
+        let mut sb = build_signed_block(&state, Slot::new(2), Vec::new());
         sb.message.block.parent_root = Bytes32::new([0xab; 32]);
         let _ = state.state_transition(&sb, true).unwrap_err();
         assert_eq!(state, snapshot);
@@ -2240,11 +2426,11 @@ mod state_transition_tests {
         // The most subtle path: process_attestations has already committed
         // its working copies before the post-state-root check fires.
         let mut state = genesis_state(4);
-        let sb0 = build_signed_block(&state, Slot::new(1));
+        let sb0 = build_signed_block(&state, Slot::new(1), Vec::new());
         state.state_transition(&sb0, true).unwrap();
         let snapshot = state.clone();
 
-        let mut sb = build_signed_block(&state, Slot::new(2));
+        let mut sb = build_signed_block(&state, Slot::new(2), Vec::new());
         sb.message.block.state_root.0[0] ^= 0xff;
         let err = state.state_transition(&sb, true).unwrap_err();
         assert!(matches!(
@@ -2252,6 +2438,71 @@ mod state_transition_tests {
             StateTransitionError::StateRootMismatch { .. }
         ));
         assert_eq!(state, snapshot);
+    }
+
+    // -- Unusable attestations do not take the block down -------------------
+
+    #[test]
+    fn block_with_stale_attestation_target_is_accepted() {
+        let state = chain_of_eight();
+        // delta = 7 - 0 = 7: not within the small window, not a perfect square,
+        // not pronic. The reference skips such a vote and still applies the
+        // block; rejecting it would split this node off every conforming client
+        // on one stale vote.
+        let unusable = super::attestation_tests::attestation(
+            0,
+            state.historical_block_hashes[0],
+            0,
+            state.historical_block_hashes[7],
+            7,
+        );
+
+        let carrier = build_signed_block(&state, Slot::new(9), vec![unusable]);
+        let mut post = state.clone();
+        post.state_transition(&carrier, true).unwrap();
+
+        let mut baseline = state.clone();
+        baseline
+            .state_transition(&build_signed_block(&state, Slot::new(9), Vec::new()), true)
+            .unwrap();
+
+        assert_post_states_agree_except_body_root(&post, &carrier, &baseline);
+    }
+
+    #[test]
+    fn stale_attestation_target_does_not_move_justification() {
+        // The filters are per-vote: three valid votes in the same body justify
+        // their target while the fourth, stale one contributes nothing.
+        // delta = 6 is pronic (2*3) and justifiable; delta = 7 is not.
+        let state = chain_of_eight();
+        let source_root = state.historical_block_hashes[0];
+        let pronic_target = state.historical_block_hashes[6];
+        let unusable_target = state.historical_block_hashes[7];
+
+        // 3 of 4 validators clears the supermajority: 3*3 >= 2*4.
+        let tallied: Vec<Attestation> = (0..3)
+            .map(|id| super::attestation_tests::attestation(id, source_root, 0, pronic_target, 6))
+            .collect();
+        let dropped = super::attestation_tests::attestation(3, source_root, 0, unusable_target, 7);
+
+        let mut body = tallied.clone();
+        body.push(dropped);
+        let carrier = build_signed_block(&state, Slot::new(9), body);
+        let mut post = state.clone();
+        post.state_transition(&carrier, true).unwrap();
+
+        let mut baseline = state.clone();
+        baseline
+            .state_transition(&build_signed_block(&state, Slot::new(9), tallied), true)
+            .unwrap();
+
+        // The valid votes did their work ...
+        assert_eq!(post.justified_slots.get(6), Some(true));
+        assert_eq!(post.latest_justified.root, pronic_target);
+        assert_eq!(post.latest_justified.slot, Slot::new(6));
+        // ... and the stale one left no trace anywhere.
+        assert_eq!(post.justified_slots.get(7), Some(false));
+        assert_post_states_agree_except_body_root(&post, &carrier, &baseline);
     }
 
     // -- Property tests ----------------------------------------------------
