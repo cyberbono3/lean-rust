@@ -22,14 +22,14 @@ use crate::error::StorageError;
 use crate::store::{HeadInfo, Store, WatermarkStore};
 
 /// `root -> SSZ(SignedBlockWithAttestation)`.
-const BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks");
+const BLOCKS: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("blocks");
 /// `root -> SSZ(State)`.
-const STATES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("states");
+const STATES: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("states");
 /// Singleton canonical-head record: `HEAD_KEY -> SSZ(head) ++ SSZ(finalized)`.
-const HEAD: TableDefinition<&[u8], &[u8]> = TableDefinition::new("head");
+const HEAD: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("head");
 /// Per-validator OTS watermark: `ValidatorIndex -> OtsWatermark::to_ssz_bytes()`.
 /// One row per validator (keyed by the `u64` index), NOT a single fixed key.
-const OTS_KEY_STATE: TableDefinition<u64, &[u8]> = TableDefinition::new("ots_key_state");
+const OTS_KEY_STATE: TableDefinition<'static, u64, &[u8]> = TableDefinition::new("ots_key_state");
 
 /// Fixed key for the single row in the [`HEAD`] table.
 const HEAD_KEY: &[u8] = b"head";
@@ -108,7 +108,7 @@ impl RedbStore {
 
     fn get(
         &self,
-        table: TableDefinition<&[u8], &[u8]>,
+        table: TableDefinition<'_, &[u8], &[u8]>,
         key: &[u8],
     ) -> Result<Option<Vec<u8>>, StorageError> {
         self.in_read_txn(|txn| {
@@ -122,7 +122,7 @@ impl RedbStore {
     /// `has_block`/`has_state` hot path.
     fn contains(
         &self,
-        table: TableDefinition<&[u8], &[u8]>,
+        table: TableDefinition<'_, &[u8], &[u8]>,
         key: &[u8],
     ) -> Result<bool, StorageError> {
         self.in_read_txn(|txn| {
@@ -133,7 +133,7 @@ impl RedbStore {
 
     fn put(
         &self,
-        table: TableDefinition<&[u8], &[u8]>,
+        table: TableDefinition<'_, &[u8], &[u8]>,
         key: &[u8],
         value: &[u8],
     ) -> Result<(), StorageError> {

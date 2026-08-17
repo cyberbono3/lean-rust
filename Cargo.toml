@@ -39,6 +39,11 @@ unreachable_pub = "warn"
 # A type with no Debug cannot appear in the `{:?}` of any struct containing it,
 # which silently degrades every error and tracing payload downstream.
 missing_debug_implementations = "warn"
+# Group lint, so it needs a lower priority than any individual lint that might
+# override one of its members — same reason `clippy::all` carries one.
+rust_2018_idioms = { level = "deny", priority = -1 }
+# Already `warn` by default and currently clean; raised to deny as a guard.
+unused_must_use = "deny"
 # `loom` is an opt-in concurrency-model cfg (see lean-chain tests/loom_import.rs);
 # register it so the default `-D warnings` build does not flag it as unexpected.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
