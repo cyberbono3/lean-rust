@@ -110,6 +110,14 @@ pub struct Service {
     signer: Arc<Mutex<dyn AttestationSigner>>,
 }
 
+// Holds `Arc<Mutex<dyn AttestationSigner>>` over key material. Does not lock:
+// the signer guard is taken on the produce path, and a `{:?}` there would hang.
+impl std::fmt::Debug for Service {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Service").finish_non_exhaustive()
+    }
+}
+
 impl Service {
     /// Builds a NON-SIGNING service around `engine` and `store` — an observer
     /// with no local validators. `produce_block` / `produce_attestation` on such a

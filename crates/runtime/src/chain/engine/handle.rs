@@ -52,6 +52,13 @@ pub struct Engine {
     verifier: Option<Arc<dyn Verifier>>,
 }
 
+// Holds `Arc<Mutex<Store>>`, taken across import and produce. Does not lock.
+impl std::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Engine").finish_non_exhaustive()
+    }
+}
+
 impl Engine {
     /// Builds an engine from a trusted `(state, anchor_block)` pair.
     ///

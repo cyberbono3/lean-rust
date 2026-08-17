@@ -18,6 +18,7 @@ use crate::p2p::rpc::RpcProvider;
 use crate::p2p::service::P2pService;
 
 /// Front-door builder. Construction-only — does not bind the listener.
+#[derive(Debug)]
 pub struct DevnetHost;
 
 impl DevnetHost {
