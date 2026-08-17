@@ -231,13 +231,29 @@ impl Store {
     /// source_slot` is `0 > 0`. Two of those failed even while the store still
     /// rewrote the source, so the entry never contributed FFG weight either way.
     ///
+    /// On the middle clause specifically: index 0 holds the ANCHOR root, not a zero
+    /// placeholder, so a zero source root genuinely disagrees with it.
+    /// `process_block_header` pushes `parent_root` at
+    /// `parent_idx = justified_slots.len()` — zero on the first transition — and
+    /// only THEN appends zero entries for any empty slots, so the placeholders land
+    /// after index 0 and never at it.
+    ///
     /// It DOES drop one real effect: LMD head weight on a blocks-only peer. Such a
     /// peer folds body attestations into `latest_known_votes`, and `update_head`
     /// scores `data.head` from that pool — a field no source resolution constrains.
     /// So under the old rewrite the vote reached a blocks-only peer's head
-    /// computation, and now it does not. That is acceptable: the vote is cast at
-    /// slot 0 against the genesis anchor, any later vote from the same validator
-    /// supersedes it, and gossip still delivers it to every peer that subscribes.
+    /// computation, and now it does not. Gossip-connected and blocks-only peers can
+    /// therefore weigh this one vote differently, which is a divergence and is worth
+    /// stating plainly rather than waving through.
+    ///
+    /// What bounds it is [`Store::resolved_source_root`]'s slot-0 clause: the
+    /// tolerance applies only to a vote at slot 0, so the divergent vote is always
+    /// the oldest possible one for that validator, and ANY later vote from them —
+    /// which is strictly newer, so `insert_if_newer` accepts it — supersedes it on
+    /// both node populations and re-converges them. Do NOT widen that clause without
+    /// revisiting this: at a higher slot the vote could sit at the future cap where
+    /// first-wins-at-equal-slot makes it unsupersedable, and the divergence would be
+    /// permanent instead of transient.
     /// Keeping it includable is not an option — once the producer assembles a full
     /// positional signature list, the same entry would publish a signature made
     /// over bytes the attester never signed.

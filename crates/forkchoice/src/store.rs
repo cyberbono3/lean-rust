@@ -377,11 +377,13 @@ impl Store {
     /// removed.
     ///
     /// # Errors
-    /// - [`ForkchoiceError::UnknownSourceBlock`] when the vote's DECLARED source
-    ///   root is not tracked by the store. It always carries the declared root,
-    ///   never a resolved one: [`Self::resolved_source_root`] only substitutes when
-    ///   the justified root is already tracked, so a substituted root cannot fail
-    ///   this lookup.
+    /// - [`ForkchoiceError::UnknownSourceBlock`] when the vote's RESOLVED source
+    ///   root is not tracked by the store. Resolved, not declared: a slot-0
+    ///   genesis-placeholder vote declares an all-zero root, which is never tracked,
+    ///   and still returns `Ok` — see [`Self::resolved_source_root`]. The error
+    ///   nonetheless always REPORTS the declared root, because substitution only
+    ///   happens when the justified root is already tracked, so a substituted root
+    ///   cannot reach this error.
     /// - [`ForkchoiceError::UnknownTargetBlock`] when the target checkpoint root
     ///   is not tracked by the store.
     /// - [`ForkchoiceError::SourceSlotExceedsTarget`] when either the
@@ -531,11 +533,23 @@ impl Store {
     /// is signed, and never edits a payload on ingress
     /// (`store.py:363`, `:388-:390`).
     ///
-    /// The guard stays narrow: only an all-zero source against a slot-0 anchor this
-    /// store has actually tracked resolves. Every other zero root falls through and
-    /// fails the normal source lookup.
+    /// The guard stays narrow: only an all-zero source on a SLOT-0 vote against a
+    /// slot-0 anchor this store has actually tracked resolves. Every other zero root
+    /// falls through and fails the normal source lookup.
+    ///
+    /// The `vote.slot.is_zero()` clause is load-bearing, not decoration. Without it
+    /// the tolerance extends to a vote at any slot up to `current_vote_slot() + 1`,
+    /// and [`insert_if_newer`] is first-wins at equal slot — so a placeholder vote
+    /// parked at the future cap would refuse every honest vote from that validator
+    /// at or below it. Such a vote is also excluded from produced block bodies (its
+    /// verbatim source cannot match the candidate's justified checkpoint), so it
+    /// would carry head weight on gossip-connected peers and none on blocks-only
+    /// peers: a head split. Pinning the clause to slot 0 keeps the tolerance to the
+    /// shape it was introduced for — a peer's slot-0 bootstrap vote — where the
+    /// vote can only ever be superseded upward and the divergence cannot arise.
     fn resolved_source_root(&self, vote: &AttestationData) -> Bytes32 {
         let is_genesis_placeholder = vote.source == Checkpoint::default()
+            && vote.slot.is_zero()
             && vote.target.slot.is_zero()
             && vote.target.root == self.latest_justified.root
             && self.latest_justified.slot.is_zero()
@@ -1353,10 +1367,52 @@ mod attestation_tests {
             .latest_new_votes()
             .get(&ValidatorIndex::new(0))
             .expect("the placeholder-source vote should enter the pending pool");
-        // The stored source is the exact INPUT value, not the resolved one. This
-        // is an identity property, so it rules out ANY rewrite rather than one
-        // particular rewrite target.
+        // The stored source is the exact INPUT value, not the resolved one — which
+        // is what the assertion this replaced could not distinguish, since it
+        // compared against the resolved value instead. It covers this ONE field;
+        // full-envelope identity is pinned by
+        // `signed_attestation_round_trips_byte_identical` below.
         assert_eq!(stored.message.data.source, Checkpoint::default());
+    }
+
+    #[test]
+    fn placeholder_source_tolerance_does_not_extend_past_slot_zero() {
+        // Adversarial-review regression. The tolerance exists for a peer's slot-0
+        // bootstrap vote. Before this clause it applied at ANY slot up to the
+        // future cap, and because `insert_if_newer` is first-wins at equal slot, a
+        // placeholder vote parked at the cap refused every honest vote from that
+        // validator at or below it — while also being excluded from produced block
+        // bodies, so it moved the head on gossip peers and not on blocks-only ones.
+        let (mut store, roots) = store_with_chain_at_slot_3();
+        let anchor = Checkpoint::new(roots[0], Slot::ZERO);
+
+        // current_vote_slot() == 3, so slot 4 is the highest admissible vote slot.
+        let parked = signed_vote(
+            ValidatorIndex::new(0),
+            anchor,
+            anchor,
+            Checkpoint::default(),
+            Slot::new(4),
+        );
+        let err = store
+            .process_attestation(parked, false)
+            .expect_err("a placeholder source above slot 0 must not resolve");
+        assert_eq!(
+            err,
+            ForkchoiceError::UnknownSourceBlock {
+                root: Bytes32::zero()
+            },
+        );
+
+        // The honest slot-0 shape the tolerance exists for still resolves.
+        let bootstrap = signed_vote(
+            ValidatorIndex::new(0),
+            anchor,
+            anchor,
+            Checkpoint::default(),
+            Slot::ZERO,
+        );
+        assert!(store.process_attestation(bootstrap, false).unwrap());
     }
 
     #[test]
