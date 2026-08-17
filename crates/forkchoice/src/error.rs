@@ -67,11 +67,11 @@ pub enum ForkchoiceError {
     SourceSlotExceedsTarget,
 
     /// `vote.source.slot` disagrees with the resolved source block's slot.
-    #[error("forkchoice source checkpoint slot mismatches anchor block slot")]
+    #[error("forkchoice source checkpoint slot mismatches the resolved source block slot")]
     SourceCheckpointSlotMismatch,
 
     /// `vote.target.slot` disagrees with the resolved target block's slot.
-    #[error("forkchoice target checkpoint slot mismatches anchor block slot")]
+    #[error("forkchoice target checkpoint slot mismatches the resolved target block slot")]
     TargetCheckpointSlotMismatch,
 
     /// An attestation referenced a `head` checkpoint whose `root` is not
@@ -98,7 +98,7 @@ pub enum ForkchoiceError {
     },
 
     /// `vote.head.slot` disagrees with the resolved head block's slot.
-    #[error("forkchoice head checkpoint slot mismatches anchor block slot")]
+    #[error("forkchoice head checkpoint slot mismatches the resolved head block slot")]
     HeadCheckpointSlotMismatch,
 
     /// `vote.slot` is more than one slot ahead of the store's

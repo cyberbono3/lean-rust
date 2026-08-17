@@ -497,7 +497,12 @@ impl Store {
     ///   [`Self::head_validator_count`] when the head's post-state is untracked.
     /// - [`ForkchoiceError::ValidatorIndexOutOfRange`] when the id is at or past
     ///   the head registry length.
-    pub(crate) fn validate_validator_index(
+    ///
+    /// `pub` for the same reason [`Self::validate_attestation`] is: any caller
+    /// that can reach the predicates must be able to reach this bound too. A
+    /// gossip validation callback that ran the predicates alone would forward
+    /// votes carrying forged `u64` ids to the rest of the network.
+    pub fn validate_validator_index(
         &self,
         validator_id: ValidatorIndex,
     ) -> Result<(), ForkchoiceError> {
@@ -785,11 +790,15 @@ impl Store {
     /// bottom of the chain. The input is reachable:
     /// [`Self::adopt_post_state_checkpoints`] advances `latest_finalized`
     /// without refreshing `safe_target`, so walk 1 can land below the finalized
-    /// slot. The floor makes termination a property of this function — a parent
-    /// step strictly decreases the slot, so the walk reaches the floor from any
-    /// starting point — rather than of the caller's store hygiene. The bound is
-    /// a SLOT comparison, not root-equality: the finalized block need not lie on
-    /// the cursor's ancestry.
+    /// slot. The floor makes termination a property of this function rather than
+    /// of the caller's store hygiene. It does NOT rest on slot monotonicity along
+    /// `parent_root`: [`Self::track_block`] never checks `block.slot >
+    /// parent.slot`, so that is an expectation, not an invariant. What terminates
+    /// the walk is that the parent edge is a hash link — a cycle would need a
+    /// hash fixed point — over a finite block map, so every walk reaches the
+    /// floor, reaches genesis, or dies on [`ForkchoiceError::ParentBlockNotFound`].
+    /// The bound is a SLOT comparison, not root-equality: the finalized block
+    /// need not lie on the cursor's ancestry.
     ///
     /// The floor bounds TERMINATION, not the post-condition, and the two cases
     /// differ:
@@ -810,6 +819,21 @@ impl Store {
     /// have diverged. The behaviour is pinned by
     /// `target_selection_undershoots_when_finalized_is_off_ancestry` so it stays
     /// deliberate, and the underlying divergence is tracked separately.
+    ///
+    /// One thing neither walk bounds: `latest_justified`. The producer pairs this
+    /// target with `latest_justified` as the vote's source
+    /// ([`Self::produce_attestation_vote`]), and nothing here keeps the target at
+    /// or above the justified slot — so on a store whose `safe_target` is stale
+    /// relative to a freshly adopted justified checkpoint, this node can emit a
+    /// vote its OWN [`Self::validate_attestation`] rejects with
+    /// [`ForkchoiceError::SourceSlotExceedsTarget`]. Flooring this walk at the
+    /// justified slot would only narrow that: when the justified checkpoint sits
+    /// ABOVE the head, no target on the head's ancestry can satisfy
+    /// `source <= target` at all. The real fix is the source derivation — the
+    /// reference takes it from the HEAD STATE's justified checkpoint
+    /// (`store.py:1289-:1297`), which is bounded by the head slot by
+    /// construction, where this client takes it from the store — and that is
+    /// tracked separately.
     ///
     /// # Errors
     /// - [`ForkchoiceError::UnknownHeadBlock`] when `self.head` is not in
@@ -1656,25 +1680,20 @@ mod attestation_tests {
         assert_eq!(err, ForkchoiceError::UnknownTargetBlock { root: missing });
     }
 
-    // -- validate_attestation: validator bound follows the head registry ---
+    // -- validate_validator_index: bound follows the head registry ---------
 
     #[test]
-    fn attestation_bound_follows_head_registry() {
+    fn validator_index_bound_follows_head_registry() {
         // The bound is the head post-state's registry length, not a scalar
-        // snapshotted at the anchor.
-        let (store, roots) = store_with_chain_at_slot_3();
-        let target = Checkpoint::new(roots[2], Slot::new(2));
-        let source = Checkpoint::new(roots[0], Slot::ZERO);
+        // snapshotted at the anchor. Only the id is read, so no vote is built.
+        let (store, _roots) = store_with_chain_at_slot_3();
 
-        let in_range = signed_vote(ValidatorIndex::new(3), target, target, source, Slot::new(2));
         store
-            .validate_validator_index(in_range.message.validator_id)
+            .validate_validator_index(ValidatorIndex::new(3))
             .unwrap();
 
-        let out_of_range =
-            signed_vote(ValidatorIndex::new(4), target, target, source, Slot::new(2));
         let err = store
-            .validate_validator_index(out_of_range.message.validator_id)
+            .validate_validator_index(ValidatorIndex::new(4))
             .unwrap_err();
         assert_eq!(
             err,
@@ -1686,15 +1705,13 @@ mod attestation_tests {
     }
 
     #[test]
-    fn validate_attestation_fails_closed_without_head_state() {
+    fn validate_validator_index_fails_closed_without_head_state() {
         // A store with no tracked head post-state cannot know the bound. It
         // must REJECT rather than admit the vote — this gate is what stops a
         // peer flooding the pool with arbitrary validator ids.
         let store = Store::default();
-        let target = Checkpoint::new(Bytes32::new([0xaa; 32]), Slot::ZERO);
-        let sv = signed_vote(ValidatorIndex::new(0), target, target, target, Slot::ZERO);
         let err = store
-            .validate_validator_index(sv.message.validator_id)
+            .validate_validator_index(ValidatorIndex::new(0))
             .unwrap_err();
         assert_eq!(
             err,
@@ -1852,6 +1869,15 @@ mod attestation_tests {
     ///
     /// Every reject row isolates its own predicate: a vote that violates two
     /// proves only that the earlier group fires.
+    ///
+    /// The six standalone reject tests above are NOT redundant with rows P1, P2,
+    /// P4, P6, P7 and P9, and must not be deleted as duplicates. Two of them —
+    /// `validate_unknown_target` and `validate_target_checkpoint_slot_mismatch` —
+    /// pass the SAME checkpoint as head and target, so each violates a second
+    /// predicate (P3 and P8 respectively) and still reports the variant it
+    /// asserts. That is the only coverage of the reference's WITHIN-group order
+    /// (source before target before head), which the isolated rows here
+    /// deliberately cannot exercise.
     /// The eleven rows, built from a chain fixture's roots. Split out so the
     /// assertion loop stays readable — and so the table can be read as data.
     // `too_many_lines` targets branching complexity; this function has none — it

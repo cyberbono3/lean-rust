@@ -373,6 +373,24 @@ fn block_carried_votes<'a>(
 /// permanent one — it is the better trade, not a free one, and it is accepted
 /// deliberately here.
 ///
+/// The head predicates widen that same divergence, and by more than the clock cap
+/// does. [`Store::validate_attestation`] now requires a vote's `head.root` to be
+/// a block THIS store tracks, and an honest attester routinely votes for a head a
+/// peer has not received yet — far more often than two honest clocks drift past a
+/// slot. So the subset a node folds is now a function of its block coverage as
+/// well as its clock. The trade is unchanged and still the right one: the
+/// alternative is rejecting a block over a vote the state transition already
+/// accepted. But the new axis heals differently, and the difference matters: a
+/// skipped vote is never retried — neither ingress path re-queues one — so what
+/// re-converges the two nodes is the attester's NEXT vote superseding the lost
+/// one under LMD, not recovery of the vote that was dropped. A proposer can
+/// therefore aim this: publish a block whose body attests to a sibling block and
+/// withhold that sibling from a subset of peers, and that subset folds none of
+/// those votes while everyone else folds all of them. It is bounded — a node
+/// that lacks the sibling could not follow it anyway, and the next round of
+/// attestations supersedes — so the cost is reorg stickiness, not a persistent
+/// split.
+///
 /// Reports one aggregated summary line per block rather than one line per
 /// failure: a body may carry up to `MAX_ATTESTATIONS` entries, all of which a
 /// peer can arrange to fail, and this runs while the caller holds the engine

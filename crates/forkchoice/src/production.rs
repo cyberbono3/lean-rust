@@ -177,7 +177,9 @@ impl Store {
     /// Produces a local unsigned attestation vote for `slot`.
     ///
     /// `head` is the current proposal head; `target` is derived by
-    /// [`Self::get_vote_target`] (at most three hops back from `head`);
+    /// [`Self::get_vote_target`], which walks back toward the safe target and
+    /// then further until the slot is justifiable after the finalized slot —
+    /// see that function for the bound and its one deliberate divergence;
     /// `source` is the store's `latest_justified` checkpoint.
     ///
     /// # Errors
@@ -625,6 +627,13 @@ mod tests {
         // this node emits must pass the predicate set this node enforces. The
         // target walk and predicates 3, 5 and 8 meet here, so a regression in
         // either half shows up as a node that rejects its own attestation.
+        //
+        // Scope, so this is not read as a universal guarantee: the fixture is
+        // genesis-justified, where the source cannot outrun the target. The
+        // contract does NOT hold on a store whose `safe_target` is stale relative
+        // to a freshly adopted justified checkpoint — see `get_vote_target`'s doc
+        // block, which names the source derivation as the root cause and the
+        // issue that owns it.
         let (mut store, _roots) = pinned_chain(4, 4, Time::new(3 * INTERVALS_PER_SLOT));
         store.update_safe_target().expect("safe target refresh");
 
