@@ -78,7 +78,7 @@ pub enum DutiesError {
 
     /// YAML deserialization failed. Carries the resolved file path the
     /// parse was attempted against — `PathBuf::new()` for test-only
-    /// in-memory parses via [`super::ValidatorAssignments::from_bytes`].
+    /// in-memory parses via [`super::ValidatorAssignments`]'s `from_bytes`.
     #[error("duties YAML parse error in {path:?}: {source}")]
     YamlParse {
         /// Resolved absolute path that the loader attempted to parse.

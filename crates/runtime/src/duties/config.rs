@@ -115,7 +115,7 @@ impl ValidatorsPath {
         Ok(Self(path))
     }
 
-    /// Returns the path as a [`&Path`].
+    /// Returns the path as a `&Path`.
     #[must_use]
     pub fn as_path(&self) -> &Path {
         &self.0
@@ -211,7 +211,7 @@ pub struct Config {
 impl Config {
     /// Builds a configuration from pre-typed inputs. Infallible: every
     /// argument is an always-valid newtype. `slot_duration_ms` is seeded
-    /// to [`DEFAULT_SLOT_DURATION_MS`].
+    /// to `DEFAULT_SLOT_DURATION_MS`.
     #[must_use = "building a Config without using it discards the construction"]
     pub const fn new(
         validators_path: ValidatorsPath,
@@ -253,7 +253,7 @@ impl Config {
     /// Validates the cross-field invariants that cannot be encoded in
     /// the field newtypes alone — currently that genesis time has been
     /// set away from the Unix epoch. Called by
-    /// [`super::Service::start`] before the scheduler spawns.
+    /// `Service::start` before the scheduler spawns.
     ///
     /// `slot_duration_ms` needs no check here: it is a [`NonZeroU64`],
     /// so the zero case is unrepresentable.

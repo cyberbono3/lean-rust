@@ -7,8 +7,8 @@
 //!
 //! # Scope
 //! - [`Encode`] / [`Decode`] re-exported from [`eth_ssz`].
-//! - [`encode`] — convenience free function returning `Vec<u8>`.
-//! - [`decode`] — convenience free function returning `Result<T, SszError>`.
+//! - [`encode()`] — convenience free function returning `Vec<u8>`.
+//! - [`decode()`] — convenience free function returning `Result<T, SszError>`.
 //! - [`SszError`] — facade error type wrapping [`DecodeError`] via
 //!   [`DecodeErrorAdapter`] for the [`std::error::Error::source`] chain;
 //!   plus merkleization-specific variants ([`SszError::InvalidNumLeaves`],

@@ -76,7 +76,7 @@ pub trait SchemeWire: SignatureScheme + sealed::Sealed {
     ///
     /// `OFFSET_PATH + 4 (the co-path's own inner offset) + LOG_LIFETIME * 32`.
     /// Pinning it is what makes the co-path and hash-list lengths canonical —
-    /// see [`signature_from_wire`].
+    /// see `signature_from_wire`.
     const OFFSET_HASHES: u32;
 }
 

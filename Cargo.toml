@@ -40,6 +40,13 @@ unreachable_pub = "warn"
 # register it so the default `-D warnings` build does not flag it as unexpected.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
+[workspace.lints.rustdoc]
+# The workspace publishes no crate, but `cargo doc` is the readable form of the
+# consensus invariants recorded in doc comments. `all` covers
+# broken_intra_doc_links, private_intra_doc_links, invalid_html_tags, bare_urls,
+# and the rest.
+all = "warn"
+
 [workspace.lints.clippy]
 all         = { level = "deny", priority = -1 }
 pedantic    = { level = "warn", priority = -1 }

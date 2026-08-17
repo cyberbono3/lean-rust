@@ -1,7 +1,7 @@
 //! Forkchoice clock value and the 4-phase classification.
 //!
 //! [`Time`] is the count of intervals elapsed since chain genesis;
-//! [`INTERVALS_PER_SLOT`](config::INTERVALS_PER_SLOT) intervals form a slot.
+//! [`INTERVALS_PER_SLOT`] intervals form a slot.
 //! [`Phase`] classifies `time % INTERVALS_PER_SLOT` into the four spec
 //! phases that drive [`crate::Store::tick_interval`]'s dispatch.
 

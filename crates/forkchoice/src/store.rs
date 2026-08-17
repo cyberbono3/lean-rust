@@ -338,7 +338,7 @@ impl Store {
     /// # Errors
     /// - [`ForkchoiceError::TimeOverflow`] when `self.time().get() == u64::MAX`.
     /// - Forwarded from [`Self::accept_new_votes`] /
-    ///   [`Self::update_safe_target`].
+    ///   `update_safe_target`.
     pub fn tick_interval(&mut self, has_proposal: bool) -> Result<(), ForkchoiceError> {
         let next = self
             .time
@@ -379,7 +379,7 @@ impl Store {
     /// normalizes nothing on ingress (`store.py:299`, `:313`) because its producer
     /// substitutes the genesis root before signing (`store.py:1289-:1295`). This
     /// client tolerates a peer that does not, for the lookup only — see
-    /// [`Self::resolved_source_root`]. The head checkpoint gets NO such
+    /// `resolved_source_root`. The head checkpoint gets NO such
     /// tolerance: the reference builds it from `self.head`
     /// (`store.py:1299-:1302`), so a well-formed vote never carries a placeholder
     /// head, and widening the guard would buy no interop case.
@@ -395,7 +395,7 @@ impl Store {
     /// - [`ForkchoiceError::UnknownSourceBlock`] when the vote's RESOLVED source
     ///   root is not tracked by the store. Resolved, not declared: a slot-0
     ///   genesis-placeholder vote declares an all-zero root, which is never tracked,
-    ///   and still returns `Ok` — see [`Self::resolved_source_root`]. The error
+    ///   and still returns `Ok` — see `resolved_source_root`. The error
     ///   nonetheless always REPORTS the declared root, because substitution only
     ///   happens when the justified root is already tracked, so a substituted root
     ///   cannot reach this error.
@@ -503,7 +503,7 @@ impl Store {
     ///
     /// # Errors
     /// - [`ForkchoiceError::HeadStateNotFound`] forwarded from
-    ///   [`Self::head_validator_count`] when the head's post-state is untracked.
+    ///   `head_validator_count` when the head's post-state is untracked.
     /// - [`ForkchoiceError::ValidatorIndexOutOfRange`] when the id is at or past
     ///   the head registry length.
     ///
@@ -538,7 +538,7 @@ impl Store {
     /// preimage (`hash_tree_root(attestation)`), so a vote must reach the pool
     /// byte-identical to the one that arrived or its signature verifies against
     /// nothing. A genesis-placeholder source is resolved for VALIDATION only —
-    /// see [`Self::resolved_source_root`].
+    /// see `resolved_source_root`.
     ///
     /// Verbatim storage is NECESSARY for a pooled signature to be meaningful, not
     /// SUFFICIENT for it to be trustworthy. Nothing on either ingress path verifies
@@ -797,7 +797,7 @@ impl Store {
     /// finalized slot (`containers/slot.py:50`); this client's port returns
     /// `false` instead, which would turn the same input into a walk off the
     /// bottom of the chain. The input is reachable:
-    /// [`Self::adopt_post_state_checkpoints`] advances `latest_finalized`
+    /// `adopt_post_state_checkpoints` advances `latest_finalized`
     /// without refreshing `safe_target`, so walk 1 can land below the finalized
     /// slot. The floor makes termination a property of this function rather than
     /// of the caller's store hygiene. It does NOT rest on slot monotonicity along
@@ -815,8 +815,8 @@ impl Store {
     /// - The finalized block IS on the head's ancestry. Then the walk stops
     ///   exactly at it — distance 0 is justifiable — and every returned slot is
     ///   justifiable after the finalized slot.
-    /// - It is NOT. [`Self::update_head`] descends from `latest_justified` while
-    ///   [`Self::adopt_post_state_checkpoints`] takes `latest_finalized` from any
+    /// - It is NOT. `update_head` descends from `latest_justified` while
+    ///   `adopt_post_state_checkpoints` takes `latest_finalized` from any
     ///   tracked post-state, so the two can sit on different branches. A single
     ///   parent step can then skip from above the finalized slot to below it, and
     ///   both loops exit on the floor with a target that is NOT justifiable.
