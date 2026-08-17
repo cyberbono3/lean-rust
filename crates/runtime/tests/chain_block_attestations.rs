@@ -53,13 +53,11 @@ fn fork() -> Fork {
     let block_b = produce_signed_block(&factory_b, Slot::new(2), ValidatorIndex::new(2));
 
     assert_eq!(
-        block_a.message.block.parent_root,
-        anchor,
+        block_a.message.block.parent_root, anchor,
         "fixture precondition: block_a must be a child of the anchor",
     );
     assert_eq!(
-        block_b.message.block.parent_root,
-        anchor,
+        block_b.message.block.parent_root, anchor,
         "fixture precondition: block_b must be a child of the anchor",
     );
 
