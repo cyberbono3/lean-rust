@@ -129,12 +129,46 @@ cross-client traffic is still outstanding.
 
 ## Building and Testing
 
+`make verify` runs the same four gates CI does, in the same order:
+
 ```sh
-cargo build
-cargo test
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+make verify
 ```
+
+Individually:
+
+```sh
+cargo build --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked   # make docs
+cargo test --workspace --locked
+```
+
+Two notes on the gates:
+
+- **`--locked` is enforced in CI.** A change that touches dependencies must ship
+  the updated `Cargo.lock` in the same commit, or the build fails with
+  `the lock file needs to be updated`.
+- **The doc gate needs `RUSTDOCFLAGS`, not `RUSTFLAGS`.** Rustdoc does not read
+  `RUSTFLAGS`, so `[workspace.lints.rustdoc]` is only enforced by the command
+  above (or `make docs`) — a plain `cargo doc` will not fail on it.
+
+### Lint policy
+
+Lint levels live in `[workspace.lints]` in the root `Cargo.toml`; per-lint
+configuration lives in `clippy.toml`. The workspace runs `clippy::all` at **deny**
+and `clippy::pedantic` at warn, plus named lints from `nursery`/`restriction`
+that the groups do not cover. `unwrap()`, `expect()`, and `panic!()` are denied
+outside tests.
+
+The `clippy::nursery` group is deliberately not enabled: it carries
+`redundant_pub_crate`, which is the exact inverse of the `unreachable_pub` this
+workspace enforces. See the comment above `unreachable_pub` in `Cargo.toml`.
+
+A weekly `clippy (floating toolchain)` workflow runs the same check on latest
+stable. It is advisory and never gates a merge — its job is to keep the backlog
+of new lints visible before an MSRV bump, not to fail the current commit.
 
 ## Getting Help
 
