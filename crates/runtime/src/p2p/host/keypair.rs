@@ -33,7 +33,7 @@ const RAW_SECP256K1_PRIVATE_KEY_LEN: usize = 32;
 ///   to a 32-byte secp256k1 private key.
 /// - [`HostError::InvalidRawIdentityKeyMaterial`] when raw bytes are not
 ///   valid secp256k1 secret-key material.
-pub fn load_or_generate(path: &IdentityPath) -> HostResult<Keypair> {
+pub(crate) fn load_or_generate(path: &IdentityPath) -> HostResult<Keypair> {
     let p = path.as_path();
     match fs::read(p) {
         Ok(bytes) => decode_existing(p, &bytes),

@@ -28,7 +28,7 @@ use crate::p2p::options::BootnodesPath;
 /// A parsed bootnode entry: dialable multiaddr + peer id pulled off the
 /// terminal `/p2p/<peer-id>` component.
 #[derive(Debug)]
-pub struct Bootnode {
+pub(crate) struct Bootnode {
     /// Dialable multiaddr stripped of the trailing `/p2p/<peer-id>`
     /// component.
     pub addr: Multiaddr,
@@ -45,7 +45,7 @@ pub struct Bootnode {
 /// - [`HostError::BootnodesParse`] when the YAML shape is wrong.
 /// - [`HostError::InvalidBootnode`] when a single entry fails the
 ///   multiaddr + `/p2p/<peer-id>` check.
-pub fn load(path: &BootnodesPath) -> HostResult<Vec<Bootnode>> {
+pub(crate) fn load(path: &BootnodesPath) -> HostResult<Vec<Bootnode>> {
     let p = path.as_path();
     let bytes = fs::read(p).map_err(|source| HostError::BootnodesRead {
         path: p.to_path_buf(),

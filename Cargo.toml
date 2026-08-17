@@ -26,6 +26,16 @@ repository    = "https://github.com/cyberbono3/lean-rust"
 [workspace.lints.rust]
 unsafe_code  = "deny"
 missing_docs = "warn"
+# Mechanically enforces the visibility rule in .claude/rules/architecture.md
+# ("default to private; `pub` only on the documented crate API"): an item marked
+# `pub` inside a private module is not reachable from outside the crate, so the
+# `pub` overstates its audience where `pub(crate)` states it.
+#
+# NOTE: `clippy::redundant_pub_crate` (nursery, deliberately NOT enabled) is the
+# exact inverse of this lint — it wants `pub(crate)` in a private module written
+# back as `pub`. Enabling the nursery group would put the two in direct conflict
+# over ~109 sites. If nursery is ever wanted, exclude `redundant_pub_crate`.
+unreachable_pub = "warn"
 # `loom` is an opt-in concurrency-model cfg (see lean-chain tests/loom_import.rs);
 # register it so the default `-D warnings` build does not flag it as unexpected.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

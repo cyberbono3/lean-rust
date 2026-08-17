@@ -57,7 +57,7 @@ pub enum RpcResponse {
 /// Codec implementing [`request_response::Codec`] for the devnet0
 /// `Status` + `BlocksByRoot` protocols.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct SszSnappyCodec;
+pub(crate) struct SszSnappyCodec;
 
 #[async_trait]
 impl request_response::Codec for SszSnappyCodec {
