@@ -436,9 +436,10 @@ fn transition_and_track(
     // `&mut store` and that borrow would conflict.
     //
     // The fold runs AFTER `track_block` for two reasons, neither of which is
-    // "so the block's own roots resolve" — `validate_attestation` resolves only
-    // `source.root` and `target.root`, and a body attestation cannot name its
-    // containing block anyway (its root is not known until the body is fixed).
+    // "so the block's own roots resolve" — `validate_attestation` resolves
+    // `source.root` and looks up `target.root` and `head.root`, and a body
+    // attestation cannot name its containing block anyway (its root is not known
+    // until the body is fixed).
     // The actual reasons: `track_block` calls `adopt_post_state_checkpoints`,
     // which can advance `latest_justified`, and the fold's source resolution reads
     // exactly that; and folding earlier would break the mutation invariant
@@ -946,8 +947,8 @@ mod tests {
 
     // -- block-carried attestation fold --------------------------------------
 
-    /// A vote at slot 1 whose three checkpoints are all `cp`. Only `head` carries
-    /// fork-choice weight; `validate_attestation` reads `source` and `target`.
+    /// A vote at slot 1 whose three checkpoints are all `cp`. All three are
+    /// validated, but only `head` carries fork-choice weight.
     fn vote(validator: u64, cp: Checkpoint) -> Attestation {
         Attestation::new(
             ValidatorIndex::new(validator),

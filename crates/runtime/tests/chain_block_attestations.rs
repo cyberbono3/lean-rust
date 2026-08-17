@@ -77,7 +77,9 @@ fn fork() -> Fork {
     };
 
     // The anchor is both source and target; only `head` distinguishes the vote.
-    // `validate_attestation` checks source and target, never head.
+    // `validate_attestation` checks all three checkpoints, so the head must name a
+    // tracked block at its declared slot — which is why the slot rides along with
+    // the root above rather than being hardcoded.
     let anchor_cp = Checkpoint::new(anchor, Slot::ZERO);
     let backed_cp = Checkpoint::new(backed, backed_slot);
     let votes = (0..ENGINE_VALIDATORS - 1)
