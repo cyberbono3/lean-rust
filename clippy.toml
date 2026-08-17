@@ -1,0 +1,45 @@
+# Clippy tunables for the lean-rust workspace.
+#
+# Lint *levels* live in Cargo.toml under [workspace.lints]; this file holds only
+# the per-lint configuration knobs clippy reads from the workspace root.
+
+# Identifiers `clippy::doc_markdown` (enabled via `pedantic`) must not flag as
+# needing backticks. Consensus and cryptography vocabulary that recurs in prose
+# throughout the workspace's doc comments.
+#
+# The `".."` entry is load-bearing: without it this list REPLACES clippy's
+# built-in ident list rather than extending it, which would newly flag words the
+# defaults already cover (KiB/MiB/GiB, TypeScript, OAuth, ...).
+doc-valid-idents = [
+    # splice in clippy's built-in defaults
+    "..",
+    # SSZ / merkleization
+    "SSZ",
+    "HTR",
+    # consensus
+    "LMD",
+    "GHOST",
+    "leanSpec",
+    "leanSig",
+    "leanMetrics",
+    # cryptography
+    "PQ",
+    "OTS",
+    # networking
+    "P2P",
+    "libp2p",
+    "gossipsub",
+    # encodings
+    "YAML",
+    "JSON",
+]
+
+# `dbg!` is a debugging aid rather than a defect inside test code. This keeps the
+# door open to enabling `clippy::dbg_macro` later without churning tests.
+allow-dbg-in-tests = true
+
+# NOTE: `too-large-for-stack` is deliberately NOT set here. It feeds
+# `clippy::useless_vec` and `clippy::boxed_local`, both members of `clippy::all`
+# which this workspace denies, and both fire only when a value is *below* the
+# threshold. Lowering clippy's 512-byte default would therefore narrow two
+# already-denied lints rather than tighten anything.
