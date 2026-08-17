@@ -36,7 +36,7 @@ pub enum SyncError {
     #[error("subscription: {0}")]
     Subscription(String),
 
-    /// [`super::Loop::start`] was called twice without an intervening stop.
+    /// [`super::Loop`]'s `start` was called twice without an intervening stop.
     #[error("sync loop already started")]
     AlreadyStarted,
 
@@ -44,7 +44,7 @@ pub enum SyncError {
     #[error("sync loop not started")]
     NotStarted,
 
-    /// The watch task exited before [`super::Loop::stop`] was called —
+    /// The watch task exited before [`super::Loop`]'s `stop` was called —
     /// indicates a panic or an unhandled internal error.
     #[error("sync watch task exited prematurely")]
     WatchExited,

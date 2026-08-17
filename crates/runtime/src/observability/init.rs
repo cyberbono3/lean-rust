@@ -24,14 +24,14 @@ const LOG_FILE_SUFFIX: &str = "log";
 ///
 /// Owned `Copy` mirror of [`tracing_appender::rolling::Rotation`] so the
 /// public [`FileSink`] stays `Copy` and callers do not need a
-/// `tracing_appender` import. Defaults to [`LogRotation::Daily`]: an
+/// `tracing_appender` import. Defaults to `LogRotation::Daily`: an
 /// operator who opted into a file sink expects bounded per-file growth,
 /// not a single file that grows for the whole process lifetime.
 ///
 /// # Intentional override surface
 ///
 /// `bin/lean-rust` currently builds the sink via [`FileSink::new`], which
-/// pins [`LogRotation::Daily`] — no CLI flag wires the other variants yet,
+/// pins `LogRotation::Daily` — no CLI flag wires the other variants yet,
 /// so only `Daily` is reachable from the shipped binary. The non-default
 /// variants and [`FileSink::with_rotation`] are retained deliberately as
 /// the public override surface for (a) library/embedding consumers of
@@ -77,7 +77,7 @@ pub struct FileSink<'a> {
     /// date component is added by the rolling appender per
     /// [`Self::rotation`]).
     pub prefix: &'a str,
-    /// How often the file rolls. Defaults to [`LogRotation::Daily`] when
+    /// How often the file rolls. Defaults to `LogRotation::Daily` when
     /// built via [`FileSink::new`].
     pub rotation: LogRotation,
 }
@@ -95,8 +95,8 @@ impl<'a> FileSink<'a> {
 
     /// Returns a copy with the rotation policy overridden.
     ///
-    /// Intentional public override surface — see [`LogRotation`]. The
-    /// shipped binary always takes the [`LogRotation::Daily`] default from
+    /// Intentional public override surface — see `LogRotation`. The
+    /// shipped binary always takes the `LogRotation::Daily` default from
     /// [`Self::new`]; this builder exists for library consumers and a
     /// future `--log.rotation` flag.
     #[must_use]
@@ -131,7 +131,7 @@ static INIT_CLAIMED: OnceLock<()> = OnceLock::new();
 #[non_exhaustive]
 pub enum TracingInitError {
     /// [`init_tracing`] was already called in this process (the
-    /// one-shot [`INIT_CLAIMED`] slot was taken). Deterministic across
+    /// one-shot `INIT_CLAIMED` slot was taken). Deterministic across
     /// concurrent callers — no dependence on subscriber-install timing.
     #[error("tracing subscriber already initialized")]
     AlreadyInitialized,

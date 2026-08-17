@@ -96,7 +96,7 @@ impl KeygenParams {
 ///
 /// # Errors
 ///
-/// Returns an error if `params` fail [`KeygenParams::validate`], a key cannot be
+/// Returns an error if `params` fail `KeygenParams::validate`, a key cannot be
 /// generated, a secret or manifest file already exists (`create_new` refuses to
 /// clobber), or a write fails.
 pub fn generate_validator_keys<R: rand::RngCore + rand::CryptoRng>(

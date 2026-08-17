@@ -68,6 +68,22 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.87 (MSRV)
+        uses: dtolnay/rust-toolchain@1.87.0
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+      # The workflow-level RUSTFLAGS does not reach rustdoc, so the
+      # [workspace.lints.rustdoc] band needs RUSTDOCFLAGS to be enforced at all.
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   test:
     name: test
     runs-on: ubuntu-latest

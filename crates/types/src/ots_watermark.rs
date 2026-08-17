@@ -10,7 +10,7 @@
 //! Fixed-width so its SSZ encoding is a trivial concatenation needing no ssz
 //! crate; the layout mirrors [`crate::OtsKeyState`] byte-for-byte (the
 //! commitment occupies the seed slot). Both records therefore delegate to the
-//! one shared codec in [`crate::ots_record_codec`] rather than carrying a copy
+//! one shared codec in `crate::ots_record_codec` rather than carrying a copy
 //! of the same 56-byte layout each.
 
 /// SSZ-layout byte length: 32 (`key_commitment`) + 8 (`activation_epoch`) + 8
@@ -57,7 +57,7 @@ impl OtsWatermark {
     /// Encodes to the fixed layout:
     /// `key_commitment || activation_epoch || num_active_epochs || next_index`,
     /// each integer little-endian. The byte work lives in
-    /// [`crate::ots_record_codec`], shared with [`crate::OtsKeyState`].
+    /// `crate::ots_record_codec`, shared with [`crate::OtsKeyState`].
     #[must_use]
     pub fn to_ssz_bytes(&self) -> [u8; OTS_WATERMARK_SSZ_LEN] {
         crate::ots_record_codec::encode(

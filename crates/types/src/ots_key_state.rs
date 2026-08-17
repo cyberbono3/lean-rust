@@ -73,7 +73,7 @@ impl OtsKeyState {
     /// Encodes to the fixed SSZ container layout:
     /// `seed || activation_epoch || num_active_epochs || next_index`, each
     /// integer little-endian. The byte work lives in
-    /// [`crate::ots_record_codec`], shared with [`crate::OtsWatermark`].
+    /// `crate::ots_record_codec`, shared with [`crate::OtsWatermark`].
     #[must_use]
     pub fn to_ssz_bytes(&self) -> [u8; OTS_KEY_STATE_SSZ_LEN] {
         crate::ots_record_codec::encode(

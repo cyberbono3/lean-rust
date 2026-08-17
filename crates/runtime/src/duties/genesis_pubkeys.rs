@@ -47,7 +47,7 @@ impl GenesisRegistry {
     /// - [`DutiesError::YamlRead`] / [`DutiesError::YamlParse`] /
     ///   [`DutiesError::ValidatorsFileTooLarge`] for IO / decode / size failures.
     /// - [`DutiesError::ManifestContainsYamlAlias`] when the file contains YAML
-    ///   anchor / alias syntax (see [`reject_yaml_aliases`]).
+    ///   anchor / alias syntax (see `reject_yaml_aliases`).
     /// - [`DutiesError::ValidatorPubkeyCountMismatch`] when the manifest length
     ///   does not equal `assignments.total_validators()`.
     /// - [`DutiesError::InvalidValidatorPubkey`] when an entry is not valid
