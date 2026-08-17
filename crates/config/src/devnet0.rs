@@ -75,7 +75,7 @@ impl Config {
     /// Single source of truth for which fields are basis points; both
     /// [`Config::validate`] and any future tooling should iterate this
     /// instead of repeating the field list.
-    fn basis_point_fields(&self) -> [(&'static str, u64); 4] {
+    const fn basis_point_fields(&self) -> [(&'static str, u64); 4] {
         [
             ("proposer_reorg_cutoff_bps", self.proposer_reorg_cutoff_bps),
             ("vote_due_bps", self.vote_due_bps),
@@ -86,7 +86,7 @@ impl Config {
 
     /// Builds the [`ConfigError::SlotDurationMismatch`] for the current
     /// `(slot_duration_ms, seconds_per_slot)` pair.
-    fn slot_duration_mismatch(&self) -> ConfigError {
+    const fn slot_duration_mismatch(&self) -> ConfigError {
         ConfigError::SlotDurationMismatch {
             slot_duration_ms: self.slot_duration_ms,
             seconds_per_slot: self.seconds_per_slot,

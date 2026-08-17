@@ -89,7 +89,7 @@ impl Loop {
     /// Builds a `Loop` around the supplied ports. The configuration is
     /// type-validated at construction (`max_sync_depth` is `NonZeroUsize`).
     #[must_use]
-    pub fn new(config: Config, chain: Arc<ChainService>, p2p: Arc<P2pService>) -> Self {
+    pub const fn new(config: Config, chain: Arc<ChainService>, p2p: Arc<P2pService>) -> Self {
         Self {
             config,
             chain,
@@ -100,7 +100,7 @@ impl Loop {
 
     /// Returns the validated configuration.
     #[must_use]
-    pub fn config(&self) -> Config {
+    pub const fn config(&self) -> Config {
         self.config
     }
 

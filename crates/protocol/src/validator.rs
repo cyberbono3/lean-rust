@@ -58,7 +58,7 @@ impl ValidatorIndex {
 /// # Ok(())
 /// # }
 /// ```
-pub fn is_proposer(
+pub const fn is_proposer(
     validator_index: ValidatorIndex,
     slot: Slot,
     num_validators: u64,

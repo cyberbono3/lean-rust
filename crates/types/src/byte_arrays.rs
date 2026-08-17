@@ -221,7 +221,7 @@ impl<const N: usize> TryFrom<&str> for ByteVector<N> {
 
 /// Maps one ASCII hex digit to its `0..=15` value, or an
 /// [`TypesError::InvalidHexEncoding`] for any non-hex byte.
-fn hex_nibble(c: u8) -> Result<u8, TypesError> {
+const fn hex_nibble(c: u8) -> Result<u8, TypesError> {
     match c {
         b'0'..=b'9' => Ok(c - b'0'),
         b'a'..=b'f' => Ok(c - b'a' + 10),

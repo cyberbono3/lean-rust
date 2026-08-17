@@ -54,7 +54,7 @@ pub enum LogRotation {
 
 impl LogRotation {
     /// Maps to the `tracing_appender` rotation policy.
-    fn policy(self) -> Rotation {
+    const fn policy(self) -> Rotation {
         match self {
             Self::Minutely => Rotation::MINUTELY,
             Self::Hourly => Rotation::HOURLY,
@@ -85,7 +85,7 @@ pub struct FileSink<'a> {
 impl<'a> FileSink<'a> {
     /// Builds a file sink rolling daily (the recommended default).
     #[must_use]
-    pub fn new(dir: &'a Path, prefix: &'a str) -> Self {
+    pub const fn new(dir: &'a Path, prefix: &'a str) -> Self {
         Self {
             dir,
             prefix,
@@ -302,7 +302,7 @@ fn stderr_ansi_enabled() -> bool {
 /// is a terminal. Split out from [`stderr_ansi_enabled`] so the decision
 /// is unit-testable without depending on the ambient stderr state (fd 2
 /// is a TTY under an interactive `cargo test`, a pipe under CI).
-fn ansi_enabled(is_terminal: bool) -> bool {
+const fn ansi_enabled(is_terminal: bool) -> bool {
     is_terminal
 }
 

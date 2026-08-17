@@ -66,7 +66,7 @@ enum VerifyPolicy {
 
 impl VerifyPolicy {
     /// `true` only for [`VerifyPolicy::Enforce`].
-    fn enforces(self) -> bool {
+    const fn enforces(self) -> bool {
         matches!(self, Self::Enforce)
     }
 }

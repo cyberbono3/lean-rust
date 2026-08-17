@@ -34,7 +34,7 @@ enum State {
 }
 
 impl State {
-    fn bound_addr(&self) -> Option<SocketAddr> {
+    const fn bound_addr(&self) -> Option<SocketAddr> {
         match self {
             Self::Running(running) => Some(running.bound_addr),
             _ => None,
@@ -116,7 +116,7 @@ impl RunningServer {
 impl EndpointServer {
     /// Constructs an idle endpoint server that will bind `listen_addr`
     /// when [`Self::start`] runs.
-    pub(crate) fn new(kind: &'static str, listen_addr: SocketAddr) -> Self {
+    pub(crate) const fn new(kind: &'static str, listen_addr: SocketAddr) -> Self {
         Self {
             kind,
             listen_addr,

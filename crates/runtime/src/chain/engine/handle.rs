@@ -188,7 +188,7 @@ impl Engine {
     }
 
     /// Read-only borrow of the trigger metrics for the importer module.
-    pub(crate) fn metrics(&self) -> &ChainMetrics {
+    pub(crate) const fn metrics(&self) -> &ChainMetrics {
         &self.metrics
     }
 
@@ -406,7 +406,7 @@ impl PersistPlan {
     /// the already-signed `block`. Lock-free: every argument is owned, so the
     /// signed envelope can attach after the store lock has been released (the
     /// produce path signs at the runtime boundary, then builds the plan here).
-    pub(crate) fn new(
+    pub(crate) const fn new(
         block_root: Bytes32,
         head: Checkpoint,
         finalized: Checkpoint,

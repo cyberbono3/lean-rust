@@ -36,7 +36,7 @@ pub enum Topic {
 impl Topic {
     /// Canonical wire string for this topic.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Block => lean_wire::BLOCK_TOPIC_V1,
             Self::Vote => lean_wire::VOTE_TOPIC_V1,

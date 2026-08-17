@@ -248,7 +248,7 @@ fn yaml_read_err(path: &Path, source: std::io::Error) -> DutiesError {
 /// Rejects a file whose byte length exceeds
 /// [`MAX_VALIDATORS_FILE_BYTES`]. Extracted so the boundary logic is
 /// unit-testable without writing a multi-megabyte fixture to disk.
-fn check_file_size(len: u64) -> DutiesResult<()> {
+const fn check_file_size(len: u64) -> DutiesResult<()> {
     if len > MAX_VALIDATORS_FILE_BYTES {
         return Err(DutiesError::ValidatorsFileTooLarge {
             size: len,

@@ -47,7 +47,7 @@ impl ListenAddr {
 
     /// Borrowed view of the underlying multiaddr.
     #[must_use]
-    pub fn as_multiaddr(&self) -> &Multiaddr {
+    pub const fn as_multiaddr(&self) -> &Multiaddr {
         &self.0
     }
 
@@ -181,7 +181,7 @@ pub struct HostOptions {
 
 impl HostOptions {
     /// Infallible constructor from already-validated newtypes.
-    pub fn new(
+    pub const fn new(
         listen_addr: ListenAddr,
         agent_version: AgentVersion,
         identity_path: IdentityPath,
@@ -217,25 +217,25 @@ impl HostOptions {
 
     /// Borrowed view of the listen multiaddr.
     #[must_use]
-    pub fn listen_addr(&self) -> &ListenAddr {
+    pub const fn listen_addr(&self) -> &ListenAddr {
         &self.listen_addr
     }
 
     /// Borrowed view of the agent-version string.
     #[must_use]
-    pub fn agent_version(&self) -> &AgentVersion {
+    pub const fn agent_version(&self) -> &AgentVersion {
         &self.agent_version
     }
 
     /// Borrowed view of the identity-file path.
     #[must_use]
-    pub fn identity_path(&self) -> &IdentityPath {
+    pub const fn identity_path(&self) -> &IdentityPath {
         &self.identity_path
     }
 
     /// Borrowed view of the bootnodes-file path (if configured).
     #[must_use]
-    pub fn bootnodes_path(&self) -> Option<&BootnodesPath> {
+    pub const fn bootnodes_path(&self) -> Option<&BootnodesPath> {
         self.bootnodes_path.as_ref()
     }
 }

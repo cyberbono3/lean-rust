@@ -68,6 +68,10 @@ redundant_clone = "warn"
 use_self             = "warn"
 iter_on_single_items = "warn"
 or_fun_call          = "warn"
+# MSRV-sensitive: clippy reads `rust-version` from [workspace.package] and only
+# suggests `const fn` where 1.87 permits it, so the finding count grows on every
+# toolchain floor bump. See the decline rule in the Part 8 commit message.
+missing_const_for_fn = "warn"
 
 [workspace.dependencies]
 # foundation

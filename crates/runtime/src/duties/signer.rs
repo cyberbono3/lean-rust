@@ -197,7 +197,7 @@ impl LocalSigner {
     /// [`SignError::UnknownValidator`], which an observer never triggers because
     /// it never produces messages.
     #[must_use]
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             keys: BTreeMap::new(),
         }

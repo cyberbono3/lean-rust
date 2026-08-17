@@ -211,7 +211,7 @@ impl P2pService {
 
     /// Returns the local peer id (stable across the service lifetime).
     #[must_use]
-    pub fn peer_id(&self) -> PeerId {
+    pub const fn peer_id(&self) -> PeerId {
         self.peer_id
     }
 
