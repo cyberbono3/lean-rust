@@ -837,16 +837,19 @@ impl Store {
     /// vote its OWN [`Self::validate_attestation`] rejects with
     /// [`ForkchoiceError::SourceSlotExceedsTarget`].
     ///
-    /// That staleness is not a rare invariant break; it is a one-interval race
-    /// with a fixed address. `safe_target` is refreshed by the `tick_interval`
-    /// that advances into `Phase::UpdateSafeTarget` (interval 2), and the node's
-    /// attester pass runs on the NEXT tick — the one at
-    /// `VOTE_DUE_INTERVAL`, which drains gossip BEFORE it runs the attesters
-    /// (`crates/node/src/consensus_loop.rs`). Any justification-advancing block
-    /// that lands in that drain moves `latest_justified` after the last
-    /// `safe_target` refresh and before this walk runs, and a peer controls
-    /// delivery timing. The vote is then dropped identically by every conformant
-    /// node, so the cost is one lost vote for one slot rather than a split. Flooring this walk at the
+    /// That staleness is not a rare invariant break; it is a race with a fixed
+    /// address, and the address does not depend on how the driver's tick index
+    /// happens to align with this store's clock. `safe_target` is written by
+    /// exactly one thing — [`Self::tick_interval`] dispatching
+    /// `Phase::UpdateSafeTarget` — and the consensus loop calls `tick_interval`
+    /// LAST in each tick body, after `drain_gossip()` and after the attester
+    /// pass (`crates/node/src/consensus_loop.rs`). So on the tick that attests,
+    /// gossip is drained after the most recent possible `safe_target` refresh
+    /// and before this walk runs: any justification-advancing block delivered
+    /// into that drain moves `latest_justified` inside the window, and a peer
+    /// controls delivery timing. The vote is then dropped identically by every
+    /// conformant node, so the cost is one lost vote for one slot rather than a
+    /// split. Flooring this walk at the
     /// justified slot would only narrow that: when the justified checkpoint sits
     /// ABOVE the head, no target on the head's ancestry can satisfy
     /// `source <= target` at all. The real fix is the source derivation — the
@@ -1920,10 +1923,10 @@ mod attestation_tests {
     /// predicate each and duplicate rows P1, P4, P6 and P9. They are kept as
     /// independent single-predicate regressions, not because the matrix needs
     /// them.
-    /// The eleven rows, built from a chain fixture's roots. Split out so the
+    /// The twelve rows, built from a chain fixture's roots. Split out so the
     /// assertion loop stays readable — and so the table can be read as data.
     // `too_many_lines` targets branching complexity; this function has none — it
-    // is one array literal of eleven data rows, already split out of the test so
+    // is one array literal of twelve data rows, already split out of the test so
     // the assertion loop stays short. Compressing it further would mean either
     // dropping the per-row names that make a failure readable or splitting the
     // spec's four predicate groups across two builders, both of which cost more
