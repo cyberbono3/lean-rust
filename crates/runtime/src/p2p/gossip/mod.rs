@@ -1,8 +1,8 @@
 //! Gossipsub topic registration, publish path, and inbound routing.
 //!
 //! Public surface:
-//! - [`Topic`] — typed wrapper over the [`networking`] topic constants.
-//! - [`MessageId`] / [`PublishError`] — re-exports from [`publisher`].
+//! - [`Topic`] — typed wrapper over the `networking` topic constants.
+//! - [`MessageId`] / [`PublishError`] — re-exports from `publisher`.
 //! - [`BlockReceiver`] / [`VoteReceiver`] — one-shot ingestion handles
 //!   exposed by [`crate::p2p::P2pService::take_block_receiver`] /
 //!   [`crate::p2p::P2pService::take_vote_receiver`].
@@ -22,7 +22,7 @@ pub use publisher::{MessageId, PublishError};
 
 /// Typed identifier for the gossipsub topics this crate registers.
 ///
-/// `as_str()` returns the canonical wire string from the [`networking`]
+/// `as_str()` returns the canonical wire string from the `networking`
 /// crate; `ident()` constructs the libp2p [`gossipsub::IdentTopic`] used
 /// at subscribe / publish call sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

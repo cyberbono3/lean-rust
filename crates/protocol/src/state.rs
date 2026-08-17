@@ -22,7 +22,7 @@
 //!
 //! The hash-tree-root commits to all ten fields in this order; the
 //! cross-client compatibility of that shape (and the genesis-interop
-//! decoder for the compact form) lives in [`crate::ream`].
+//! decoder for the compact form) lives in `crate::ream`.
 
 use std::collections::BTreeMap;
 
@@ -45,7 +45,7 @@ use crate::vote::Attestation;
 
 /// Maximum number of historical block roots retained in the state.
 ///
-/// Pinned to [`config::DEVNET_CONFIG::historical_roots_limit`] (`262_144` on
+/// Pinned to [`config::DEVNET_CONFIG`]'s `historical_roots_limit` (`262_144` on
 /// devnet0).
 #[allow(clippy::cast_possible_truncation)]
 pub const HISTORICAL_ROOTS_LIMIT: usize = config::DEVNET_CONFIG.historical_roots_limit as usize;

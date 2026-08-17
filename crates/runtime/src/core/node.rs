@@ -2,7 +2,7 @@
 //!
 //! Holds up to six [`Arc<dyn Service>`] slots (`chain`, `p2p`, `sync`,
 //! `duties`, `http`, `metrics`) plus a lifecycle state cell driven by
-//! [`crate::core::lifecycle`].
+//! `crate::core::lifecycle`.
 
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ pub(crate) type NamedService = (&'static str, Arc<dyn Service>);
 /// expression. Unwired slots are skipped at lifecycle time.
 ///
 /// Lifecycle methods (`start`, `stop`, `status`, `run`) live in
-/// [`crate::core::lifecycle`].
+/// `crate::core::lifecycle`.
 pub struct Node {
     pub(crate) config: NodeConfig,
     pub(crate) chain: Option<Arc<dyn Service>>,

@@ -113,7 +113,7 @@ pub struct Service {
 impl Service {
     /// Builds a NON-SIGNING service around `engine` and `store` — an observer
     /// with no local validators. `produce_block` / `produce_attestation` on such a
-    /// service return [`ChainError::Sign`] ([`SignError::UnknownValidator`]) rather
+    /// service return [`ChainError::Sign`] ([`crate::duties::SignError::UnknownValidator`]) rather
     /// than a placeholder; a validating node uses [`Self::with_signer`] instead.
     #[must_use]
     pub fn new(engine: Engine, store: Arc<dyn storage::Store>) -> Self {
@@ -294,7 +294,7 @@ impl Service {
     /// with a REAL leanSig signature (devnet-1: the proposer signs only its own
     /// attestation), and persists block + post-state + head to storage.
     ///
-    /// The engine returns UNSIGNED output ([`Engine::produce_block_unsigned`]);
+    /// The engine returns UNSIGNED output (`Engine::produce_block_unsigned`);
     /// signing happens HERE, at the runtime boundary, so the one-time-key `&mut`
     /// advance never runs under the engine store lock. The proposer's own vote is
     /// re-imported locally (as [`Self::produce_attestation`] does) so forkchoice
@@ -306,7 +306,7 @@ impl Service {
     /// one-time-key index.
     ///
     /// # Errors
-    /// - [`ChainError::Engine`] if [`Engine::produce_block_unsigned`] rejects the
+    /// - [`ChainError::Engine`] if `Engine::produce_block_unsigned` rejects the
     ///   request (unauthorized proposer, missing head state, etc.).
     /// - [`ChainError::PostStateMissing`] if the just-produced block's post-state
     ///   is absent (engine invariant violation).

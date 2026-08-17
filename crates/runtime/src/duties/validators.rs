@@ -53,7 +53,7 @@ const IN_MEMORY_SENTINEL: &str = "<in-memory>";
 /// Parsed validator-assignment map: group name → list of validator
 /// indices.
 ///
-/// Iteration order of [`Self::groups`] is by group name (the underlying
+/// Iteration order of `groups` is by group name (the underlying
 /// [`BTreeMap`] guarantees deterministic ordering).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatorAssignments {

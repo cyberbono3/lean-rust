@@ -23,7 +23,7 @@ use crate::signing_domain::{attestation_signing_inputs, EpochOverflow};
 /// [`OtsKeyState`] secret record.
 ///
 /// The ONE home for this convention. The offline keygen writes these files
-/// (`lean-cli::validator_keygen`) and [`LocalSigner::load`] reads them back; a
+/// (`lean-cli::validator_keygen`) and `LocalSigner::load` reads them back; a
 /// second spelling on either side would desync silently at runtime rather than
 /// failing to compile, so both sides call this.
 #[must_use]
@@ -209,6 +209,7 @@ impl LocalSigner {
     /// [`SignerLoadError`] on the first index whose file is unreadable, whose
     /// bytes fail [`OtsKeyState`] decode, or whose record fails
     /// [`from_record`](crypto::SigningKey::from_record).
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn load(
         secrets_dir: &Path,
         local_indices: impl IntoIterator<Item = ValidatorIndex>,
@@ -216,7 +217,7 @@ impl LocalSigner {
         Self::load_with(secrets_dir, local_indices, |_, record| Ok(record))
     }
 
-    /// Like [`load`](Self::load), but additionally consults `store` for each
+    /// Like `load`, but additionally consults `store` for each
     /// validator's persisted one-time watermark and resumes from whichever
     /// record — file or store — has advanced further.
     ///
@@ -228,7 +229,7 @@ impl LocalSigner {
     /// directions — worst case it skips unused leaves, it never reuses one.
     ///
     /// # Errors
-    /// Everything [`load`](Self::load) raises, plus
+    /// Everything `load` raises, plus
     /// [`SignerLoadError::KeyStateLoad`] if the store read fails and
     /// [`SignerLoadError::KeyStateMismatch`] if the two records describe
     /// different keys (seed / activation window disagree).

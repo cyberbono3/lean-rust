@@ -66,7 +66,7 @@ struct RunHandle {
 /// stays `libp2p`-free.
 ///
 /// Spawned per-peer `on_connect` tasks are owned by an internal
-/// [`TaskTracker`]; [`Loop::stop`] cancels the shared token and awaits
+/// [`TaskTracker`]; `Loop::stop` cancels the shared token and awaits
 /// the tracker under the caller-supplied shutdown budget, so peer tasks
 /// always observe cancellation before the loop returns.
 pub struct Loop {

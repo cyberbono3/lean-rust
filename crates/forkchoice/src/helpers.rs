@@ -14,7 +14,7 @@
 //! behaviour, not an oversight: adding a slot axis ahead of the root axis
 //! is the exact divergence this rule exists to prevent.
 //!
-//! [`min_block_root`], which resolves the zero-root origin, is the one place
+//! `min_block_root`, which resolves the zero-root origin, is the one place
 //! this crate deliberately ranks on more than the spec does. `store.py:695`
 //! keys that `min` on slot alone and leaves ties to dict insertion order —
 //! under-determined rather than a contract, since no client can implement
@@ -41,7 +41,7 @@ use crate::error::ForkchoiceError;
 /// block, ties broken by ascending root-bytes. With `min_score = 0` this is
 /// canonical head selection; with `min_score = ceil(2N/3)` it is the
 /// supermajority-gated safe-target selection driven by
-/// [`crate::Store::update_safe_target`].
+/// [`crate::Store`]'s `update_safe_target`.
 ///
 /// # Errors
 /// - [`ForkchoiceError::NoBlocksAvailable`] when `root` defaults from zero

@@ -6,8 +6,8 @@
 //! - [`HttpError`] — error type surfaced to clients as JSON.
 //! - [`HEAD_PATHS`] — mounted head endpoint paths.
 //!
-//! Wire-shape DTOs ([`store_snapshot`]) and the handler module
-//! ([`head`]) stay crate-private — composition roots construct the
+//! Wire-shape DTOs (`store_snapshot`) and the handler module
+//! (`head`) stay crate-private — composition roots construct the
 //! service, not the wire types.
 
 pub(crate) mod error;

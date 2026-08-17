@@ -1,4 +1,4 @@
-.PHONY: verify build test lint fmt fmt-check clean help \
+.PHONY: verify build test lint docs fmt fmt-check clean help \
 	spec-pq-devnet4 spec-pq-devnet4-clean \
 	devnet-build devnet-genesis devnet-up devnet-down devnet-stop \
 	devnet-clean devnet-clean-check devnet-status devnet-start \
@@ -28,10 +28,11 @@ LEAN_RUST_HEAD_URL ?= http://127.0.0.1:5053/lean/v0/head
 
 help:
 	@echo "lean-rust Makefile targets:"
-	@echo "  make verify  - fmt --check + clippy + test (the canonical CI gate)"
+	@echo "  make verify  - fmt --check + clippy + docs + test (the canonical CI gate)"
 	@echo "  make build   - cargo build --workspace"
 	@echo "  make test    - cargo test --workspace"
 	@echo "  make lint    - cargo clippy --workspace --all-targets -- -D warnings"
+	@echo "  make docs    - RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps"
 	@echo "  make fmt     - cargo fmt (apply)"
 	@echo "  make fmt-check - cargo fmt --check"
 	@echo "  make clean   - cargo clean"
@@ -58,7 +59,7 @@ help:
 	@echo "  make devnet-start   - build + genesis + up"
 	@echo "  make devnet-quick-start - .env + start + status + logs (Ctrl+C stops)"
 
-verify: fmt-check lint test
+verify: fmt-check lint docs test
 
 build:
 	$(CARGO) build --workspace
@@ -68,6 +69,11 @@ test:
 
 lint:
 	$(CARGO) clippy $(WORKSPACE_FLAGS) -- -D warnings
+
+# `RUSTFLAGS` does not reach rustdoc, so the workspace's `[workspace.lints.rustdoc]`
+# band needs its own gate with `RUSTDOCFLAGS` or it is enforced nowhere.
+docs:
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps
 
 fmt:
 	$(CARGO) fmt --all

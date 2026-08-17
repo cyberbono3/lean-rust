@@ -127,7 +127,7 @@ pub struct Config {
 ///
 /// The composition is a flat wiring list: chain (a passive engine funnel),
 /// p2p, the sync [`Loop`](runtime::sync::Loop) over the concrete p2p handle,
-/// and the self-driving [`ConsensusLoop`] (in the duties slot) that owns the
+/// and the self-driving `ConsensusLoop` (in the duties slot) that owns the
 /// interval loop — engine advance, propose, attest, gossip drain, and
 /// publish. No workaround services (no separate tick loop, duty scheduler,
 /// or gossip-ingest task).

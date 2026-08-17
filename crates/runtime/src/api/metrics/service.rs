@@ -18,7 +18,7 @@ use crate::api::server::EndpointServer;
 
 /// HTTP service serving Prometheus text exposition on `/metrics`.
 ///
-/// Constructed with a [`Recorder`] and a listen address; `start`
+/// Constructed with a [`super::Recorder`] and a listen address; `start`
 /// resolves the OS-assigned port when `:0` is requested and exposes it
 /// via [`Self::bound_addr`]. The service is single-shot per instance: a
 /// `Stopped` service does not transition back to `Idle`.
