@@ -1,0 +1,51 @@
+name: changelog
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+    # labeled/unlabeled so applying or removing "no changelog" re-evaluates;
+    # edited so retargeting the PR's base branch re-evaluates BASE_REF.
+    types: [opened, reopened, synchronize, labeled, unlabeled, edited]
+
+# Toggling a label repeatedly would otherwise stack overlapping runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The diff assertion is meaningful only on a pull request — a push event has no base
+  # to compare against — so it is gated. The self-test is not: it must run on main too,
+  # or harness rot lands unnoticed, which is exactly the failure this suite exists to
+  # catch. Every sibling guard's self-test already runs on push via ci.yml.
+  changelog:
+    name: changelog entry
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The diff assertion needs the base ref in refs/remotes/origin/. The
+          # default shallow checkout does not fetch it and the guard fails on an
+          # unresolvable ref.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: check the PR records its change in CHANGELOG.md
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          NO_CHANGELOG_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'no changelog') }}
+        run: scripts/check-changelog.sh
+
+  guard-self-test:
+    name: changelog guard self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: check the guard itself catches a missing entry
+        run: bash scripts/tests/test-check-changelog.sh

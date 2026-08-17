@@ -9,6 +9,7 @@ This is the implementation of Lean Ethereum in Rust.
 | [Architecture](docs/architecture/README.md)
 | [Devnet Guide](docs/local-pq-devnet0.md)
 | [Metrics](docs/metrics/README.md)
+| [Changelog](CHANGELOG.md)
 
 ## What is lean-rust
 
