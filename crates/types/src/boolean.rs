@@ -39,7 +39,7 @@ pub type Boolean = bool;
 /// # Ok(())
 /// # }
 /// ```
-pub fn decode_boolean(data: &[u8]) -> Result<Boolean, TypesError> {
+pub const fn decode_boolean(data: &[u8]) -> Result<Boolean, TypesError> {
     match data {
         [0] => Ok(false),
         [1] => Ok(true),

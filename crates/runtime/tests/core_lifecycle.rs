@@ -59,22 +59,22 @@ impl FakeService {
         }
     }
 
-    fn with_start_err(mut self, msg: &'static str) -> Self {
+    const fn with_start_err(mut self, msg: &'static str) -> Self {
         self.script.start_err = Some(msg);
         self
     }
 
-    fn with_stop_err(mut self, msg: &'static str) -> Self {
+    const fn with_stop_err(mut self, msg: &'static str) -> Self {
         self.script.stop_err = Some(msg);
         self
     }
 
-    fn with_status_err(mut self, msg: &'static str) -> Self {
+    const fn with_status_err(mut self, msg: &'static str) -> Self {
         self.script.status_err = Some(msg);
         self
     }
 
-    fn with_stop_delay(mut self, delay: Duration) -> Self {
+    const fn with_stop_delay(mut self, delay: Duration) -> Self {
         self.script.stop_delay = Some(delay);
         self
     }

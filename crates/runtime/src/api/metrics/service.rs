@@ -31,7 +31,7 @@ impl MetricsService {
     /// Constructs a service that will bind `listen_addr` at `start` and
     /// serve metrics from the frozen `recorder`.
     #[must_use]
-    pub fn new(listen_addr: SocketAddr, recorder: FrozenRecorder) -> Self {
+    pub const fn new(listen_addr: SocketAddr, recorder: FrozenRecorder) -> Self {
         Self {
             recorder,
             server: EndpointServer::new("metrics", listen_addr),

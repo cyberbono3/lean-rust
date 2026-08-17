@@ -37,7 +37,7 @@ fn block(slot: u64, parent_root: Bytes32) -> Block {
     }
 }
 
-fn root(byte: u8) -> Bytes32 {
+const fn root(byte: u8) -> Bytes32 {
     Bytes32::new([byte; 32])
 }
 

@@ -183,7 +183,7 @@ impl LocalSigner {
     /// [`SignError::UnknownValidator`], which an observer never triggers because
     /// it never produces messages.
     #[must_use]
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             keys: BTreeMap::new(),
         }
@@ -344,7 +344,7 @@ impl AttestationSigner for LocalSigner {
         let key = self
             .keys
             .get_mut(&validator_id)
-            .ok_or(SignError::UnknownValidator {
+            .ok_or_else(|| SignError::UnknownValidator {
                 validator_id: validator_id.get(),
             })?;
         let (epoch, message) = attestation_signing_inputs(att)?;

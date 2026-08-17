@@ -30,7 +30,7 @@ pub enum HttpError {
 impl HttpError {
     /// HTTP status code paired with this error in [`IntoResponse`].
     #[must_use]
-    pub fn status(&self) -> StatusCode {
+    pub const fn status(&self) -> StatusCode {
         match self {
             Self::HeadNotSet => StatusCode::NOT_FOUND,
             Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,

@@ -143,13 +143,13 @@ impl BlocksByRootRequest {
 
     /// Number of roots in the request.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.roots.len()
     }
 
     /// `true` when no roots are requested.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.roots.is_empty()
     }
 }
@@ -217,13 +217,13 @@ impl BlocksByRootResponse {
 
     /// Number of blocks in the response.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.blocks.len()
     }
 
     /// `true` when no blocks are returned.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.blocks.is_empty()
     }
 }

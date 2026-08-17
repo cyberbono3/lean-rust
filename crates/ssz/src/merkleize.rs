@@ -178,7 +178,7 @@ pub fn zero_tree_root(width_pow2: usize) -> [u8; 32] {
 /// `power_of_two_ceil(usize::MAX)` would otherwise compute `bits = usize::BITS`
 /// and panic on `1_usize << usize::BITS`.
 #[must_use]
-pub(crate) fn power_of_two_ceil(x: usize) -> usize {
+pub(crate) const fn power_of_two_ceil(x: usize) -> usize {
     if x <= 1 {
         return 1;
     }

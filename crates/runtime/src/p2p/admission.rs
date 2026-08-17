@@ -130,7 +130,7 @@ impl AdmitGuard {
     /// The source peer this slot was admitted for — lets the drain log `%peer` on an
     /// import failure now that the channel carries the guard, not a bare `PeerId`.
     #[must_use]
-    pub fn peer(&self) -> &PeerId {
+    pub const fn peer(&self) -> &PeerId {
         &self.peer
     }
 }

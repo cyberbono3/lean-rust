@@ -64,7 +64,7 @@ pub(crate) const fn u64_chunk(value: u64) -> [u8; 32] {
 
 /// Returns `Ok(())` when `bytes.len() == expected`, otherwise
 /// [`DecodeError::InvalidByteLength`].
-pub(crate) fn ensure_len(bytes: &[u8], expected: usize) -> Result<(), DecodeError> {
+pub(crate) const fn ensure_len(bytes: &[u8], expected: usize) -> Result<(), DecodeError> {
     if bytes.len() == expected {
         Ok(())
     } else {

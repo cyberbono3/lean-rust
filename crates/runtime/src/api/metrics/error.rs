@@ -41,7 +41,7 @@ impl MetricsError {
     /// values were invalid, collector registration failed, or text
     /// encoding failed.
     #[must_use]
-    pub fn status(&self) -> StatusCode {
+    pub const fn status(&self) -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
     }
 }

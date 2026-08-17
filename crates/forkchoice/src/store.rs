@@ -189,13 +189,13 @@ impl Store {
     }
 
     /// Returns the store's current forkchoice time (intervals since genesis).
-    pub fn time(&self) -> Time {
+    pub const fn time(&self) -> Time {
         self.time
     }
 
     /// Returns the in-state runtime parameters carried alongside the chain.
     #[must_use]
-    pub fn config(&self) -> &ProtocolConfig {
+    pub const fn config(&self) -> &ProtocolConfig {
         &self.config
     }
 
@@ -226,25 +226,25 @@ impl Store {
 
     /// Returns the current canonical head root.
     #[must_use]
-    pub fn head(&self) -> Bytes32 {
+    pub const fn head(&self) -> Bytes32 {
         self.head
     }
 
     /// Returns the current safe attestation target root.
     #[must_use]
-    pub fn safe_target(&self) -> Bytes32 {
+    pub const fn safe_target(&self) -> Bytes32 {
         self.safe_target
     }
 
     /// Returns the highest justified checkpoint known to the store.
     #[must_use]
-    pub fn latest_justified(&self) -> Checkpoint {
+    pub const fn latest_justified(&self) -> Checkpoint {
         self.latest_justified
     }
 
     /// Returns the highest finalized checkpoint known to the store.
     #[must_use]
-    pub fn latest_finalized(&self) -> Checkpoint {
+    pub const fn latest_finalized(&self) -> Checkpoint {
         self.latest_finalized
     }
 
@@ -282,14 +282,14 @@ impl Store {
     /// by [`Self::process_attestation`] (on-chain branch) and promoted
     /// from [`Self::latest_new_votes`] by [`Self::accept_new_votes`].
     #[must_use]
-    pub fn latest_known_votes(&self) -> &HashMap<ValidatorIndex, SignedAttestation> {
+    pub const fn latest_known_votes(&self) -> &HashMap<ValidatorIndex, SignedAttestation> {
         &self.latest_known_votes
     }
 
     /// Returns pending full [`SignedAttestation`]s received via gossip but not
     /// yet promoted into [`Self::latest_known_votes`].
     #[must_use]
-    pub fn latest_new_votes(&self) -> &HashMap<ValidatorIndex, SignedAttestation> {
+    pub const fn latest_new_votes(&self) -> &HashMap<ValidatorIndex, SignedAttestation> {
         &self.latest_new_votes
     }
 
@@ -313,18 +313,18 @@ impl Store {
 
     /// Slot index derived from the current clock value.
     #[must_use]
-    pub fn current_slot(&self) -> u64 {
+    pub const fn current_slot(&self) -> u64 {
         self.time.slot()
     }
 
     /// Intra-slot interval index derived from the current clock value.
     #[must_use]
-    pub fn current_interval(&self) -> u64 {
+    pub const fn current_interval(&self) -> u64 {
         self.time.interval()
     }
 
     /// Spec [`Phase`] of the current clock value.
-    pub fn current_phase(&self) -> Phase {
+    pub const fn current_phase(&self) -> Phase {
         self.time.phase()
     }
 
@@ -919,7 +919,7 @@ impl Store {
     /// running `tick_interval` from genesis.
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_time_for_test(mut self, time: Time) -> Self {
+    pub(crate) const fn with_time_for_test(mut self, time: Time) -> Self {
         self.time = time;
         self
     }
@@ -937,7 +937,7 @@ impl Store {
     /// Production code mutates `latest_justified` only by adopting
     /// checkpoints from tracked post-states.
     #[cfg(test)]
-    pub(crate) fn set_latest_justified_for_test(&mut self, checkpoint: Checkpoint) {
+    pub(crate) const fn set_latest_justified_for_test(&mut self, checkpoint: Checkpoint) {
         self.latest_justified = checkpoint;
     }
 
@@ -1411,7 +1411,7 @@ mod attestation_tests {
         let vote = self_referential_vote(0, &roots, 2, 2);
         assert!(store.process_attestation(vote.clone(), true).unwrap());
         // Second call must observe `>=` and return false without mutation.
-        assert!(!store.process_attestation(vote.clone(), true).unwrap());
+        assert!(!store.process_attestation(vote, true).unwrap());
         assert_eq!(store.latest_known_votes().len(), 1);
     }
 
@@ -1433,7 +1433,7 @@ mod attestation_tests {
         let (mut store, roots) = store_with_chain_at_slot_3();
         let pending = self_referential_vote(0, &roots, 2, 2);
         let on_chain = self_referential_vote(0, &roots, 3, 3);
-        assert!(store.process_attestation(pending.clone(), false).unwrap());
+        assert!(store.process_attestation(pending, false).unwrap());
         // From-block at strictly newer slot promotes into known AND evicts
         // the stale pending entry (a single `true` return covers both).
         assert!(store.process_attestation(on_chain.clone(), true).unwrap());

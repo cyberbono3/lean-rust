@@ -62,7 +62,7 @@ impl Server {
     /// When `bind` was called with a port-0 address, this returns the
     /// concrete port chosen by the kernel.
     #[must_use]
-    pub fn local_addr(&self) -> SocketAddr {
+    pub const fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 

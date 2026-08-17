@@ -81,7 +81,7 @@ impl<S: SignatureScheme> SigningKey<S> {
     ///
     /// `pub(crate)`: only [`from_record`](crate::SigningKey::from_record) uses it,
     /// to reinstate the highest-signed epoch so a reload cannot re-enable reuse.
-    pub(crate) fn set_last_signed(&mut self, epoch: u32) {
+    pub(crate) const fn set_last_signed(&mut self, epoch: u32) {
         self.last_signed = Some(epoch);
     }
 
