@@ -66,7 +66,7 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   docs:
     name: docs
@@ -80,7 +80,7 @@ jobs:
       # The workflow-level RUSTFLAGS does not reach rustdoc, so the
       # [workspace.lints.rustdoc] band needs RUSTDOCFLAGS to be enforced at all.
       - name: cargo doc
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -94,4 +94,4 @@ jobs:
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
