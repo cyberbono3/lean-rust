@@ -80,20 +80,20 @@ pub struct Host {
 }
 
 impl Host {
-    pub(crate) fn new(peer_id: PeerId, commands: mpsc::Sender<HostCommand>) -> Self {
+    pub(crate) const fn new(peer_id: PeerId, commands: mpsc::Sender<HostCommand>) -> Self {
         Self { peer_id, commands }
     }
 
     /// Returns the local peer id of the host. Stable across the host's
     /// lifetime — derived from the identity keypair persisted on disk.
     #[must_use]
-    pub fn peer_id(&self) -> PeerId {
+    pub const fn peer_id(&self) -> PeerId {
         self.peer_id
     }
 
     /// Borrowed view of the command channel. `pub(crate)` so the swarm
     /// task in [`crate::p2p::service`] can issue `Shutdown` on cancellation.
-    pub(crate) fn commands(&self) -> &mpsc::Sender<HostCommand> {
+    pub(crate) const fn commands(&self) -> &mpsc::Sender<HostCommand> {
         &self.commands
     }
 }

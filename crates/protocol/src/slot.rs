@@ -21,10 +21,10 @@ impl_u64_ssz_newtype!(Slot);
 
 impl Slot {
     /// Slot zero — the genesis slot.
-    pub const ZERO: Slot = Slot(0);
+    pub const ZERO: Self = Self(0);
 
     /// One slot — minimal increment used by slot-advance loops.
-    pub const ONE: Slot = Slot(1);
+    pub const ONE: Self = Self(1);
 
     /// Constructs a [`Slot`] from a raw `u64`.
     #[must_use]
@@ -74,7 +74,7 @@ impl Slot {
     /// assert!(!Slot::new(7).is_justifiable_after(f));  // neither
     /// ```
     #[must_use]
-    pub const fn is_justifiable_after(self, finalized: Slot) -> bool {
+    pub const fn is_justifiable_after(self, finalized: Self) -> bool {
         if self.0 < finalized.0 {
             return false;
         }

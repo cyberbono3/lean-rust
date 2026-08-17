@@ -37,7 +37,7 @@ impl ChainMetrics {
     /// composition root (`register_chain_histograms`); tests and benches use
     /// [`ChainMetrics::default`] (all-`None`, no-op).
     #[must_use]
-    pub fn new(
+    pub const fn new(
         fork_choice_block_processing: ObservedHistogram,
         state_transition: ObservedHistogram,
     ) -> Self {

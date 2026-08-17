@@ -130,7 +130,7 @@ fn listen_address(cli: &Cli) -> Result<&str> {
 fn socket_addr(address: Option<IpAddr>, port: Option<u16>, default: SocketAddr) -> SocketAddr {
     SocketAddr::new(
         address.unwrap_or_else(|| default.ip()),
-        port.unwrap_or(default.port()),
+        port.unwrap_or_else(|| default.port()),
     )
 }
 

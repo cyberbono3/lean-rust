@@ -48,7 +48,7 @@ use crate::sync::PeerId;
 pub struct GossipReceiver<T>(mpsc::Receiver<T>);
 
 impl<T> GossipReceiver<T> {
-    pub(crate) fn new(rx: mpsc::Receiver<T>) -> Self {
+    pub(crate) const fn new(rx: mpsc::Receiver<T>) -> Self {
         Self(rx)
     }
 

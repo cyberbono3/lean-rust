@@ -839,8 +839,8 @@ mod tests {
             // Encoded byte length is exactly floor(length / 8) + 1.
             prop_assert_eq!(encoded.len(), length / 8 + 1);
             let decoded: Bitlist<128> = Bitlist::from_bytes(&encoded).unwrap();
-            prop_assert_eq!(decoded.clone(), bl);
             prop_assert_eq!(decoded.len(), length);
+            prop_assert_eq!(decoded, bl);
         }
 
         // Property form: set(i, _) for i in [LIMIT, LIMIT+8] always errors.

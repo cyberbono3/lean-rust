@@ -105,7 +105,7 @@ fn stored_attestation_signature_still_verifies() {
         signature: before.signature.clone(),
     };
 
-    let outcome = engine.import_attestation(before.clone());
+    let outcome = engine.import_attestation(before);
     assert!(
         matches!(outcome, AttestationImportResult::Accepted { .. }),
         "the genesis-placeholder source must still resolve and the vote be accepted, got {outcome:?}",

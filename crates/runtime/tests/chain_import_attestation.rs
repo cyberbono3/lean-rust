@@ -22,7 +22,7 @@ fn fresh_service() -> Service {
     Service::new(engine, Arc::new(MemoryStore::new()))
 }
 
-fn vote(head: Checkpoint, target: Checkpoint, source: Checkpoint) -> SignedAttestation {
+const fn vote(head: Checkpoint, target: Checkpoint, source: Checkpoint) -> SignedAttestation {
     SignedAttestation {
         message: Attestation {
             validator_id: ValidatorIndex::new(0),
