@@ -24,7 +24,7 @@
 use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
 
-use config::INTERVALS_PER_SLOT;
+use config::{INTERVALS_PER_SLOT, JUSTIFICATION_LOOKBACK_SLOTS};
 use protocol::{
     AttestationData, Block, Checkpoint, ProtocolConfig, SignedAttestation, Slot, State,
     ValidatorIndex,
@@ -767,36 +767,104 @@ impl Store {
         Ok(self.head)
     }
 
-    /// Walks from the current head toward the safe-target depth, at most
-    /// three hops, returning the resulting [`Checkpoint`]. Mirrors
-    /// leanSpec `forkchoice/store.py::Store.get_vote_target`.
+    /// Selects this node's attestation target: walk back from the head toward
+    /// the safe target, then back further until the slot is justifiable.
+    ///
+    /// Mirrors leanSpec `forkchoice/store.py::Store.get_attestation_target`
+    /// (`:1202-:1259 @ 0c9528ac`), whose two walks are reproduced in order: at
+    /// most [`JUSTIFICATION_LOOKBACK_SLOTS`] steps toward the safe target
+    /// (`:1241-:1245`), then an unbounded walk until
+    /// [`Slot::is_justifiable_after`] holds against the finalized slot
+    /// (`:1251-:1254`).
+    ///
+    /// One divergence, deliberate: both walks are floored at the finalized
+    /// checkpoint. The reference's second loop is unbounded because
+    /// `Slot.is_justifiable_after` ASSERTS the candidate is at or after the
+    /// finalized slot (`containers/slot.py:50`); this client's port returns
+    /// `false` instead, which would turn the same input into a walk off the
+    /// bottom of the chain. The input is reachable:
+    /// [`Self::adopt_post_state_checkpoints`] advances `latest_finalized`
+    /// without refreshing `safe_target`, so walk 1 can land below the finalized
+    /// slot. The floor makes termination a property of this function — a parent
+    /// step strictly decreases the slot, so the walk reaches the floor from any
+    /// starting point — rather than of the caller's store hygiene. The bound is
+    /// a SLOT comparison, not root-equality: the finalized block need not lie on
+    /// the cursor's ancestry.
+    ///
+    /// The floor bounds TERMINATION, not the post-condition, and the two cases
+    /// differ:
+    ///
+    /// - The finalized block IS on the head's ancestry. Then the walk stops
+    ///   exactly at it — distance 0 is justifiable — and every returned slot is
+    ///   justifiable after the finalized slot.
+    /// - It is NOT. [`Self::update_head`] descends from `latest_justified` while
+    ///   [`Self::adopt_post_state_checkpoints`] takes `latest_finalized` from any
+    ///   tracked post-state, so the two can sit on different branches. A single
+    ///   parent step can then skip from above the finalized slot to below it, and
+    ///   both loops exit on the floor with a target that is NOT justifiable.
+    ///
+    /// That undershoot is left visible rather than papered over. Substituting
+    /// `self.latest_finalized` would be worse — that checkpoint is on the other
+    /// branch, so the node would attest off its own head's ancestry — and no
+    /// choice of target is correct on a store whose head and finalized checkpoint
+    /// have diverged. The behaviour is pinned by
+    /// `target_selection_undershoots_when_finalized_is_off_ancestry` so it stays
+    /// deliberate, and the underlying divergence is tracked separately.
     ///
     /// # Errors
     /// - [`ForkchoiceError::UnknownHeadBlock`] when `self.head` is not in
     ///   the block map.
     /// - [`ForkchoiceError::UnknownSafeTarget`] when `self.safe_target` is
     ///   not in the block map.
-    /// - [`ForkchoiceError::ParentBlockNotFound`] when the walk steps past
+    /// - [`ForkchoiceError::ParentBlockNotFound`] when either walk steps past
     ///   a block whose parent is absent from the block map.
     pub fn get_vote_target(&self) -> Result<Checkpoint, ForkchoiceError> {
-        let head_block =
-            self.lookup_block(self.head, |root| ForkchoiceError::UnknownHeadBlock { root })?;
+        let mut cursor = self.head;
+        let mut cursor_block =
+            self.lookup_block(cursor, |root| ForkchoiceError::UnknownHeadBlock { root })?;
         let safe_slot = self
             .lookup_block(self.safe_target, |root| {
                 ForkchoiceError::UnknownSafeTarget { root }
             })?
             .slot;
+        let finalized_slot = self.latest_finalized.slot;
+        let floor_slot = safe_slot.max(finalized_slot);
 
-        let (mut cursor, mut cursor_block) = (self.head, head_block);
-        for _ in 0..3 {
-            if cursor_block.slot <= safe_slot {
+        // Walk 1 — toward the safe target, bounded by the lookback window.
+        for _ in 0..JUSTIFICATION_LOOKBACK_SLOTS {
+            if cursor_block.slot <= floor_slot {
                 break;
             }
-            cursor = cursor_block.parent_root;
-            cursor_block =
-                self.lookup_block(cursor, |root| ForkchoiceError::ParentBlockNotFound { root })?;
+            (cursor, cursor_block) = self.parent_of(cursor_block)?;
         }
+
+        // Walk 2 — back until the slot can be justified. The loop cannot run
+        // past the floor: either the cursor reaches `finalized_slot` (distance
+        // zero, justifiable) or a step lands below it, and both exits are
+        // guarded. The second case is the documented undershoot above.
+        while cursor_block.slot > finalized_slot
+            && !cursor_block.slot.is_justifiable_after(finalized_slot)
+        {
+            (cursor, cursor_block) = self.parent_of(cursor_block)?;
+        }
+
+        // A cursor below `finalized_slot` here means the finalized checkpoint is
+        // off the head's ancestry — documented above, pinned by
+        // `target_selection_undershoots_when_finalized_is_off_ancestry`. NOT an
+        // assertion: the condition is peer-reachable, no target is correct on a
+        // diverged store, and this function must still return one.
         Ok(Checkpoint::new(cursor, cursor_block.slot))
+    }
+
+    /// Resolves a block's parent, returning the `(root, block)` pair. Shared by
+    /// both walks in [`Self::get_vote_target`] so the step and its error variant
+    /// are written once.
+    fn parent_of(&self, block: &Block) -> Result<(Bytes32, &Block), ForkchoiceError> {
+        let parent_root = block.parent_root;
+        let parent_block = self.lookup_block(parent_root, |root| {
+            ForkchoiceError::ParentBlockNotFound { root }
+        })?;
+        Ok((parent_root, parent_block))
     }
 
     /// Test-only builder that overrides the constructor-seeded time.
@@ -2351,5 +2419,152 @@ mod store_extensions_tests {
         store.head = Bytes32::new([0xff; 32]);
         let err = store.get_vote_target().unwrap_err();
         assert!(matches!(err, ForkchoiceError::UnknownHeadBlock { .. }));
+    }
+
+    // -- get_vote_target: the justifiability walk --------------------------
+
+    #[test]
+    fn target_selection_matches_spec() {
+        // The fixture is chosen so the two walks DISAGREE, which is the only
+        // shape that can tell walk 2 apart from no walk 2 at all.
+        //
+        // Chain of 11 blocks at slots 0..=10, finalization and the safe target
+        // both at genesis, head at slot 10.
+        //   walk 1: three hops (JUSTIFICATION_LOOKBACK_SLOTS) -> slot 7
+        //   slot 7 is NOT justifiable after slot 0: delta 7 is not <= 5, not a
+        //   perfect square, not pronic (crates/protocol/src/slot.rs)
+        //   walk 2: one hop -> slot 6, delta 6 = 2*3, pronic -> justifiable
+        let (mut store, roots) = pinned_chain(11, 4, Time::new(10 * INTERVALS_PER_SLOT));
+        // No test-only setters: `accept_new_votes` refreshes the head through
+        // the normal LMD-GHOST walk, and `from_anchor` already seeded the safe
+        // target and the finalized checkpoint at genesis.
+        store.accept_new_votes().expect("head refresh");
+        assert_eq!(
+            store.head(),
+            roots[10],
+            "fixture precondition: head at slot 10"
+        );
+        assert_eq!(
+            store.safe_target(),
+            roots[0],
+            "fixture precondition: safe target at genesis"
+        );
+        assert_eq!(store.latest_finalized().slot, Slot::ZERO);
+
+        let target = store.get_vote_target().expect("target selection");
+
+        assert_eq!(
+            target,
+            Checkpoint::new(roots[6], Slot::new(6)),
+            "walk 2 must step back from the walk-1 landing at slot 7 to slot 6",
+        );
+        // The two properties the assertion above depends on, pinned separately so
+        // a failure says WHICH one broke.
+        assert!(
+            !Slot::new(7).is_justifiable_after(Slot::ZERO),
+            "fixture is vacuous unless the walk-1 landing is non-justifiable",
+        );
+        assert!(
+            target.slot.is_justifiable_after(Slot::ZERO),
+            "the selected slot must be justifiable after the finalized slot",
+        );
+    }
+
+    #[test]
+    fn target_selection_stops_at_the_finalized_checkpoint() {
+        // Regression for the store shape that made a literal port of the spec
+        // walk step off the bottom of the chain: `adopt_post_state_checkpoints`
+        // advances `latest_finalized` without refreshing `safe_target`, so walk 1
+        // can descend BELOW the finalized slot, where `is_justifiable_after` is
+        // false for every ancestor and the walk runs out of chain.
+        let (mut store, roots, states) = linear_chain(2, 2);
+        let checkpoint = Checkpoint::new(roots[1], Slot::ONE);
+        let mut post_state = states[0].clone();
+        post_state.latest_justified = checkpoint;
+        post_state.latest_finalized = checkpoint;
+
+        let block = Block {
+            slot: Slot::new(2),
+            proposer_index: ValidatorIndex::new(0),
+            parent_root: roots[1],
+            state_root: post_state.hash_tree_root().into(),
+            body: BlockBody::default(),
+        };
+        store.track_block(block, post_state).expect("track");
+        store.accept_new_votes().expect("head refresh");
+
+        // safe_target is still genesis (slot 0) while finalization is at slot 1.
+        assert_eq!(store.safe_target(), roots[0]);
+        let target = store
+            .get_vote_target()
+            .expect("must not walk past finalized");
+        assert_eq!(
+            target, checkpoint,
+            "the walk must stop at the finalized checkpoint, not step past genesis",
+        );
+    }
+
+    #[test]
+    fn target_selection_undershoots_when_finalized_is_off_ancestry() {
+        // The floor bounds TERMINATION, not the post-condition. When the
+        // finalized checkpoint sits on a branch the head does not descend from,
+        // one parent step can skip from above the finalized slot to below it and
+        // both loops exit on the floor with a NON-justifiable target. This test
+        // pins that as deliberate documented behaviour rather than an accident;
+        // the divergence that produces it is tracked as its own issue.
+        let (mut store, anchor) = genesis_store(4);
+
+        // Two children of genesis at different slots, so whichever is NOT the
+        // head sits at a slot the head's ancestry does not contain.
+        let (block_a, state_a) = fresh_block_and_state(anchor, 4);
+        let (block_b, state_b) = fresh_block_and_state(anchor, 2);
+        let root_a: Bytes32 = block_a.hash_tree_root().into();
+        let root_b: Bytes32 = block_b.hash_tree_root().into();
+        store.track_block(block_a, state_a).expect("track a");
+        store.track_block(block_b, state_b).expect("track b");
+        store.accept_new_votes().expect("head refresh");
+
+        // The head is decided by the (weight, root) tie-break, so the test READS
+        // it rather than assuming it, and finalizes the other branch. Both
+        // orientations undershoot: a head above the finalized slot walks past it,
+        // and a head below it is already under the floor.
+        let head = store.head();
+        let (off_root, off_slot) = if head == root_a {
+            (root_b, Slot::new(2))
+        } else {
+            assert_eq!(head, root_b, "head must be one of the two children");
+            (root_a, Slot::new(4))
+        };
+
+        // Adopt the off-ancestry checkpoint the way ordinary operation does: a
+        // block on that branch whose post-state names it finalized. Built by hand
+        // because `state_root` must commit to the MODIFIED state — the same
+        // reason `track_block_adopts_newer_known_post_state_checkpoints` does.
+        let mut post_state = crate::test_fixtures::genesis_anchor(4).0;
+        post_state.latest_finalized = Checkpoint::new(off_root, off_slot);
+        let follower = Block {
+            slot: Slot::new(5),
+            proposer_index: ValidatorIndex::new(1),
+            parent_root: off_root,
+            state_root: post_state.hash_tree_root().into(),
+            body: BlockBody::default(),
+        };
+        store
+            .track_block(follower, post_state)
+            .expect("track the follower that carries the finalized checkpoint");
+        assert_eq!(store.latest_finalized().root, off_root);
+        assert_eq!(store.head(), head, "tracking must not move the head");
+
+        let target = store.get_vote_target().expect("the walk must still return");
+        assert!(
+            target.slot < store.latest_finalized().slot,
+            "documented undershoot: the target sits below the finalized slot",
+        );
+        assert!(
+            !target
+                .slot
+                .is_justifiable_after(store.latest_finalized().slot),
+            "and it is NOT justifiable — the residual this test exists to make visible",
+        );
     }
 }
