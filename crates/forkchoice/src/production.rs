@@ -248,12 +248,27 @@ impl Store {
     ///
     /// What bounds it is [`Store::resolved_source_root`]'s slot-0 clause: the
     /// tolerance applies only to a vote at slot 0, so the divergent vote is always
-    /// the oldest possible one for that validator, and ANY later vote from them —
-    /// which is strictly newer, so `insert_if_newer` accepts it — supersedes it on
-    /// both node populations and re-converges them. Do NOT widen that clause without
-    /// revisiting this: at a higher slot the vote could sit at the future cap where
-    /// first-wins-at-equal-slot makes it unsupersedable, and the divergence would be
-    /// permanent instead of transient.
+    /// the oldest possible one for that validator. Any later vote from them is
+    /// strictly newer, so `insert_if_newer` accepts it — and re-convergence happens
+    /// because the GOSSIP population drops the divergent entry, not because both
+    /// populations supersede it. The blocks-only population never held it, so there
+    /// is nothing there to supersede.
+    ///
+    /// The residual: a validator that never votes again. A slot-0 vote satisfies the
+    /// `current_vote_slot() + 1` cap at every clock value, and the guard is checked
+    /// only at ingress, so an entry admitted while the store is still
+    /// genesis-justified stays resident afterwards. For a validator with no pool
+    /// entry — offline, never started, exited — that entry keeps scoring head weight
+    /// on gossip peers and none on blocks-only peers indefinitely. Narrow (it needs
+    /// the genesis-justified window and reaches only silent validators) and not
+    /// unique to this shape (the same weight is conjurable with a real-source vote,
+    /// which is includable and so propagates symmetrically), but it is the one case
+    /// the slot-0 bound does not make transient.
+    ///
+    /// Do NOT widen that clause without revisiting this: at a higher slot the vote
+    /// could sit at the future cap where first-wins-at-equal-slot makes it
+    /// unsupersedable, and the divergence would be permanent for ACTIVE validators
+    /// too, not just silent ones.
     /// Keeping it includable is not an option — once the producer assembles a full
     /// positional signature list, the same entry would publish a signature made
     /// over bytes the attester never signed.
