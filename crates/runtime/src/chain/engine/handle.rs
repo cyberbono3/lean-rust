@@ -567,6 +567,10 @@ mod tests {
     }
 
     #[test]
+    // The clone IS the subject under test: this asserts that a cloned handle
+    // shares the underlying store rather than snapshotting it. Removing it
+    // would delete what the test exists to check.
+    #[allow(clippy::redundant_clone)]
     fn clone_shares_underlying_store() {
         let engine_a = engine_at_genesis(4);
         let engine_b = engine_a.clone();

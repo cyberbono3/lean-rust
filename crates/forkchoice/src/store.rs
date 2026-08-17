@@ -1411,7 +1411,7 @@ mod attestation_tests {
         let vote = self_referential_vote(0, &roots, 2, 2);
         assert!(store.process_attestation(vote.clone(), true).unwrap());
         // Second call must observe `>=` and return false without mutation.
-        assert!(!store.process_attestation(vote.clone(), true).unwrap());
+        assert!(!store.process_attestation(vote, true).unwrap());
         assert_eq!(store.latest_known_votes().len(), 1);
     }
 
@@ -1433,7 +1433,7 @@ mod attestation_tests {
         let (mut store, roots) = store_with_chain_at_slot_3();
         let pending = self_referential_vote(0, &roots, 2, 2);
         let on_chain = self_referential_vote(0, &roots, 3, 3);
-        assert!(store.process_attestation(pending.clone(), false).unwrap());
+        assert!(store.process_attestation(pending, false).unwrap());
         // From-block at strictly newer slot promotes into known AND evicts
         // the stale pending entry (a single `true` return covers both).
         assert!(store.process_attestation(on_chain.clone(), true).unwrap());

@@ -273,18 +273,19 @@ mod tests {
             PublicKey::new([0x11; PUBLIC_KEY_LEN]),
             ValidatorIndex::new(7),
         );
+        let base_root = base.hash_tree_root();
         assert_eq!(
-            base.hash_tree_root(),
+            base_root,
             merkleize(&[base.pubkey.hash_tree_root(), base.index.hash_tree_root()])
         );
 
         let mut pubkey_changed = base.clone();
         pubkey_changed.pubkey = PublicKey::new([0x22; PUBLIC_KEY_LEN]);
-        assert_ne!(pubkey_changed.hash_tree_root(), base.hash_tree_root());
+        assert_ne!(pubkey_changed.hash_tree_root(), base_root);
 
-        let mut index_changed = base.clone();
+        let mut index_changed = base;
         index_changed.index = ValidatorIndex::new(8);
-        assert_ne!(index_changed.hash_tree_root(), base.hash_tree_root());
+        assert_ne!(index_changed.hash_tree_root(), base_root);
     }
 
     // -- is_proposer ---------------------------------------------------------

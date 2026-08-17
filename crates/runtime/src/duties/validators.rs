@@ -161,7 +161,7 @@ impl ValidatorAssignments {
                         return Err(DutiesError::DuplicateValidatorAssignment {
                             index,
                             existing_group: existing.get().clone(),
-                            conflicting_group: name.clone(),
+                            conflicting_group: name,
                         });
                     }
                     Entry::Vacant(slot) => {

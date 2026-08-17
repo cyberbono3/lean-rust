@@ -902,17 +902,18 @@ mod tests {
     #[test]
     fn signed_block_with_attestation_hash_tree_root_is_two_field_merkle() {
         let sbwa = sample_signed_block_with_attestation();
+        let sbwa_root = sbwa.hash_tree_root();
         assert_eq!(
-            sbwa.hash_tree_root(),
+            sbwa_root,
             merkleize(&[
                 sbwa.message.hash_tree_root(),
                 sbwa.signature.hash_tree_root(),
             ]),
         );
         // Mutating the signature list alone changes the root.
-        let mut m = sbwa.clone();
+        let mut m = sbwa;
         m.signature = [sample_signature(9)].into_iter().collect();
-        assert_ne!(m.hash_tree_root(), sbwa.hash_tree_root());
+        assert_ne!(m.hash_tree_root(), sbwa_root);
     }
 
     #[test]

@@ -53,6 +53,10 @@ pedantic    = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
 panic       = "deny"
+# Nursery lint enabled by name. The nursery group as a whole stays off: it
+# carries `redundant_pub_crate`, the direct inverse of the `unreachable_pub`
+# above, plus ~70 further findings this workspace has not opted into.
+redundant_clone = "warn"
 
 [workspace.dependencies]
 # foundation

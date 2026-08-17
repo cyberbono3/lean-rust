@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn advance_state_to_slot_equal_is_noop() {
         let state = dummy_state();
-        let advanced = advance_state_to_slot(state.clone(), Slot::ZERO).unwrap();
+        let advanced = advance_state_to_slot(state, Slot::ZERO).unwrap();
         assert_eq!(advanced.slot, Slot::ZERO);
     }
 
