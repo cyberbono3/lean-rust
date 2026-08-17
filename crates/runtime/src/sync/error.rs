@@ -55,6 +55,6 @@ pub enum SyncError {
 /// `crate::sync` and the module graph stays acyclic.
 impl From<RpcError> for SyncError {
     fn from(err: RpcError) -> Self {
-        SyncError::Network(err.to_string())
+        Self::Network(err.to_string())
     }
 }

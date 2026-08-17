@@ -39,7 +39,7 @@ pub struct Time(u64);
 
 impl Time {
     /// Genesis time (`Time(0)`).
-    pub const ZERO: Time = Time(0);
+    pub const ZERO: Self = Self(0);
 
     /// Constructs a [`Time`] from a raw `u64` interval count.
     pub const fn new(t: u64) -> Self {
@@ -96,7 +96,7 @@ impl From<u64> for Time {
 }
 
 impl From<Time> for u64 {
-    fn from(t: Time) -> u64 {
+    fn from(t: Time) -> Self {
         t.0
     }
 }

@@ -65,6 +65,9 @@ panic       = "deny"
 # carries `redundant_pub_crate`, the direct inverse of the `unreachable_pub`
 # above, plus ~70 further findings this workspace has not opted into.
 redundant_clone = "warn"
+use_self             = "warn"
+iter_on_single_items = "warn"
+or_fun_call          = "warn"
 
 [workspace.dependencies]
 # foundation

@@ -359,7 +359,7 @@ impl AttestationSigner for LocalSigner {
         let key = self
             .keys
             .get_mut(&validator_id)
-            .ok_or(SignError::UnknownValidator {
+            .ok_or_else(|| SignError::UnknownValidator {
                 validator_id: validator_id.get(),
             })?;
         let (epoch, message) = attestation_signing_inputs(att)?;

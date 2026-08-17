@@ -47,9 +47,7 @@ pub fn sample_signed_block(seed: u8) -> SignedBlockWithAttestation {
             },
             proposer_attestation: attestation,
         },
-        signature: [Signature::new([seed; Signature::LEN])]
-            .into_iter()
-            .collect(),
+        signature: std::iter::once(Signature::new([seed; Signature::LEN])).collect(),
     }
 }
 

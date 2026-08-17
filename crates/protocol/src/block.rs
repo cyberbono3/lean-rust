@@ -811,11 +811,11 @@ mod tests {
 
     #[test]
     fn block_signatures_hash_tree_root_changes_with_len_and_element() {
-        let one: BlockSignatures = [sample_signature(1)].into_iter().collect();
+        let one: BlockSignatures = std::iter::once(sample_signature(1)).collect();
         let two: BlockSignatures = [sample_signature(1), sample_signature(1)]
             .into_iter()
             .collect();
-        let other: BlockSignatures = [sample_signature(2)].into_iter().collect();
+        let other: BlockSignatures = std::iter::once(sample_signature(2)).collect();
         assert_ne!(one.hash_tree_root(), two.hash_tree_root());
         assert_ne!(one.hash_tree_root(), other.hash_tree_root());
     }
@@ -912,7 +912,7 @@ mod tests {
         );
         // Mutating the signature list alone changes the root.
         let mut m = sbwa;
-        m.signature = [sample_signature(9)].into_iter().collect();
+        m.signature = std::iter::once(sample_signature(9)).collect();
         assert_ne!(m.hash_tree_root(), sbwa_root);
     }
 

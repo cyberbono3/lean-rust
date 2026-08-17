@@ -53,8 +53,8 @@ impl Topic {
 
     /// All topics this crate registers — used by `Service::start` to
     /// subscribe in one place.
-    pub(crate) const fn all() -> &'static [Topic] {
-        &[Topic::Block, Topic::Vote]
+    pub(crate) const fn all() -> &'static [Self] {
+        &[Self::Block, Self::Vote]
     }
 }
 

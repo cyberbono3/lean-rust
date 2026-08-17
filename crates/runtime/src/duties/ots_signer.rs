@@ -81,12 +81,12 @@ impl AttestationSigner for OtsSigner {
     fn sign_attestation(&mut self, att: &Attestation) -> Result<Signature, SignError> {
         let validator = att.validator_id;
         let signature = self.inner.sign_attestation(att)?;
-        let watermark = self
-            .inner
-            .watermark_for(validator)
-            .ok_or(SignError::UnknownValidator {
-                validator_id: validator.get(),
-            })?;
+        let watermark =
+            self.inner
+                .watermark_for(validator)
+                .ok_or_else(|| SignError::UnknownValidator {
+                    validator_id: validator.get(),
+                })?;
         self.store
             .save_ots_key_state(validator, watermark)
             .map_err(|source| SignError::Persist {
