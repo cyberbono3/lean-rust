@@ -9,7 +9,7 @@
 use libp2p::gossipsub;
 use protocol::{SignedAttestation, SignedBlockWithAttestation};
 use tokio::sync::oneshot;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::p2p::host::behaviour::{INTEROP_SAFE_PAYLOAD_BYTES, MAX_GOSSIP_PAYLOAD_BYTES};
 use crate::p2p::host::{Host, HostCommand};
@@ -95,13 +95,26 @@ impl Host {
         // limit turned that from a loud local error into a silent remote drop, so
         // say it locally at the threshold a default-configured peer still enforces.
         if payload.len() > INTEROP_SAFE_PAYLOAD_BYTES {
-            warn!(
-                topic = topic.as_str(),
-                bytes = payload.len(),
-                interop_safe = INTEROP_SAFE_PAYLOAD_BYTES,
-                "gossip payload exceeds the default peer limit; peers that have not \
-                 raised max_transmit_size will drop it without reporting",
-            );
+            // Once per topic, not once per slot. Past ~19 body attestations EVERY
+            // block crosses this threshold, and a warn every slot forever is how
+            // operators learn to filter the level that also carries the
+            // `PayloadTooLarge` diagnostics. The condition is a standing property of
+            // the network's size, so it is news once and telemetry thereafter.
+            if topic.warn_once_over_interop_size() {
+                warn!(
+                    topic = topic.as_str(),
+                    bytes = payload.len(),
+                    interop_safe = INTEROP_SAFE_PAYLOAD_BYTES,
+                    "gossip payload exceeds the default peer limit; peers that have not \
+                     raised max_transmit_size will drop it without reporting",
+                );
+            } else {
+                debug!(
+                    topic = topic.as_str(),
+                    bytes = payload.len(),
+                    "gossip payload over the default peer limit",
+                );
+            }
         }
         let (reply_tx, reply_rx) = oneshot::channel();
         self.commands()

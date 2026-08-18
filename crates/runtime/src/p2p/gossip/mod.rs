@@ -15,6 +15,8 @@
 pub(crate) mod handler;
 pub(crate) mod publisher;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use libp2p::gossipsub;
 
 pub use handler::{BlockReceiver, GossipReceiver, VoteReceiver};
@@ -49,6 +51,22 @@ impl Topic {
     #[must_use]
     pub(crate) fn ident(self) -> gossipsub::IdentTopic {
         gossipsub::IdentTopic::new(self.as_str())
+    }
+
+    /// Claims the one-shot "payload over the interop-safe size" warning for this
+    /// topic, returning `true` exactly once per topic per process.
+    ///
+    /// The condition it guards is a standing property of the validator count, not
+    /// an event: once a network is large enough for blocks to exceed the size a
+    /// default-configured peer accepts, every block exceeds it. Saying so once per
+    /// topic keeps it visible without turning the warn level into noise.
+    pub(crate) fn warn_once_over_interop_size(self) -> bool {
+        static WARNED: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+        let slot = match self {
+            Self::Block => 0,
+            Self::Vote => 1,
+        };
+        !WARNED[slot].swap(true, Ordering::Relaxed)
     }
 
     /// All topics this crate registers — used by `Service::start` to
