@@ -101,7 +101,7 @@ lean_topics! {
     encoding: "ssz_snappy",
     topics: {
         BLOCK_TOPIC_V1 = "block",
-        VOTE_TOPIC_V1 = "vote",
+        ATTESTATION_SUBNET_TOPIC_V1 = "attestation_0",
     },
 }
 
@@ -387,15 +387,24 @@ mod tests {
         assert_eq!(parsed.to_string(), topic);
     }
 
-    /// Discriminates the correct `parse_topic_name` from one that resolves
-    /// every `ALL_TOPICS` hit to `TopicKind::Block`. `vote` is in the table
-    /// and is not a spec topic name, so it must NOT resolve.
+    /// The attestation topic is the spec's subnet form, not a bare name.
+    /// leanSpec `networking/gossipsub/topic.py:167-:170` emits
+    /// `attestation_{subnet_id}`; a bare `attestation` cannot be re-emitted,
+    /// and no spec node subscribes to `vote`.
+    ///
+    /// This replaces `vote_topic_name_does_not_resolve`, which was the only
+    /// test that could tell the explicit-`match` `parse_topic_name` apart
+    /// from a blanket `ALL_TOPICS` lookup. That discrimination is no longer
+    /// observable: `attestation_0` is intercepted by the subnet-prefix
+    /// branch before any table lookup, and `block` maps to `Block` under
+    /// both forms. The explicit `match` is now held by the doc comment on
+    /// `parse_topic_name` and by review.
     #[test]
-    fn vote_topic_name_does_not_resolve() {
-        assert!(matches!(
-            GossipTopicRef::parse(VOTE_TOPIC_V1),
-            Err(NetworkingError::UnknownTopicName)
-        ));
+    fn attestation_topic_is_the_subnet_form() {
+        let parsed =
+            GossipTopicRef::parse(ATTESTATION_SUBNET_TOPIC_V1).expect("subnet topic parses");
+        assert_eq!(parsed.kind, TopicKind::AttestationSubnet { subnet_id: 0 });
+        assert_eq!(parsed.to_string(), ATTESTATION_SUBNET_TOPIC_V1);
     }
 
     #[test]

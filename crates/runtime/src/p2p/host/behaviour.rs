@@ -259,7 +259,7 @@ pub(crate) fn take_decompressed_for(id: &gossipsub::MessageId) -> Option<Vec<u8>
 mod tests {
     use super::codec::RpcProtocol;
     use super::*;
-    use lean_wire::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};
+    use lean_wire::{ATTESTATION_SUBNET_TOPIC_V1, BLOCK_TOPIC_V1};
     use libp2p::gossipsub::{Message, TopicHash};
 
     /// The host advertises exactly the protocols leanSpec serves
@@ -319,7 +319,7 @@ mod tests {
             ),
             (
                 "valid_snappy",
-                VOTE_TOPIC_V1,
+                ATTESTATION_SUBNET_TOPIC_V1,
                 snappy_encode(b"hello world"),
                 MESSAGE_DOMAIN_VALID_SNAPPY,
             ),
@@ -388,7 +388,7 @@ mod tests {
         // id-keyed cache must still hit.
         let raw = b"cross-thread payload";
         let encoded = snappy_encode(raw);
-        let msg = message(VOTE_TOPIC_V1, encoded);
+        let msg = message(ATTESTATION_SUBNET_TOPIC_V1, encoded);
 
         // Populate from a separate thread.
         let id = std::thread::spawn(move || gossipsub_message_id(&msg))
