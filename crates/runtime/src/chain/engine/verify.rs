@@ -67,11 +67,14 @@ pub enum VerifyError {
 /// signature list and the body-attestation list are bounded by
 /// [`protocol::MAX_ATTESTATIONS`].
 ///
-/// Note for the aggregation-assembly Part: the positional signature list is
+/// Note on the maximum body: the positional signature list is
 /// `body.attestations.len() + 1` long, but this gate (and the SSZ `BlockSignatures`
-/// decoder) cap it at `MAX_ATTESTATIONS`, not `MAX_ATTESTATIONS + 1`. At the maximum
-/// validator count a maximally-full body is therefore unrepresentable — the aggregation
-/// Part must account for that when assembling the full positional list.
+/// decoder) cap it at `MAX_ATTESTATIONS`, not `MAX_ATTESTATIONS + 1`. A maximally-full
+/// body is therefore unrepresentable. Local production reserves the final slot —
+/// see [`protocol::MAX_BODY_ATTESTATIONS`] — but that is producer-side policy, not a
+/// validity rule: a peer may legally send a full `MAX_ATTESTATIONS` body, and such a
+/// block can never satisfy this gate. Closing that needs the signature container
+/// itself to change.
 ///
 /// # Errors
 /// [`VerifyError::OverCap`] when either list exceeds the cap.
@@ -115,9 +118,12 @@ pub trait Verifier: Send + Sync {
     ) -> Result<(), CryptoError>;
 }
 
-/// Production adapter binding the pinned [`ProdScheme`]. Injected at the
-/// composition root in a later Part (once the full positional signature list is
-/// assembled); the only place in `runtime` bound to a concrete scheme.
+/// Production adapter binding the pinned [`ProdScheme`]. The only place in
+/// `runtime` bound to a concrete scheme.
+///
+/// The full positional signature list IS assembled now, so the precondition for
+/// arming this is met; injecting it at the composition root remains a separate
+/// change, and until then the gate stays inert.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProdVerifier;
 

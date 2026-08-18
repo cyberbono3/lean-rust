@@ -26,7 +26,7 @@ use parking_lot::{Mutex, MutexGuard};
 use protocol::{Block, Checkpoint, SignedBlockWithAttestation, Slot, State, ValidatorIndex};
 use ssz::HashTreeRoot;
 use tracing::{debug, info, warn};
-use types::Bytes32;
+use types::{Bytes32, Signature};
 
 use super::error::EngineError;
 use super::verify::Verifier;
@@ -290,6 +290,7 @@ impl Engine {
             block: produced.block,
             proposer_vote,
             block_root: produced.root,
+            attestation_signatures: produced.attestation_signatures,
             persist,
         })
     }
@@ -495,6 +496,10 @@ pub(crate) struct UnsignedProduction {
     pub(crate) proposer_vote: ProducedVote,
     /// Hash-tree-root of [`Self::block`].
     pub(crate) block_root: Bytes32,
+    /// Signatures of [`Self::block`]'s body attestations, in body order. The
+    /// runtime boundary appends the proposer's own signature after these to form
+    /// the block's positional signature list.
+    pub(crate) attestation_signatures: Vec<Signature>,
     /// Persist inputs, or `None` on the unreachable post-state/head-absent case.
     pub(crate) persist: Option<PersistInputs>,
 }

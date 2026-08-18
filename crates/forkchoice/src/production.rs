@@ -20,10 +20,10 @@ use std::cmp::Ordering;
 
 use protocol::{
     is_proposer, AttestationData, Block, BlockBody, Checkpoint, SignedAttestation, Slot, State,
-    ValidatorIndex, MAX_ATTESTATIONS,
+    ValidatorIndex, MAX_BODY_ATTESTATIONS,
 };
 use ssz::HashTreeRoot;
-use types::Bytes32;
+use types::{Bytes32, Signature};
 
 use crate::error::ForkchoiceError;
 use crate::store::Store;
@@ -46,6 +46,20 @@ pub struct ProducedBlock {
     pub post_state: State,
     /// `hash_tree_root(post_state)` captured at production time.
     pub post_state_root: Bytes32,
+    /// Signatures of [`Self::block`]'s body attestations, in body order:
+    /// `attestation_signatures[i]` is the signature the pooled vote carried
+    /// for `block.body.attestations[i]`.
+    ///
+    /// Both lists are projected from one stabilized slice of signed votes by
+    /// [`body_from`] and [`signatures_from`], so the correspondence is
+    /// structural rather than reconstructed. The runtime boundary appends the
+    /// proposer's own signature after these to form the block's positional
+    /// signature list.
+    ///
+    /// These bytes are UNVERIFIED: an on-chain vote enters the pool with
+    /// whatever signature the block-import path paired with it. Closing that is
+    /// an ingress concern — see [`Store::collect_includable_votes`].
+    pub attestation_signatures: Vec<Signature>,
 }
 
 /// Structured result of [`Store::produce_attestation_vote`].
@@ -83,7 +97,7 @@ impl Store {
     ///    - Otherwise append the new votes and repeat.
     ///
     /// The loop terminates: the includable set is monotonically growing
-    /// and bounded by `min(MAX_ATTESTATIONS, latest_known_votes.len())`.
+    /// and bounded by `min(MAX_BODY_ATTESTATIONS, latest_known_votes.len())`.
     ///
     /// # Errors
     /// - [`ForkchoiceError::UnauthorizedProposer`] when `validator` is not
@@ -123,7 +137,7 @@ impl Store {
     ///
     /// Termination is guaranteed: `collect_includable_votes` only ever
     /// returns votes not already in `attestations`, and the result is
-    /// bounded by `min(MAX_ATTESTATIONS, latest_known_votes.len())`.
+    /// bounded by `min(MAX_BODY_ATTESTATIONS, latest_known_votes.len())`.
     fn converge_attestations(
         &self,
         head_root: Bytes32,
@@ -171,6 +185,7 @@ impl Store {
             parent_root: head_root,
             post_state,
             post_state_root,
+            attestation_signatures: signatures_from(attestations),
         })
     }
 
@@ -271,8 +286,8 @@ impl Store {
     /// could sit at the future cap where first-wins-at-equal-slot makes it
     /// unsupersedable, and the divergence would be permanent for ACTIVE validators
     /// too, not just silent ones.
-    /// Keeping it includable is not an option — once the producer assembles a full
-    /// positional signature list, the same entry would publish a signature made
+    /// Keeping it includable is not an option: the producer assembles a full
+    /// positional signature list, so the same entry would publish a signature made
     /// over bytes the attester never signed.
     ///
     /// This filter is NOT a signature-integrity guard, and must not be mistaken for
@@ -280,17 +295,31 @@ impl Store {
     /// on-chain vote enters the pool with whatever signature the block-import path
     /// paired with it — peer-supplied, and covered by no block root, or a default
     /// when the list is short — and such a vote satisfies this filter cleanly.
-    /// Assembling the positional list therefore requires VERIFYING the pooled
-    /// signature at that point, not relying on anything here.
+    /// The producer DOES assemble that list and does NOT verify those bytes, so
+    /// the obligation is unmet and sits at ingress, in three places — none of which
+    /// this filter can stand in for:
     ///
-    /// The result is capped at `MAX_ATTESTATIONS - already_included.len()`
-    /// so the candidate block never exceeds the SSZ list bound.
+    /// 1. The gossip block ingress, once its signature gate is armed.
+    /// 2. The gossip attestation ingress, which verifies no signature today.
+    /// 3. The sync-backfill ingress, which skips the block gate structurally yet
+    ///    folds the same peer-supplied pairs into this pool. Closing it needs
+    ///    verify-on-sync or a checkpoint-bound trust anchor.
+    ///
+    /// Verification cannot move here: it belongs at the runtime boundary, never in
+    /// `forkchoice`. Nor can it move to the assembly site — by then the body is
+    /// committed to `state_root` and the block is tracked, so dropping an
+    /// attestation would mean rebuilding and untracking it.
+    ///
+    /// The result is capped at `MAX_BODY_ATTESTATIONS - already_included.len()`,
+    /// one BELOW the SSZ list bound: the block's positional signature list is
+    /// `body.attestations.len() + 1` long, so the final slot is reserved for the
+    /// proposer's own signature. A body at the full cap could not be signed.
     fn collect_includable_votes(
         &self,
         post_state: &State,
         already_included: &[SignedAttestation],
     ) -> Vec<SignedAttestation> {
-        let cap = MAX_ATTESTATIONS.saturating_sub(already_included.len());
+        let cap = MAX_BODY_ATTESTATIONS.saturating_sub(already_included.len());
         if cap == 0 {
             return Vec::new();
         }
@@ -305,13 +334,27 @@ impl Store {
     }
 }
 
-/// Builds a [`BlockBody`] of plain attestations from pooled signed votes. The
-/// per-vote signature placeholders are dropped here; the block-signature list is
-/// a later (sign-path) concern.
+/// Builds a [`BlockBody`] of plain attestations from pooled signed votes.
+///
+/// This projects the MESSAGE half; [`signatures_from`] projects the signature
+/// half of the same votes. The two together are the block's positional signature
+/// list, minus the proposer's own trailing element.
 fn body_from(votes: &[SignedAttestation]) -> BlockBody {
     BlockBody {
         attestations: votes.iter().map(|sv| sv.message).collect(),
     }
+}
+
+/// Projects the signature half of the same stabilized votes [`body_from`]
+/// projects the message half from.
+///
+/// Called on the SAME slice, in the same order, so `body.attestations[i]` and
+/// `signatures[i]` describe one vote. That is what makes the positional pairing
+/// structural: neither list is rebuilt from the mutable vote pool, where a
+/// later-arriving vote for the same validator could pair a signature with an
+/// attestation it does not cover.
+fn signatures_from(votes: &[SignedAttestation]) -> Vec<Signature> {
+    votes.iter().map(|sv| sv.signature.clone()).collect()
 }
 
 /// Builds a candidate block + post-state for `(slot, validator)` over
@@ -442,19 +485,70 @@ mod tests {
         assert_eq!(result.post_state.slot, Slot::new(1));
     }
 
-    // -- collect_includable_votes (MAX_ATTESTATIONS cap) ----------------
+    // -- collect_includable_votes (reserved proposer slot) ----------------
 
+    /// The producer's body bound is one BELOW the container cap: the positional
+    /// signature list is `body + 1` and `BlockSignatures` is capped at the
+    /// registry limit, so a body at the full cap could not be signed.
+    ///
+    /// Both halves are asserted. The near-full half is what makes this test
+    /// non-vacuous: `produce_setup`'s pool is EMPTY, and an empty pool returns an
+    /// empty result under any cap — which is why asserting only the full half
+    /// would prove nothing about the bound.
     #[test]
-    fn collect_includable_votes_caps_at_max_attestations() {
-        // Verify `.take(cap)` truncates when the pool is already at capacity.
-        // We pass a synthetic `already_included` of length MAX_ATTESTATIONS;
-        // the cap is then zero and the result must be empty regardless of
-        // `latest_known_votes` content.
-        let (store, _) = produce_setup();
-        let dummy: Vec<SignedAttestation> =
-            (0..MAX_ATTESTATIONS).map(|_| dummy_signed_vote()).collect();
-        let votes = store.collect_includable_votes(&dummy_state(), &dummy);
-        assert!(votes.is_empty());
+    fn producer_reserves_proposer_signature_slot() {
+        const SEEDED: ValidatorIndex = ValidatorIndex::new(2);
+
+        let (mut store, anchor) = produce_setup();
+        let anchor_cp = Checkpoint::new(anchor, Slot::ZERO);
+        let vote = signed_vote(SEEDED, anchor_cp, anchor_cp, anchor_cp, Slot::ZERO);
+        assert!(store.process_attestation(vote, true).unwrap());
+
+        // Build the candidate post-state the producer actually filters against.
+        // `dummy_state()` would NOT do: its `latest_justified` is the raw genesis
+        // zero, so the seeded vote would fail the source filter and the pool would
+        // look empty again — reintroducing the vacuity this test exists to avoid.
+        let head_state = store
+            .state(&anchor)
+            .cloned()
+            .expect("the genesis anchor's post-state is tracked");
+        let (_, post_state) = build_candidate_block(
+            anchor,
+            Slot::new(1),
+            ValidatorIndex::new(1), // the round-robin proposer for slot 1 of 4
+            &head_state,
+            &[],
+        )
+        .expect("a candidate on the genesis anchor builds");
+        assert_eq!(
+            post_state.latest_justified, anchor_cp,
+            "precondition: the candidate post-state must carry the seeded justified \
+             checkpoint, or the filter below rejects the seeded vote for the wrong reason",
+        );
+
+        // One slot short of the bound: the budget is 1 and the pooled vote takes it.
+        let near_full: Vec<SignedAttestation> = (0..MAX_BODY_ATTESTATIONS - 1)
+            .map(|_| dummy_signed_vote())
+            .collect();
+        assert_eq!(
+            store
+                .collect_includable_votes(&post_state, &near_full)
+                .len(),
+            1,
+            "with one body slot left the producer must still admit a pooled vote",
+        );
+
+        // At the bound: the budget is spent and the proposer's signature slot stays free.
+        let full: Vec<SignedAttestation> = (0..MAX_BODY_ATTESTATIONS)
+            .map(|_| dummy_signed_vote())
+            .collect();
+        assert!(
+            store
+                .collect_includable_votes(&post_state, &full)
+                .is_empty(),
+            "a body at the producer's bound must admit nothing more — the final \
+             signature slot belongs to the proposer",
+        );
     }
 
     fn dummy_signed_vote() -> SignedAttestation {
@@ -547,8 +641,8 @@ mod tests {
     /// post-state's `latest_justified` is `(anchor_root, 0)`. The filter in
     /// `collect_includable_votes` therefore rejects it — deliberately. Including it
     /// would put an attestation in the body that every node's state transition
-    /// skips anyway, and that becomes an unverifiable entry once the producer
-    /// assembles a real positional signature list.
+    /// skips anyway, and — now that the producer assembles a real positional
+    /// signature list — an unverifiable entry with it.
     #[test]
     fn a_genesis_placeholder_source_vote_is_not_includable() {
         const PLACEHOLDER: ValidatorIndex = ValidatorIndex::new(0);

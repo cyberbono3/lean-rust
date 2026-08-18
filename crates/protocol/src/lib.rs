@@ -71,7 +71,7 @@ pub mod vote;
 
 pub use block::{
     Block, BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation,
-    SignedBlockWithAttestation, MAX_ATTESTATIONS,
+    SignedBlockWithAttestation, MAX_ATTESTATIONS, MAX_BODY_ATTESTATIONS,
 };
 pub use checkpoint::Checkpoint;
 pub use error::{AttSlotKind, ProtocolError, StateTransitionError};

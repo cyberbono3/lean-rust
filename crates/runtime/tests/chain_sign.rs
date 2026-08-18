@@ -55,17 +55,21 @@ async fn produce_block_signs_only_proposer_attestation() {
         .await
         .unwrap();
 
-    // Devnet-1: exactly ONE signature — the proposer's own attestation.
-    // Positional-list assembly (body attestations + proposer) is a later part.
-    assert_eq!(blk.signature.len(), 1);
+    // One signature per body attestation, plus the proposer's own LAST. Nothing
+    // seeds the pool here, so the body is empty and the list holds exactly the
+    // proposer's signature — asserted against the RULE, not against the constant 1,
+    // so this stops meaning something different the moment a body appears.
+    assert_eq!(
+        blk.signature.len(),
+        blk.message.block.body.attestations.len() + 1
+    );
     let proposer_att = blk.message.proposer_attestation;
     assert_eq!(proposer_att.validator_id, ValidatorIndex::new(1));
 
     let msg = proposer_att.hash_tree_root();
     let epoch = u32::try_from(proposer_att.data.slot.get()).unwrap();
-    assert!(
-        crypto::verify::<crypto::ProdScheme>(&pubs[&1], epoch, &msg, &blk.signature[0]).is_ok()
-    );
+    let proposer_sig = &blk.signature[blk.signature.len() - 1];
+    assert!(crypto::verify::<crypto::ProdScheme>(&pubs[&1], epoch, &msg, proposer_sig).is_ok());
 }
 
 #[tokio::test]
@@ -91,8 +95,17 @@ async fn no_placeholder_signature_on_production_path() {
         .produce_block(Slot::ONE, ValidatorIndex::new(1))
         .await
         .unwrap();
+    // The proposer's signature is the LAST element, not the first: this test
+    // produces an attestation BEFORE the block, and `produce_attestation`
+    // re-imports that vote, so the block carries it as a body attestation and
+    // `signature[0]` is the ATTESTER's signature. Pin the length too, so a future
+    // body change cannot silently re-point this assertion at another element.
+    assert_eq!(
+        blk.signature.len(),
+        blk.message.block.body.attestations.len() + 1
+    );
     assert_ne!(
-        blk.signature[0],
+        blk.signature[blk.signature.len() - 1],
         Signature::zero(),
         "block proposer signature must not be a zero placeholder",
     );
