@@ -58,6 +58,18 @@ const GOSSIPSUB_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 /// the codec would reject the variant. Separating them gives each
 /// request kind its own behaviour and therefore its own protocol
 /// negotiation path.
+/// The req/resp protocols this host advertises, in the order the
+/// behaviours below are constructed.
+///
+/// One definition, read by [`DevnetBehaviour::build`] and by
+/// `served_protocols_match_spec_set`. Changing this array — adding an id,
+/// removing one, or naming one the spec does not serve — fails that test.
+/// It does NOT catch a third `request_response` field that names its
+/// protocol directly instead of indexing here; nothing in this repository
+/// can enumerate a built `NetworkBehaviour`'s protocols, so that case is a
+/// review responsibility.
+const SERVED: [ProtocolId; 2] = [STATUS_PROTOCOL_V1, BLOCKS_BY_ROOT_PROTOCOL_V1];
+
 #[derive(NetworkBehaviour)]
 pub(crate) struct DevnetBehaviour {
     pub(crate) gossipsub: gossipsub::Behaviour,
@@ -77,8 +89,8 @@ impl DevnetBehaviour {
     pub(crate) fn build(keypair: &Keypair, agent_version: &AgentVersion) -> HostResult<Self> {
         Ok(Self {
             gossipsub: Self::build_gossipsub()?,
-            status_rr: Self::build_request_response(STATUS_PROTOCOL_V1),
-            blocks_rr: Self::build_request_response(BLOCKS_BY_ROOT_PROTOCOL_V1),
+            status_rr: Self::build_request_response(SERVED[0]),
+            blocks_rr: Self::build_request_response(SERVED[1]),
             identify: Self::build_identify(keypair, agent_version),
             ping: ping::Behaviour::new(ping::Config::new()),
         })
@@ -245,9 +257,36 @@ pub(crate) fn take_decompressed_for(id: &gossipsub::MessageId) -> Option<Vec<u8>
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use super::codec::RpcProtocol;
     use super::*;
     use lean_wire::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};
     use libp2p::gossipsub::{Message, TopicHash};
+
+    /// The host advertises exactly the protocols leanSpec serves
+    /// (`networking/reqresp/handler.py:225-:231`), and the codec resolves
+    /// every one of them.
+    ///
+    /// What this does and does not guarantee: an id added to or removed
+    /// from `SERVED`, or one that names a protocol the spec does not serve,
+    /// fails here. It does NOT introspect the libp2p swarm — nothing in
+    /// this repository can enumerate a `NetworkBehaviour`'s advertised
+    /// protocols at runtime — so a third `request_response` field that
+    /// names its protocol directly rather than indexing `SERVED` is
+    /// invisible to this test and has to be caught in review.
+    #[test]
+    fn served_protocols_match_spec_set() {
+        assert_eq!(SERVED.len(), lean_wire::REQRESP_PROTOCOLS.len());
+        for id in SERVED {
+            assert!(
+                lean_wire::REQRESP_PROTOCOLS.contains(&id),
+                "{id} advertised but not in the spec set",
+            );
+            assert!(
+                RpcProtocol::resolve(id.as_str()).is_some(),
+                "codec must resolve every served protocol",
+            );
+        }
+    }
 
     fn message(topic: &str, data: Vec<u8>) -> Message {
         Message {

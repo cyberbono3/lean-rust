@@ -9,8 +9,8 @@
 //!
 //! The codec dispatches on the libp2p protocol id ([`STATUS_PROTOCOL_V1`]
 //! / [`BLOCKS_BY_ROOT_PROTOCOL_V1`]) carried in the codec method's
-//! `protocol` parameter; unknown protocols surface as
-//! [`io::ErrorKind::Unsupported`].
+//! `protocol` parameter, resolved once by [`RpcProtocol::resolve`];
+//! unknown protocols surface as [`io::ErrorKind::Unsupported`].
 
 use std::io::{self, Cursor};
 
@@ -31,6 +31,37 @@ use protocol::SignedBlockWithAttestation;
 /// = 1024 `SignedBlockWithAttestation`s plus per-frame snappy / uvarint overhead) but
 /// tight enough to fault-stop an attacker.
 const MAX_RPC_STREAM_BYTES: u64 = 16 * 1024 * 1024;
+
+/// The req/resp protocol a codec call is operating on.
+///
+/// The codec's four methods each receive the negotiated protocol id as a
+/// string; resolving it in one place means a new protocol is added to
+/// [`lean_wire::REQRESP_PROTOCOLS`] and matched here, not string-matched in
+/// four methods that can drift apart.
+///
+/// `pub(super)` so the parent module's served-set pin can assert that the
+/// codec resolves every protocol the host advertises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RpcProtocol {
+    /// [`lean_wire::STATUS_PROTOCOL_V1`].
+    Status,
+    /// [`lean_wire::BLOCKS_BY_ROOT_PROTOCOL_V1`].
+    BlocksByRoot,
+}
+
+impl RpcProtocol {
+    /// Resolves a negotiated protocol id, or `None` if this client does not
+    /// serve it.
+    pub(super) fn resolve(protocol: &str) -> Option<Self> {
+        if protocol == STATUS_PROTOCOL_V1.as_str() {
+            Some(Self::Status)
+        } else if protocol == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() {
+            Some(Self::BlocksByRoot)
+        } else {
+            None
+        }
+    }
+}
 
 /// Outbound or inbound request payload on one of the devnet0 req/resp
 /// protocols.
@@ -74,16 +105,14 @@ impl request_response::Codec for SszSnappyCodec {
         T: AsyncRead + Unpin + Send,
     {
         let buf = read_to_end(io).await?;
-        match protocol.as_ref() {
-            s if s == STATUS_PROTOCOL_V1.as_str() => {
+        match RpcProtocol::resolve(protocol.as_ref()) {
+            Some(RpcProtocol::Status) => {
                 Ok(RpcRequest::Status(decode_single_frame::<Status>(&buf)?))
             }
-            s if s == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => {
-                Ok(RpcRequest::BlocksByRoot(decode_single_frame::<
-                    BlocksByRootRequest,
-                >(&buf)?))
-            }
-            other => Err(unknown_protocol(other)),
+            Some(RpcProtocol::BlocksByRoot) => Ok(RpcRequest::BlocksByRoot(decode_single_frame::<
+                BlocksByRootRequest,
+            >(&buf)?)),
+            None => Err(unknown_protocol(protocol.as_ref())),
         }
     }
 
@@ -96,14 +125,14 @@ impl request_response::Codec for SszSnappyCodec {
         T: AsyncRead + Unpin + Send,
     {
         let buf = read_to_end(io).await?;
-        match protocol.as_ref() {
-            s if s == STATUS_PROTOCOL_V1.as_str() => {
+        match RpcProtocol::resolve(protocol.as_ref()) {
+            Some(RpcProtocol::Status) => {
                 Ok(RpcResponse::Status(decode_single_frame::<Status>(&buf)?))
             }
-            s if s == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => Ok(RpcResponse::BlocksByRoot(
+            Some(RpcProtocol::BlocksByRoot) => Ok(RpcResponse::BlocksByRoot(
                 decode_blocks_by_root_response(&buf)?,
             )),
-            other => Err(unknown_protocol(other)),
+            None => Err(unknown_protocol(protocol.as_ref())),
         }
     }
 
@@ -116,12 +145,10 @@ impl request_response::Codec for SszSnappyCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let bytes = match (&req, protocol.as_ref()) {
-            (RpcRequest::Status(s), p) if p == STATUS_PROTOCOL_V1.as_str() => encode_frame(s)?,
-            (RpcRequest::BlocksByRoot(r), p) if p == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => {
-                encode_frame(r)?
-            }
-            (_, other) => return Err(protocol_mismatch(other, "request")),
+        let bytes = match (&req, RpcProtocol::resolve(protocol.as_ref())) {
+            (RpcRequest::Status(s), Some(RpcProtocol::Status)) => encode_frame(s)?,
+            (RpcRequest::BlocksByRoot(r), Some(RpcProtocol::BlocksByRoot)) => encode_frame(r)?,
+            _ => return Err(protocol_mismatch(protocol.as_ref(), "request")),
         };
         write_framed(io, &bytes).await
     }
@@ -135,12 +162,12 @@ impl request_response::Codec for SszSnappyCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let bytes = match (&res, protocol.as_ref()) {
-            (RpcResponse::Status(s), p) if p == STATUS_PROTOCOL_V1.as_str() => encode_frame(s)?,
-            (RpcResponse::BlocksByRoot(r), p) if p == BLOCKS_BY_ROOT_PROTOCOL_V1.as_str() => {
+        let bytes = match (&res, RpcProtocol::resolve(protocol.as_ref())) {
+            (RpcResponse::Status(s), Some(RpcProtocol::Status)) => encode_frame(s)?,
+            (RpcResponse::BlocksByRoot(r), Some(RpcProtocol::BlocksByRoot)) => {
                 encode_blocks_by_root_response(r)?
             }
-            (_, other) => return Err(protocol_mismatch(other, "response")),
+            _ => return Err(protocol_mismatch(protocol.as_ref(), "response")),
         };
         write_framed(io, &bytes).await
     }
