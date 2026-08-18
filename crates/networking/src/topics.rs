@@ -121,9 +121,14 @@ lean_topics! {
 /// Upper bound on an inbound topic string, in bytes.
 ///
 /// Topic strings arrive from peers. The longest string this client can
-/// legitimately see is a subnet topic with a 20-digit subnet id, well under
-/// this cap; the bound exists so a peer cannot make the parser walk an
-/// arbitrarily long buffer before rejecting it.
+/// legitimately see is a subnet topic with a 20-digit subnet id — 55 bytes
+/// against this 128-byte cap — so the bound exists only to stop a peer
+/// making the parser walk an arbitrarily long buffer before rejecting it.
+///
+/// Checked against the RAW string, before the leading `/` is stripped and
+/// before any component is examined, so an over-cap topic reports
+/// [`NetworkingError::MalformedTopic`] even when it is otherwise perfectly
+/// shaped.
 const MAX_TOPIC_LEN: usize = 128;
 
 /// Prefix of an attestation-subnet topic name, before the subnet id.
@@ -140,8 +145,9 @@ pub const ATTESTATION_SUBNET_PREFIX: &str = "attestation";
 /// Single-sourced: [`parse_topic_name`] and [`fmt::Display`] both read this
 /// constant, so the parse and emit paths cannot drift apart the way
 /// separate copies of the literal could. The macro invocation needs a
-/// literal token and carries the third copy, which
-/// `components_match_spec_constants` pins against this one.
+/// literal token and carries a second copy;
+/// `components_match_spec_constants` pins this constant against the spec
+/// literal and then pins the macro's copy through it.
 pub const BLOCK_TOPIC_NAME: &str = "block";
 
 /// Which message type a parsed topic carries.
@@ -395,7 +401,24 @@ mod tests {
         // leanSpec networking/gossipsub/topic.py:93 (BLOCK_TOPIC_NAME).
         // Singular. The spec's prose docs say `blocks`
         // (docs/client/networking.md:71); the code is normative.
-        assert_eq!(ALL_TOPICS[0].0, "block");
+        //
+        // The spec literal is stated once and everything else is pinned
+        // through it: BLOCK_TOPIC_NAME against the literal, then the
+        // macro's own copy against the constant. Asserted by name rather
+        // than by table index, which would break for reasons unrelated to
+        // the spec if a topic were added at the front.
+        assert_eq!(BLOCK_TOPIC_NAME, "block");
+        let names: Vec<&str> = ALL_TOPICS.iter().map(|(name, _)| *name).collect();
+        assert!(
+            names.contains(&BLOCK_TOPIC_NAME),
+            "block topic name absent from the table: {names:?}",
+        );
+        // leanSpec networking/gossipsub/topic.py:100 + :170 — the emitted
+        // name is `attestation_{subnet_id}`, never the bare prefix.
+        assert!(
+            names.contains(&"attestation_0"),
+            "attestation subnet topic name not pinned: {names:?}",
+        );
     }
 
     /// Every topic is the four-component form, composed from the
