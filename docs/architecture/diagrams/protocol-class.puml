@@ -152,6 +152,7 @@ package "forkchoice" #EEF0FB {
     +parent_root: Bytes32
     +post_state: State
     +post_state_root: Bytes32
+    +attestation_signatures: Vec<Signature>
   }
   class ProducedVote <<struct>> {
     +vote: Vote

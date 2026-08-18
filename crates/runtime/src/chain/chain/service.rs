@@ -69,7 +69,7 @@ use lean_wire::Status;
 use parking_lot::Mutex;
 use protocol::{
     Attestation, BlockSignatures, BlockWithAttestation, Checkpoint, SignedAttestation,
-    SignedBlockWithAttestation, Slot, ValidatorIndex,
+    SignedBlockWithAttestation, Slot, ValidatorIndex, MAX_ATTESTATIONS,
 };
 use storage::HeadInfo;
 use tokio_util::sync::CancellationToken;
@@ -291,8 +291,13 @@ impl Service {
     }
 
     /// Builds one locally authored block, signs the proposer's own attestation
-    /// with a REAL leanSig signature (devnet-1: the proposer signs only its own
-    /// attestation), and persists block + post-state + head to storage.
+    /// with a REAL leanSig signature, and persists block + post-state + head to
+    /// storage.
+    ///
+    /// The proposer signs ONLY its own attestation — it holds no key for anyone
+    /// else's. The block's signature list is nevertheless full-length: each body
+    /// attestation travels with the signature its attester made, taken from the
+    /// vote pool, and the proposer's own signature is appended last.
     ///
     /// The engine returns UNSIGNED output ([`Engine::produce_block_unsigned`]);
     /// signing happens HERE, at the runtime boundary, so the one-time-key `&mut`
@@ -326,7 +331,8 @@ impl Service {
         let inputs = prod.persist.ok_or(ChainError::PostStateMissing {
             block_root: prod.block_root,
         })?;
-        // Devnet-1: sign ONLY the proposer's own attestation (block.py:108-115).
+        // Sign ONLY the proposer's own attestation (block.py:108-115) — every other
+        // element of the positional list is an attester's own signature, reused as-is.
         let proposer_attestation = Attestation::new(validator, prod.proposer_vote.vote);
         let signature = {
             // Guard scope = the sign call only; dropped before the re-import /
@@ -352,10 +358,34 @@ impl Service {
                 "proposer self-vote re-import rejected (vote still carried by the block)",
             );
         }
-        // Part 13 fills the proposer's single signature; positional-list assembly
-        // (body attestations + proposer last) is a later part. `BlockSignatures`'
-        // only constructor is `FromIterator<Signature>`.
-        let block_signatures: BlockSignatures = core::iter::once(signature).collect();
+        // Positional signature list: each body attestation's signature in body
+        // order, then the proposer's own signature LAST. The verify side pairs
+        // signatures to attestations by position, so this order IS the wire
+        // contract — `body.attestations[i]` is signed by `signature[i]`, and the
+        // trailing element covers `proposer_attestation`. (`BlockSignatures`' only
+        // constructor is `FromIterator<Signature>`.)
+        //
+        // The body signatures come from the same stabilized vote slice that built
+        // the body, so the pairing cannot drift from what the block committed to.
+        // They are NOT verified here: a failing signature would have to drop its
+        // attestation from the body, which moves `state_root` on an already-tracked
+        // block, so that filter belongs at ingress.
+        let block_signatures: BlockSignatures = prod
+            .attestation_signatures
+            .into_iter()
+            .chain(core::iter::once(signature))
+            .collect();
+        // `Encode` applies no cap — only `Decode` does — so a producer that broke
+        // the reserved-slot discipline would emit a block that encodes here and
+        // fails to decode on every peer, with no local error at all. Checked in
+        // every profile, not `debug_assert`: release is exactly where that silence
+        // would matter. Unreachable while the producer's cap holds.
+        if block_signatures.len() > MAX_ATTESTATIONS {
+            return Err(ChainError::OversizedSignatureList {
+                count: block_signatures.len(),
+                cap: MAX_ATTESTATIONS,
+            });
+        }
         let signed = SignedBlockWithAttestation {
             message: BlockWithAttestation {
                 block: prod.block,

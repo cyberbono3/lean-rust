@@ -67,11 +67,15 @@ pub enum VerifyError {
 /// signature list and the body-attestation list are bounded by
 /// [`protocol::MAX_ATTESTATIONS`].
 ///
-/// Note for the aggregation-assembly Part: the positional signature list is
+/// Note on the maximum body: the positional signature list is
 /// `body.attestations.len() + 1` long, but this gate (and the SSZ `BlockSignatures`
-/// decoder) cap it at `MAX_ATTESTATIONS`, not `MAX_ATTESTATIONS + 1`. At the maximum
-/// validator count a maximally-full body is therefore unrepresentable — the aggregation
-/// Part must account for that when assembling the full positional list.
+/// decoder) cap it at `MAX_ATTESTATIONS`, not `MAX_ATTESTATIONS + 1`. A maximally-full
+/// body is therefore unrepresentable. Local production reserves the final slot —
+/// see [`protocol::PRODUCER_MAX_BODY_ATTESTATIONS`] — but that is producer-side policy, not a
+/// validity rule: a peer may legally send a full `MAX_ATTESTATIONS` body. Such a
+/// block passes THIS check — its lists are within the cap — and then fails
+/// [`verify_positional`]'s length equality, which wants one more signature than the
+/// cap permits. Closing that needs the signature container itself to change.
 ///
 /// # Errors
 /// [`VerifyError::OverCap`] when either list exceeds the cap.
@@ -115,9 +119,19 @@ pub trait Verifier: Send + Sync {
     ) -> Result<(), CryptoError>;
 }
 
-/// Production adapter binding the pinned [`ProdScheme`]. Injected at the
-/// composition root in a later Part (once the full positional signature list is
-/// assembled); the only place in `runtime` bound to a concrete scheme.
+/// Production adapter binding the pinned [`ProdScheme`]. The only place in
+/// `runtime` bound to a concrete scheme.
+///
+/// The full positional signature list IS assembled now, so the LENGTH
+/// precondition for arming this is met. It is not the only one: the producer
+/// republishes pooled signatures it never verified, including the locally
+/// fabricated placeholder written for an unpaired body attestation. BOTH block
+/// ingresses write it: the gossip path and the sync-backfill path share one
+/// `transition_and_track`, so arming this gate closes only the first (see
+/// `block_carried_votes`). Arming while a
+/// peer can seed that pool turns a remote input into blocks this node authors and
+/// other nodes then reject. Close the ingress feeds first; injecting this at the
+/// composition root remains a separate change, and until then the gate is inert.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProdVerifier;
 

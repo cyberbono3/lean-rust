@@ -10,7 +10,6 @@
 //! is implemented in [`codec::SszSnappyCodec`] and dispatched per
 //! protocol in [`crate::p2p::service`].
 
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -42,6 +41,63 @@ const IDENTIFY_PROTOCOL_VERSION: &str = "lean/0.1.0";
 /// values shorten mesh-formation latency at the cost of more bookkeeping
 /// traffic. One second matches the devnet0 reference profile.
 const GOSSIPSUB_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Largest gossip payload this node will publish or accept, in bytes.
+///
+/// Set EXPLICITLY because the libp2p default (64 KiB) is far too small for a
+/// block. Every body attestation travels with its own 3116-byte signature, so a
+/// block is `3352 + 3252 * N` bytes for `N` body attestations: the default caps
+/// a block at 19 attestations, and the 20th makes it unpublishable. That failure
+/// is quiet in the worst way — the block is already persisted and fork choice has
+/// already moved this node's head onto it, so the node advances on a block no
+/// peer ever receives. Leaving the default would make a routine validator-count
+/// change fork this node off the network.
+///
+/// 1 MiB carries ~321 body attestations (`3352 + 3252 * N`). Assume NO help from
+/// compression: signature bytes are high-entropy and snappy recovers essentially
+/// nothing against them. A fixture with zero-filled attestations does show a few
+/// percent, but that is the zeros compressing away, not the signatures, and real
+/// traffic carries real attestations. ~321 is well past any devnet validator
+/// count, while keeping the inbound allowance small enough to stay off the
+/// amplification surface bounded by [`MAX_SNAPPY_DECOMPRESSED`].
+///
+/// NOT the protocol maximum: a block at the registry cap is ~13.3 MB, which no
+/// reasonable gossip limit accommodates and which the two-field signature
+/// container is what actually fixes.
+///
+/// Interop note: this bounds what this node ACCEPTS as well as what it sends, so
+/// peers must agree on it. A peer still on the 64 KiB default will drop anything
+/// larger regardless of what is set here.
+pub(crate) const MAX_GOSSIP_PAYLOAD_BYTES: usize = 1024 * 1024;
+
+/// Headroom for the gossipsub RPC framing that wraps a published payload.
+///
+/// libp2p applies `max_transmit_size` to TWO different things. `Behaviour::publish`
+/// compares it against the payload (`transformed_data.len()`), which is what
+/// [`MAX_GOSSIP_PAYLOAD_BYTES`] means here — but the same value is handed to
+/// `GossipsubCodec::new`, which enforces it on the protobuf-framed RPC: the payload
+/// PLUS the topic string plus field tags and length varints.
+///
+/// Configuring one number for both leaves a band just under the limit where a
+/// payload passes `publish`, receives a `MessageId`, and then fails the codec's
+/// frame limit on the sender's own outbound stream — `publish` returns `Ok`, the
+/// proposer logs success, and the block never leaves the node. That is the same
+/// silent-drop failure this limit exists to remove, so the codec is configured with
+/// the framing budget on top and the publish gate keeps the payload bound.
+///
+/// 256 bytes covers the longest topic this node subscribes to (~45 bytes) with an
+/// order of magnitude to spare; the exact protobuf overhead is small and bounded,
+/// and over-reserving costs nothing.
+const GOSSIP_RPC_FRAMING_BYTES: usize = 256;
+
+/// The payload size every peer accepts regardless of configuration: libp2p's own
+/// default `max_transmit_size`.
+///
+/// Not a limit this node enforces — it publishes past it deliberately — but the
+/// threshold beyond which delivery depends on peers having raised their own bound.
+/// Crossing it is worth saying out loud, because a peer that has not will drop the
+/// message with no signal returned to the sender.
+pub(crate) const INTEROP_SAFE_PAYLOAD_BYTES: usize = 64 * 1024;
 
 /// Composite behaviour driven by the host swarm task.
 ///
@@ -85,16 +141,26 @@ impl DevnetBehaviour {
     }
 
     fn build_gossipsub() -> HostResult<gossipsub::Behaviour> {
+        let config = Self::gossipsub_config()?;
+        gossipsub::Behaviour::new(gossipsub::MessageAuthenticity::Anonymous, config)
+            .map_err(Self::gossipsub_init_err)
+    }
+
+    /// The gossipsub config, split out from [`Self::build_gossipsub`] so the
+    /// transmit bound is assertable. Without a test on it, deleting the
+    /// `max_transmit_size` line silently restores libp2p's 64 KiB default while
+    /// every publish-side test keeps passing — the publish gate is only the
+    /// diagnostic, this line is the actual fix.
+    fn gossipsub_config() -> HostResult<gossipsub::Config> {
         // Devnet0 publishes unsigned messages; `Anonymous` authenticity
         // pairs with the message-id function below to give
         // deterministic 20-byte IDs derived purely from `(topic, payload)`.
-        let config = gossipsub::ConfigBuilder::default()
+        gossipsub::ConfigBuilder::default()
             .validation_mode(gossipsub::ValidationMode::Anonymous)
             .heartbeat_interval(GOSSIPSUB_HEARTBEAT_INTERVAL)
+            .max_transmit_size(MAX_GOSSIP_PAYLOAD_BYTES + GOSSIP_RPC_FRAMING_BYTES)
             .message_id_fn(gossipsub_message_id)
             .build()
-            .map_err(Self::gossipsub_init_err)?;
-        gossipsub::Behaviour::new(gossipsub::MessageAuthenticity::Anonymous, config)
             .map_err(Self::gossipsub_init_err)
     }
 
@@ -121,18 +187,20 @@ impl DevnetBehaviour {
 /// Defensive upper bound on a single decompressed gossipsub payload. A
 /// peer claiming a larger frame is rejected as invalid without
 /// allocating the buffer.
-const MAX_SNAPPY_DECOMPRESSED: usize = 16 * 1024 * 1024;
-
-thread_local! {
-    /// Scratch buffer reused across [`is_valid_snappy`] calls. The
-    /// snappy `Decoder` itself is a zero-sized type (`snap::raw::Decoder`
-    /// holds no state), so only the output buffer is worth keeping
-    /// thread-local. This is read within the same call that writes it
-    /// ([`gossipsub_message_id`] reads `scratch[..len]` right after
-    /// [`is_valid_snappy`]), so it never crosses a task `.await` and a
-    /// thread-local is correct here.
-    static SNAPPY_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(4096));
-}
+///
+/// Derived from [`MAX_GOSSIP_PAYLOAD_BYTES`] rather than fixed, because this
+/// bound is what stands between a decompression bomb and memory: `is_valid_snappy`
+/// runs inside gossipsub's `message_id_fn`, BEFORE per-peer admission, so an
+/// attacker reaches it ungated. While the transmit cap was 64 KiB a 16 MiB ceiling
+/// was unreachable and cost nothing; against a 1 MiB cap it becomes the live bound,
+/// and a fixed 16 MiB would let one crafted message pin 16 MiB of scratch per swarm
+/// thread and up to `DECOMPRESSED_CACHE_CAP` times that in cached snapshots.
+///
+/// 4x the transmit cap is generous for honest traffic — a block is dominated by
+/// incompressible signature bytes, so its decompressed size is barely above its
+/// compressed size — while keeping the worst case proportional to a limit that is
+/// itself bounded.
+const MAX_SNAPPY_DECOMPRESSED: usize = 4 * MAX_GOSSIP_PAYLOAD_BYTES;
 
 /// Capacity of [`DECOMPRESSED_CACHE`]. A handful of in-flight messages
 /// per swarm-poll batch is the realistic working set; the bound caps
@@ -171,24 +239,29 @@ fn decompressed_cache() -> std::sync::MutexGuard<'static, VecDeque<(gossipsub::M
 
 /// Reports whether `data` is a fully-decodable snappy frame, returning
 /// the decompressed length on success so the caller can read the bytes
-/// from the [`SNAPPY_SCRATCH`] thread-local. Reuses the scratch buffer
-/// to keep this call allocation-free on the gossipsub hot path (once
-/// the buffer has grown enough for the largest payload seen on this
-/// thread).
-fn is_valid_snappy(data: &[u8]) -> Option<usize> {
+/// Decompresses `data` as a snappy frame, bounded by [`MAX_SNAPPY_DECOMPRESSED`].
+///
+/// Returns the decompressed bytes, or `None` if the frame is malformed or claims a
+/// size past the bound — the claim is checked before anything is allocated, so a
+/// lying header costs nothing.
+///
+/// Returns the buffer BY VALUE rather than decompressing into a shared scratch and
+/// handing back a length. The scratch form was an allocation-free hot path in
+/// theory only: its one caller immediately copied the bytes out, so the cost was
+/// identical, while the "valid until the next call" contract it created was a
+/// standing invitation to read a buffer that had since been resized. It also runs
+/// inside gossipsub's `message_id_fn`, ahead of per-peer admission, so any such
+/// mistake is remotely reachable.
+fn decompress_snappy_bounded(data: &[u8]) -> Option<Vec<u8>> {
     let decompressed_len = snap::raw::decompress_len(data).ok()?;
     if decompressed_len > MAX_SNAPPY_DECOMPRESSED {
         return None;
     }
-    SNAPPY_SCRATCH.with_borrow_mut(|buf| {
-        if buf.len() < decompressed_len {
-            buf.resize(decompressed_len, 0);
-        }
-        snap::raw::Decoder::new()
-            .decompress(data, &mut buf[..decompressed_len])
-            .ok()
-            .map(|_| decompressed_len)
-    })
+    let mut buf = vec![0u8; decompressed_len];
+    snap::raw::Decoder::new()
+        .decompress(data, &mut buf)
+        .ok()
+        .map(|_| buf)
 }
 
 /// Resolves the snappy domain by attempting to decode `msg.data`, then
@@ -203,8 +276,8 @@ fn is_valid_snappy(data: &[u8]) -> Option<usize> {
 /// on the swarm-poll task, so the cache is consumed before any other
 /// gossipsub call can evict it.
 pub(crate) fn gossipsub_message_id(msg: &gossipsub::Message) -> gossipsub::MessageId {
-    let valid_len = is_valid_snappy(&msg.data);
-    let domain = if valid_len.is_some() {
+    let decompressed = decompress_snappy_bounded(&msg.data);
+    let domain = if decompressed.is_some() {
         MESSAGE_DOMAIN_VALID_SNAPPY
     } else {
         MESSAGE_DOMAIN_INVALID_SNAPPY
@@ -215,11 +288,9 @@ pub(crate) fn gossipsub_message_id(msg: &gossipsub::Message) -> gossipsub::Messa
         &msg.data,
     ));
 
-    if let Some(len) = valid_len {
-        // Snapshot scratch → cache. The clone is a memcpy and amortises
-        // against the avoided second snappy decompression in
-        // `route_gossipsub_message` (snappy ≈ 1 GB/s; memcpy ≈ 10–30 GB/s).
-        let bytes = SNAPPY_SCRATCH.with_borrow(|scratch| scratch[..len].to_vec());
+    if let Some(bytes) = decompressed {
+        // Hand the decompressed bytes straight to the cache, sparing
+        // `route_gossipsub_message` a second decompression (snappy ≈ 1 GB/s).
         let mut cache = decompressed_cache();
         if cache.len() >= DECOMPRESSED_CACHE_CAP {
             cache.pop_front();
@@ -292,31 +363,74 @@ mod tests {
     }
 
     #[test]
-    fn is_valid_snappy_rejects_empty_input() {
-        assert!(is_valid_snappy(&[]).is_none());
+    fn decompress_snappy_rejects_empty_input() {
+        assert!(decompress_snappy_bounded(&[]).is_none());
     }
 
     #[test]
-    fn is_valid_snappy_rejects_truncated_header() {
-        assert!(is_valid_snappy(&[0xFF, 0xFF]).is_none());
+    fn decompress_snappy_rejects_truncated_header() {
+        assert!(decompress_snappy_bounded(&[0xFF, 0xFF]).is_none());
     }
 
     #[test]
-    fn is_valid_snappy_rejects_oversize_claim() {
-        // LEB128 varint for 32 MiB (0x02000000), well past the 16 MiB
-        // MAX_SNAPPY_DECOMPRESSED cap; no body follows. The cap path
-        // must reject before any buffer allocation is attempted.
+    fn gossipsub_config_sets_the_transmit_bound() {
+        // THE gossip fix is this config line, not the publish-side gate that
+        // reports on it. Without this assertion, deleting `.max_transmit_size(..)`
+        // silently restores libp2p's 64 KiB default and every publish-side test
+        // still passes, while a block outgrows the wire at 20 body attestations.
+        let config = DevnetBehaviour::gossipsub_config().expect("gossipsub config builds");
+        assert_eq!(
+            config.max_transmit_size(),
+            MAX_GOSSIP_PAYLOAD_BYTES + GOSSIP_RPC_FRAMING_BYTES,
+        );
+        // The codec applies this bound to the protobuf-framed RPC, so it must sit
+        // ABOVE the payload bound the publish gate enforces — otherwise a maximal
+        // payload frames into something the codec refuses to write.
+        assert!(config.max_transmit_size() > MAX_GOSSIP_PAYLOAD_BYTES);
+    }
+
+    #[test]
+    fn message_id_survives_a_payload_larger_than_any_retained_buffer() {
+        // Drives the FULL contract — `gossipsub_message_id`, not the helper — with a
+        // payload that decompresses well past any buffer this module would keep
+        // around. An earlier version of this code decompressed into a shared scratch,
+        // truncated it before returning, and left the caller slicing past the end:
+        // one highly compressible gossip message, ahead of per-peer admission, would
+        // panic the swarm task. Exercising the helper alone did not catch it, so this
+        // goes through the entry point libp2p actually calls.
+        let raw = vec![0u8; 2 * MAX_GOSSIP_PAYLOAD_BYTES];
+        let encoded = snappy_encode(&raw);
+        assert!(
+            raw.len() <= MAX_SNAPPY_DECOMPRESSED,
+            "fixture must stay inside the decompression bound, or this tests the reject path",
+        );
+        let msg = message(BLOCK_TOPIC_V1, encoded.clone());
+
+        let id = gossipsub_message_id(&msg);
+        assert_eq!(
+            id,
+            expected_id(MESSAGE_DOMAIN_VALID_SNAPPY, BLOCK_TOPIC_V1, &encoded)
+        );
+        // And the decompressed bytes reached the cache intact, all of them.
+        assert_eq!(take_decompressed_for(&id).expect("cached").len(), raw.len());
+    }
+
+    #[test]
+    fn decompress_snappy_rejects_oversize_claim() {
+        // LEB128 varint for 32 MiB (0x02000000), well past the
+        // MAX_SNAPPY_DECOMPRESSED cap (4x the gossip payload bound = 4 MiB); no
+        // body follows. The cap path must reject before any buffer allocation.
         const _: () = assert!(MAX_SNAPPY_DECOMPRESSED < 32 * 1024 * 1024);
         let bogus = [0x80, 0x80, 0x80, 0x10];
-        assert!(is_valid_snappy(&bogus).is_none());
+        assert!(decompress_snappy_bounded(&bogus).is_none());
     }
 
     #[test]
-    fn is_valid_snappy_accepts_round_trip() {
+    fn decompress_snappy_accepts_round_trip() {
         let raw = b"payload";
         let encoded = snappy_encode(raw);
-        let len = is_valid_snappy(&encoded).expect("valid snappy frame");
-        assert_eq!(len, raw.len());
+        let got = decompress_snappy_bounded(&encoded).expect("valid snappy frame");
+        assert_eq!(got, raw);
     }
 
     #[test]

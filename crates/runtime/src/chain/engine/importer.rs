@@ -201,7 +201,7 @@ impl Engine {
         // returns with the store byte-equal. It needs `parent_state.validators` (just
         // materialized under this lock), so it follows the clone. Inert while no
         // verifier is injected; runs the full positional length/index/crypto check once
-        // a verifier is wired (a later Part).
+        // the composition root injects one.
         if policy.enforces() {
             if let Err(e) = self.run_verify_gate(&signed_block, &parent_state.validators) {
                 return reject(e);
@@ -315,22 +315,31 @@ impl Engine {
 /// # Signature pairing
 ///
 /// The signature list is well-formed for the body when it holds at least
-/// `body.len()` entries. Block production signs only the proposer's own
-/// attestation and emits a ONE-element list regardless of body length, because
-/// assembling the full positional list is a later change, so a short list is the
-/// common case and each unpaired attestation falls back to a placeholder.
+/// `body.len()` entries. Local production emits a full positional list
+/// (`body.len() + 1`), so a short list means the list ARRIVED short — the
+/// originator built it short, a relaying peer truncated it (this list is outside
+/// `block_root`, so any hop can), or it came from a fixture. Each unpaired
+/// attestation falls back to a placeholder.
 ///
-/// Fork-choice weight does not read the signature — the store scores the vote's
-/// `data.head` checkpoint — so a placeholder costs nothing today. It will stop
-/// being free once the positional list is assembled AND block production starts
-/// reading the pooled signature, because a placeholder written here would then
-/// be published in a produced block.
+/// That placeholder is no longer free. Fork-choice weight still does not read the
+/// signature — the store scores the vote's `data.head` checkpoint — but block
+/// production now DOES read the pooled signature: it reuses each body
+/// attestation's stored signature when it assembles its own positional list. So a
+/// placeholder written here, or any peer-supplied bytes, are republished in a
+/// block this node authors.
 ///
 /// The paired signature is UNVERIFIED and, like the list length itself, is
-/// peer-controlled: `BlockSignatures` is not covered by `block_root` either.
-/// Nothing consumes the pooled signature today, so this is latent rather than
-/// exploitable — but whichever change starts consuming it MUST verify it rather
-/// than assume it was checked here.
+/// peer-controlled: `BlockSignatures` is not covered by `block_root` either. The
+/// consumer now exists and does not verify, so the obligation sits at ingress, in
+/// three places:
+///
+/// 1. This gossip block path, once its signature gate is armed.
+/// 2. The gossip attestation path ([`Engine::import_attestation`]), which
+///    verifies no signature today.
+/// 3. The sync-backfill path, which skips the block gate structurally
+///    ([`VerifyPolicy::Skip`]) yet reaches this same fold through
+///    `transition_and_track`. Arming the gossip gate does NOT close it; that
+///    needs verify-on-sync or a checkpoint-bound trust anchor.
 ///
 /// Returns a lazy iterator rather than a `Vec` on purpose. A body at the
 /// attestation cap turns ~136 bytes of wire data per attestation into a
@@ -914,9 +923,9 @@ mod tests {
     fn import_block_with_none_verifier_ignores_signature_length() {
         // PR-001 invariant: with NO verifier injected (the Engine default), the
         // gate is a no-op even for a block whose signature-list length would fail
-        // the strict length check. Explicit guard so a future default-verifier
-        // change cannot silently reject production blocks before the full
-        // positional signature list is assembled (a later Part).
+        // the strict length check. Local production now emits the full positional
+        // list, so this guards the remaining short-list sources: peers that do not,
+        // and fixture-built blocks like the one below.
         let producer = engine_at_genesis(ENGINE_VALIDATORS);
         let mut signed = produce_signed_block(&producer, Slot::new(1), ValidatorIndex::new(1));
         // Deliberately mismatched vs body.len() + 1 (zero signatures).
@@ -1004,9 +1013,9 @@ mod tests {
 
     #[test]
     fn block_carried_votes_falls_back_when_signature_list_is_short() {
-        // One element is what `Service::produce_block` emits today, regardless of
-        // body length. The first body attestation pairs with it; the rest fall
-        // back to the placeholder.
+        // A short list is what a peer that does not assemble the full positional
+        // list emits; local production no longer does. The first body attestation
+        // pairs with the one element; the rest fall back to the placeholder.
         let cp = Checkpoint::new(Bytes32::zero(), Slot::ZERO);
         let body = [vote(0, cp), vote(1, cp)];
         let signatures: BlockSignatures = core::iter::once(tagged_sig(0xa1)).collect();
