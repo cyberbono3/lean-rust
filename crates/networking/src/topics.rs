@@ -121,12 +121,13 @@ lean_topics! {
 /// Upper bound on an inbound topic string, in bytes.
 ///
 /// Topic strings arrive from peers. The longest string this client can
-/// legitimately see is a subnet topic with a 20-digit subnet id — 66 bytes,
-/// `/leanconsensus/devnet0/attestation_18446744073709551615/ssz_snappy` —
-/// against this 128-byte cap, so the bound exists only to stop a peer making
-/// the parser walk an arbitrarily long buffer before rejecting it. Any
-/// future tightening should measure from 66, not from the 55 bytes that
-/// reach the end of the subnet id.
+/// legitimately see is a subnet topic carrying a 20-digit subnet id: four
+/// slashes plus [`TOPIC_PREFIX`], [`FORK_DIGEST`],
+/// `attestation_` + 20 digits, and [`ENCODING_POSTFIX`] — 66 bytes against
+/// this 128-byte cap. The bound exists only to stop a peer making the parser
+/// walk an arbitrarily long buffer before rejecting it, so any future
+/// tightening should measure from 66, and not from the 55 bytes that reach
+/// only the end of the subnet id.
 ///
 /// Checked against the RAW string, before the leading `/` is stripped and
 /// before any component is examined, so an over-cap topic reports
