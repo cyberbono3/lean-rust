@@ -39,7 +39,7 @@ use crate::vote::{Attestation, ATTESTATION_SSZ_LEN};
 ///
 /// Caps [`BlockSignatures`] too, but INDEPENDENTLY: that list holds one
 /// signature per body attestation PLUS the proposer's, so a body at this cap
-/// needs one element more than the cap allows. [`MAX_BODY_ATTESTATIONS`] exists
+/// needs one element more than the cap allows. [`PRODUCER_MAX_BODY_ATTESTATIONS`] exists
 /// for exactly that reason.
 pub const MAX_ATTESTATIONS: usize = config::VALIDATOR_REGISTRY_LIMIT;
 
@@ -53,14 +53,14 @@ pub const MAX_ATTESTATIONS: usize = config::VALIDATOR_REGISTRY_LIMIT;
 /// could not be encoded. The producer reserves the final slot rather than
 /// building a block it cannot sign.
 ///
-/// Producer-side policy ONLY. NEVER enforce this at the import boundary: a peer
-/// block carrying [`MAX_ATTESTATIONS`] body attestations is valid, and
-/// [`MAX_ATTESTATIONS`] remains the validity cap. A peer producer that does not
-/// reserve the slot may legally emit one.
+/// The `PRODUCER_` prefix is the contract, not decoration: NEVER enforce this at
+/// the import boundary. A peer block carrying [`MAX_ATTESTATIONS`] body
+/// attestations is valid, [`MAX_ATTESTATIONS`] remains the validity cap, and a
+/// peer producer that does not reserve the slot may legally emit one.
 ///
 /// Transitional, and deliberately co-located with the container that forces it,
 /// so both move together when the signature container is replaced.
-pub const MAX_BODY_ATTESTATIONS: usize = MAX_ATTESTATIONS - 1;
+pub const PRODUCER_MAX_BODY_ATTESTATIONS: usize = MAX_ATTESTATIONS - 1;
 
 /// Fixed SSZ wire size of [`BlockHeader`] in bytes.
 pub const BLOCK_HEADER_SSZ_LEN: usize = BLOCK_HEADER_LEN; // 112
@@ -354,7 +354,7 @@ impl HashTreeRoot for Block {
 /// signature per body attestation plus the proposer's, so a body at
 /// [`MAX_ATTESTATIONS`] would need [`MAX_ATTESTATIONS`]` + 1` signatures and could
 /// not be encoded. Producers reserve the final slot — see
-/// [`MAX_BODY_ATTESTATIONS`] — but that is producer-side policy, so a peer block
+/// [`PRODUCER_MAX_BODY_ATTESTATIONS`] — but that is producer-side policy, so a peer block
 /// with a full body remains valid and simply cannot carry a complete list.
 ///
 /// A bare fixed-element list: empty encodes to zero bytes, `k` elements to

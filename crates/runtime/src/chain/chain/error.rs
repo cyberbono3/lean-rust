@@ -54,4 +54,20 @@ pub enum ChainError {
     /// or this error.
     #[error("local signing: {0}")]
     Sign(#[source] crate::duties::SignError),
+
+    /// A locally produced block's positional signature list exceeds the SSZ
+    /// container cap, so no peer could decode it.
+    ///
+    /// Unreachable while the producer reserves the proposer's slot, and checked
+    /// anyway because `Encode` applies no cap — only `Decode` does. Without this
+    /// the block would encode locally, persist, publish, and be undecodable
+    /// everywhere else, with nothing failing on this node. A `debug_assert` would
+    /// not do: release is the profile where that silence matters.
+    #[error("produced signature list holds {count} signatures, over the {cap} container cap")]
+    OversizedSignatureList {
+        /// Length of the assembled positional list.
+        count: usize,
+        /// `protocol::MAX_ATTESTATIONS`.
+        cap: usize,
+    },
 }

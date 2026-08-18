@@ -54,10 +54,13 @@ const GOSSIPSUB_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 /// peer ever receives. Leaving the default would make a routine validator-count
 /// change fork this node off the network.
 ///
-/// 1 MiB carries ~330 body attestations — measured on the compressed wire form,
-/// where snappy recovers only about 4% against high-entropy signature bytes —
-/// well past any devnet validator count, while keeping the inbound allowance
-/// small enough not to be an amplification surface. It is NOT the protocol maximum: a block at the registry cap is
+/// 1 MiB carries ~321 body attestations (`3352 + 3252 * N`). Assume NO help from
+/// compression: signature bytes are high-entropy and snappy recovers essentially
+/// nothing against them. A fixture with zero-filled attestations does show a few
+/// percent, but that is the zeros compressing away, not the signatures, and real
+/// traffic carries real attestations. ~321 is well past any devnet validator
+/// count, while keeping the inbound allowance small enough to stay off the
+/// amplification surface bounded by [`MAX_SNAPPY_DECOMPRESSED`]. It is NOT the protocol maximum: a block at the registry cap is
 /// ~13.3 MB, which no reasonable gossip limit accommodates and which the
 /// two-field signature container is what actually fixes.
 ///
@@ -65,6 +68,35 @@ const GOSSIPSUB_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 /// peers must agree on it. A peer still on the 64 KiB default will drop anything
 /// larger regardless of what is set here.
 pub(crate) const MAX_GOSSIP_PAYLOAD_BYTES: usize = 1024 * 1024;
+
+/// Headroom for the gossipsub RPC framing that wraps a published payload.
+///
+/// libp2p applies `max_transmit_size` to TWO different things. `Behaviour::publish`
+/// compares it against the payload (`transformed_data.len()`), which is what
+/// [`MAX_GOSSIP_PAYLOAD_BYTES`] means here — but the same value is handed to
+/// `GossipsubCodec::new`, which enforces it on the protobuf-framed RPC: the payload
+/// PLUS the topic string plus field tags and length varints.
+///
+/// Configuring one number for both leaves a band just under the limit where a
+/// payload passes `publish`, receives a `MessageId`, and then fails the codec's
+/// frame limit on the sender's own outbound stream — `publish` returns `Ok`, the
+/// proposer logs success, and the block never leaves the node. That is the same
+/// silent-drop failure this limit exists to remove, so the codec is configured with
+/// the framing budget on top and the publish gate keeps the payload bound.
+///
+/// 256 bytes covers the longest topic this node subscribes to (~45 bytes) with an
+/// order of magnitude to spare; the exact protobuf overhead is small and bounded,
+/// and over-reserving costs nothing.
+const GOSSIP_RPC_FRAMING_BYTES: usize = 256;
+
+/// The payload size every peer accepts regardless of configuration: libp2p's own
+/// default `max_transmit_size`.
+///
+/// Not a limit this node enforces — it publishes past it deliberately — but the
+/// threshold beyond which delivery depends on peers having raised their own bound.
+/// Crossing it is worth saying out loud, because a peer that has not will drop the
+/// message with no signal returned to the sender.
+pub(crate) const INTEROP_SAFE_PAYLOAD_BYTES: usize = 64 * 1024;
 
 /// Composite behaviour driven by the host swarm task.
 ///
@@ -108,17 +140,26 @@ impl DevnetBehaviour {
     }
 
     fn build_gossipsub() -> HostResult<gossipsub::Behaviour> {
+        let config = Self::gossipsub_config()?;
+        gossipsub::Behaviour::new(gossipsub::MessageAuthenticity::Anonymous, config)
+            .map_err(Self::gossipsub_init_err)
+    }
+
+    /// The gossipsub config, split out from [`Self::build_gossipsub`] so the
+    /// transmit bound is assertable. Without a test on it, deleting the
+    /// `max_transmit_size` line silently restores libp2p's 64 KiB default while
+    /// every publish-side test keeps passing — the publish gate is only the
+    /// diagnostic, this line is the actual fix.
+    fn gossipsub_config() -> HostResult<gossipsub::Config> {
         // Devnet0 publishes unsigned messages; `Anonymous` authenticity
         // pairs with the message-id function below to give
         // deterministic 20-byte IDs derived purely from `(topic, payload)`.
-        let config = gossipsub::ConfigBuilder::default()
+        gossipsub::ConfigBuilder::default()
             .validation_mode(gossipsub::ValidationMode::Anonymous)
             .heartbeat_interval(GOSSIPSUB_HEARTBEAT_INTERVAL)
-            .max_transmit_size(MAX_GOSSIP_PAYLOAD_BYTES)
+            .max_transmit_size(MAX_GOSSIP_PAYLOAD_BYTES + GOSSIP_RPC_FRAMING_BYTES)
             .message_id_fn(gossipsub_message_id)
             .build()
-            .map_err(Self::gossipsub_init_err)?;
-        gossipsub::Behaviour::new(gossipsub::MessageAuthenticity::Anonymous, config)
             .map_err(Self::gossipsub_init_err)
     }
 
@@ -145,7 +186,25 @@ impl DevnetBehaviour {
 /// Defensive upper bound on a single decompressed gossipsub payload. A
 /// peer claiming a larger frame is rejected as invalid without
 /// allocating the buffer.
-const MAX_SNAPPY_DECOMPRESSED: usize = 16 * 1024 * 1024;
+///
+/// Derived from [`MAX_GOSSIP_PAYLOAD_BYTES`] rather than fixed, because this
+/// bound is what stands between a decompression bomb and memory: `is_valid_snappy`
+/// runs inside gossipsub's `message_id_fn`, BEFORE per-peer admission, so an
+/// attacker reaches it ungated. While the transmit cap was 64 KiB a 16 MiB ceiling
+/// was unreachable and cost nothing; against a 1 MiB cap it becomes the live bound,
+/// and a fixed 16 MiB would let one crafted message pin 16 MiB of scratch per swarm
+/// thread and up to `DECOMPRESSED_CACHE_CAP` times that in cached snapshots.
+///
+/// 4x the transmit cap is generous for honest traffic — a block is dominated by
+/// incompressible signature bytes, so its decompressed size is barely above its
+/// compressed size — while keeping the worst case proportional to a limit that is
+/// itself bounded.
+const MAX_SNAPPY_DECOMPRESSED: usize = 4 * MAX_GOSSIP_PAYLOAD_BYTES;
+
+/// Scratch retained between [`is_valid_snappy`] calls. Large enough that ordinary
+/// gossip traffic never reallocates, small enough that an outsized payload does not
+/// pin its peak for the lifetime of the swarm thread.
+const SNAPPY_SCRATCH_RETAIN_BYTES: usize = 256 * 1024;
 
 thread_local! {
     /// Scratch buffer reused across [`is_valid_snappy`] calls. The
@@ -208,10 +267,19 @@ fn is_valid_snappy(data: &[u8]) -> Option<usize> {
         if buf.len() < decompressed_len {
             buf.resize(decompressed_len, 0);
         }
-        snap::raw::Decoder::new()
+        let out = snap::raw::Decoder::new()
             .decompress(data, &mut buf[..decompressed_len])
             .ok()
-            .map(|_| decompressed_len)
+            .map(|_| decompressed_len);
+        // Release an outsized peak instead of pinning it for the thread's lifetime.
+        // The buffer exists to keep the hot path allocation-free for ordinary
+        // payloads; retaining a bomb-sized allocation because one arrived once is
+        // the amplification this bound is meant to deny.
+        if buf.len() > SNAPPY_SCRATCH_RETAIN_BYTES {
+            buf.shrink_to(SNAPPY_SCRATCH_RETAIN_BYTES);
+            buf.truncate(SNAPPY_SCRATCH_RETAIN_BYTES);
+        }
+        out
     })
 }
 
@@ -323,6 +391,40 @@ mod tests {
     #[test]
     fn is_valid_snappy_rejects_truncated_header() {
         assert!(is_valid_snappy(&[0xFF, 0xFF]).is_none());
+    }
+
+    #[test]
+    fn gossipsub_config_sets_the_transmit_bound() {
+        // THE gossip fix is this config line, not the publish-side gate that
+        // reports on it. Without this assertion, deleting `.max_transmit_size(..)`
+        // silently restores libp2p's 64 KiB default and every publish-side test
+        // still passes, while a block outgrows the wire at 20 body attestations.
+        let config = DevnetBehaviour::gossipsub_config().expect("gossipsub config builds");
+        assert_eq!(
+            config.max_transmit_size(),
+            MAX_GOSSIP_PAYLOAD_BYTES + GOSSIP_RPC_FRAMING_BYTES,
+        );
+        // The codec applies this bound to the protobuf-framed RPC, so it must sit
+        // ABOVE the payload bound the publish gate enforces — otherwise a maximal
+        // payload frames into something the codec refuses to write.
+        assert!(config.max_transmit_size() > MAX_GOSSIP_PAYLOAD_BYTES);
+    }
+
+    #[test]
+    fn snappy_scratch_does_not_pin_an_outsized_peak() {
+        // The decompression path runs before per-peer admission, so a single
+        // crafted payload must not leave its peak allocated for the lifetime of
+        // the thread.
+        let big = vec![0u8; SNAPPY_SCRATCH_RETAIN_BYTES * 2];
+        let encoded = snap::raw::Encoder::new().compress_vec(&big).unwrap();
+        assert_eq!(is_valid_snappy(&encoded), Some(big.len()));
+        SNAPPY_SCRATCH.with_borrow(|buf| {
+            assert!(
+                buf.len() <= SNAPPY_SCRATCH_RETAIN_BYTES,
+                "scratch retained {} bytes, over the {SNAPPY_SCRATCH_RETAIN_BYTES}-byte cap",
+                buf.len(),
+            );
+        });
     }
 
     #[test]

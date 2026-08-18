@@ -9,8 +9,9 @@
 use libp2p::gossipsub;
 use protocol::{SignedAttestation, SignedBlockWithAttestation};
 use tokio::sync::oneshot;
+use tracing::warn;
 
-use crate::p2p::host::behaviour::MAX_GOSSIP_PAYLOAD_BYTES;
+use crate::p2p::host::behaviour::{INTEROP_SAFE_PAYLOAD_BYTES, MAX_GOSSIP_PAYLOAD_BYTES};
 use crate::p2p::host::{Host, HostCommand};
 
 use super::Topic;
@@ -88,6 +89,20 @@ impl Host {
                 limit: MAX_GOSSIP_PAYLOAD_BYTES,
             });
         }
+        // A peer still on libp2p's 64 KiB default drops anything larger on
+        // receipt, and nothing reports that back: the publish succeeds here, the
+        // proposer logs success, and the block reaches nobody. Raising our own
+        // limit turned that from a loud local error into a silent remote drop, so
+        // say it locally at the threshold a default-configured peer still enforces.
+        if payload.len() > INTEROP_SAFE_PAYLOAD_BYTES {
+            warn!(
+                topic = topic.as_str(),
+                bytes = payload.len(),
+                interop_safe = INTEROP_SAFE_PAYLOAD_BYTES,
+                "gossip payload exceeds the default peer limit; peers that have not \
+                 raised max_transmit_size will drop it without reporting",
+            );
+        }
         let (reply_tx, reply_rx) = oneshot::channel();
         self.commands()
             .send(HostCommand::Publish {
@@ -137,7 +152,11 @@ mod tests {
             state ^= state >> 7;
             state ^= state << 17;
             // High byte: the low bits of an xorshift word carry visible structure.
-            *b = u8::try_from(state >> 56).unwrap_or(0);
+            // `u64 >> 56` is always a byte. `unwrap_or(0)` would be worse than
+            // useless here: a run of zeros is exactly the compressible pattern this
+            // fixture must not contain, so a silent fallback would quietly restore
+            // the vacuity the seed-mixing above exists to prevent.
+            *b = u8::try_from(state >> 56).expect("u64 >> 56 is a byte");
         }
         Signature::new(bytes)
     }

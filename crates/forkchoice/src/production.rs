@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 
 use protocol::{
     is_proposer, Attestation, AttestationData, Block, BlockBody, Checkpoint, SignedAttestation,
-    Slot, State, ValidatorIndex, MAX_BODY_ATTESTATIONS,
+    Slot, State, ValidatorIndex, PRODUCER_MAX_BODY_ATTESTATIONS,
 };
 use ssz::HashTreeRoot;
 use types::{Bytes32, Signature};
@@ -97,7 +97,7 @@ impl Store {
     ///    - Otherwise append the new votes and repeat.
     ///
     /// The loop terminates: the includable set is monotonically growing
-    /// and bounded by `min(MAX_BODY_ATTESTATIONS, latest_known_votes.len())`.
+    /// and bounded by `min(PRODUCER_MAX_BODY_ATTESTATIONS, latest_known_votes.len())`.
     ///
     /// # Errors
     /// - [`ForkchoiceError::UnauthorizedProposer`] when `validator` is not
@@ -137,7 +137,7 @@ impl Store {
     ///
     /// Termination is guaranteed: `collect_includable_votes` only ever
     /// returns votes not already in `attestations`, and the result is
-    /// bounded by `min(MAX_BODY_ATTESTATIONS, latest_known_votes.len())`.
+    /// bounded by `min(PRODUCER_MAX_BODY_ATTESTATIONS, latest_known_votes.len())`.
     fn converge_attestations(
         &self,
         head_root: Bytes32,
@@ -335,7 +335,7 @@ impl Store {
     /// from entering the pool in the first place — only ingress can — and a filter
     /// that silently drops honest votes is worse than one that never runs.
     ///
-    /// The result is capped at `MAX_BODY_ATTESTATIONS - already_included.len()`,
+    /// The result is capped at `PRODUCER_MAX_BODY_ATTESTATIONS - already_included.len()`,
     /// one BELOW the SSZ list bound: the block's positional signature list is
     /// `body.attestations.len() + 1` long, so the final slot is reserved for the
     /// proposer's own signature. A body at the full cap could not be signed.
@@ -344,7 +344,7 @@ impl Store {
         post_state: &State,
         already_included: &[SignedAttestation],
     ) -> Vec<SignedAttestation> {
-        let cap = MAX_BODY_ATTESTATIONS.saturating_sub(already_included.len());
+        let cap = PRODUCER_MAX_BODY_ATTESTATIONS.saturating_sub(already_included.len());
         if cap == 0 {
             return Vec::new();
         }
@@ -551,7 +551,7 @@ mod tests {
         );
 
         // One slot short of the bound: the budget is 1 and the pooled vote takes it.
-        let near_full: Vec<SignedAttestation> = (0..MAX_BODY_ATTESTATIONS - 1)
+        let near_full: Vec<SignedAttestation> = (0..PRODUCER_MAX_BODY_ATTESTATIONS - 1)
             .map(|_| dummy_signed_vote())
             .collect();
         assert_eq!(
@@ -563,7 +563,7 @@ mod tests {
         );
 
         // At the bound: the budget is spent and the proposer's signature slot stays free.
-        let full: Vec<SignedAttestation> = (0..MAX_BODY_ATTESTATIONS)
+        let full: Vec<SignedAttestation> = (0..PRODUCER_MAX_BODY_ATTESTATIONS)
             .map(|_| dummy_signed_vote())
             .collect();
         assert!(

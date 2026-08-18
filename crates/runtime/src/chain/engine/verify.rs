@@ -71,7 +71,7 @@ pub enum VerifyError {
 /// `body.attestations.len() + 1` long, but this gate (and the SSZ `BlockSignatures`
 /// decoder) cap it at `MAX_ATTESTATIONS`, not `MAX_ATTESTATIONS + 1`. A maximally-full
 /// body is therefore unrepresentable. Local production reserves the final slot —
-/// see [`protocol::MAX_BODY_ATTESTATIONS`] — but that is producer-side policy, not a
+/// see [`protocol::PRODUCER_MAX_BODY_ATTESTATIONS`] — but that is producer-side policy, not a
 /// validity rule: a peer may legally send a full `MAX_ATTESTATIONS` body. Such a
 /// block passes THIS check — its lists are within the cap — and then fails
 /// [`verify_positional`]'s length equality, which wants one more signature than the
@@ -125,8 +125,10 @@ pub trait Verifier: Send + Sync {
 /// The full positional signature list IS assembled now, so the LENGTH
 /// precondition for arming this is met. It is not the only one: the producer
 /// republishes pooled signatures it never verified, including the locally
-/// fabricated placeholder [`crate::chain::engine::Engine::import_block`] writes
-/// for an unpaired body attestation (see `block_carried_votes`). Arming while a
+/// fabricated placeholder written for an unpaired body attestation. BOTH block
+/// ingresses write it: the gossip path and the sync-backfill path share one
+/// `transition_and_track`, so arming this gate closes only the first (see
+/// `block_carried_votes`). Arming while a
 /// peer can seed that pool turns a remote input into blocks this node authors and
 /// other nodes then reject. Close the ingress feeds first; injecting this at the
 /// composition root remains a separate change, and until then the gate is inert.
