@@ -43,7 +43,7 @@ package "networking (lean-wire)" #FBF4F9 {
     +compute_gossipsub_message_id(domain, topic, payload): [u8;20]
     +{static} MAX_REQUEST_BLOCKS = 1024
     +{static} STATUS_PROTOCOL_V1 / BLOCKS_BY_ROOT_PROTOCOL_V1
-    +{static} BLOCK_TOPIC_V1 / VOTE_TOPIC_V1
+    +{static} BLOCK_TOPIC_V1 / ATTESTATION_SUBNET_TOPIC_V1
   }
 }
 

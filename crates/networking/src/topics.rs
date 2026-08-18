@@ -20,6 +20,18 @@
 //! below, and the full strings are assembled from them at compile time.
 //! They stay `const` because the gossip ingress router matches on them as
 //! pattern arms.
+//!
+//! # The parser has no production caller yet
+//!
+//! [`GossipTopicRef::parse`] is deliberately ahead of its consumer. The
+//! gossip ingress router still matches inbound topics against the constants
+//! above rather than parsing them, which keeps that path and its failure
+//! modes exactly as they were. Two consequences worth stating plainly: the
+//! parser's hardening is exercised by its tests and not by live peer
+//! traffic, and the spec's early wrong-fork rejection
+//! ([`GossipTopicRef::parse_validated`], mirroring `from_string_validated`)
+//! is implemented but NOT applied at ingress. Wiring it in is follow-up
+//! work, not an oversight.
 
 use core::fmt;
 
@@ -81,9 +93,10 @@ macro_rules! lean_topics {
 
         /// Every topic this crate defines, as `(topic_name, full_string)`.
         ///
-        /// The parser resolves an inbound `topic_name` component against
-        /// this table; tests use it to assert composition without restating
-        /// any literal.
+        /// This is a composition table for tests — it lets them assert the
+        /// assembled strings without restating a literal. Inbound routing
+        /// does NOT resolve against it: `parse_topic_name` uses an explicit
+        /// `match`, for the reason given on that function.
         pub const ALL_TOPICS: &[(&str, &str)] = &[$(($name, $konst)),+];
 
         // Compile-time enforcement of the libp2p `StreamProtocol` /
@@ -121,6 +134,16 @@ const MAX_TOPIC_LEN: usize = 128;
 /// (`topic.py:170`), and a bare `attestation` cannot be re-emitted at all.
 pub const ATTESTATION_SUBNET_PREFIX: &str = "attestation";
 
+/// Topic name carrying signed blocks.
+///
+/// leanSpec `networking/gossipsub/topic.py:93` (`BLOCK_TOPIC_NAME`).
+/// Single-sourced: [`parse_topic_name`] and [`fmt::Display`] both read this
+/// constant, so the parse and emit paths cannot drift apart the way
+/// separate copies of the literal could. The macro invocation needs a
+/// literal token and carries the third copy, which
+/// `components_match_spec_constants` pins against this one.
+pub const BLOCK_TOPIC_NAME: &str = "block";
+
 /// Which message type a parsed topic carries.
 ///
 /// The spec's third kind, `aggregation`
@@ -135,7 +158,14 @@ pub enum TopicKind {
     Block,
     /// Attestations for one attestation subnet.
     AttestationSubnet {
-        /// Subnet this topic carries. One subnet exists on this devnet.
+        /// Subnet this topic carries.
+        ///
+        /// Exactly one subnet exists at the pinned spec revision:
+        /// `ATTESTATION_COMMITTEE_COUNT = 1` (`chain/config.py:33`) and
+        /// `compute_subnet_id` is `validator_index % num_committees`
+        /// (`containers/validator.py:40`), so every validator resolves to
+        /// subnet 0. Parsing accepts any id; only the published constant is
+        /// fixed at 0.
         subnet_id: u64,
     },
 }
@@ -150,6 +180,13 @@ pub struct GossipTopicRef<'a> {
     /// Message type carried by the topic.
     pub kind: TopicKind,
     /// Fork digest component as it appeared on the wire.
+    ///
+    /// UNTRUSTED and unvalidated by [`GossipTopicRef::parse`]: any non-empty
+    /// `/`-free UTF-8 within the length cap reaches this field, control
+    /// characters and terminal escapes included. [`fmt::Display`] re-emits
+    /// it verbatim, so a caller that logs a parsed topic is logging peer
+    /// input — use [`GossipTopicRef::parse_validated`] where the digest is
+    /// supposed to be known.
     pub fork_digest: &'a str,
 }
 
@@ -176,8 +213,12 @@ impl<'a> GossipTopicRef<'a> {
     /// 1. It requires a leading `/`; the spec accepts a topic with none.
     /// 2. It requires exactly one; the spec's `lstrip` accepts any number.
     /// 3. It rejects an empty fork-digest component; the spec accepts one.
+    /// 4. It rejects the bare names `attestation` and `aggregation`. The
+    ///    spec's `from_string` resolves both (`topic.py:227-:232`), but
+    ///    `to_topic_id` then raises on the first (`:167-:169`) and this
+    ///    client does not route the second.
     ///
-    /// None of the three can reject a conformant peer, because
+    /// None of the four can reject a conformant peer, because
     /// `to_topic_id` (`topic.py:161-:173`) only ever emits the
     /// single-leading-slash, non-empty form. See also the subnet-id
     /// canonicalisation on [`parse_subnet_id`], which is tighter for a
@@ -277,7 +318,7 @@ impl fmt::Display for GossipTopicRef<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "/{TOPIC_PREFIX}/{}/", self.fork_digest)?;
         match self.kind {
-            TopicKind::Block => f.write_str("block")?,
+            TopicKind::Block => f.write_str(BLOCK_TOPIC_NAME)?,
             TopicKind::AttestationSubnet { subnet_id } => {
                 write!(f, "{ATTESTATION_SUBNET_PREFIX}_{subnet_id}")?;
             }
@@ -305,10 +346,10 @@ fn parse_topic_name(topic_name: &str) -> Option<TopicKind> {
     {
         return parse_subnet_id(raw).map(|subnet_id| TopicKind::AttestationSubnet { subnet_id });
     }
-    match topic_name {
-        "block" => Some(TopicKind::Block),
-        _ => None,
+    if topic_name == BLOCK_TOPIC_NAME {
+        return Some(TopicKind::Block);
     }
+    None
 }
 
 /// Parses a subnet id, accepting only the canonical decimal form.
