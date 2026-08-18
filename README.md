@@ -94,6 +94,7 @@ clients. Changing any row is an interop break, not a routine bump.
 | leanSig revision | `f10dcbefac2502d356d93f686e8b4ecd8dc8840a` | [leanEthereum/leanSig](https://github.com/leanEthereum/leanSig) — pinned in `Cargo.toml` |
 | leanSig scheme alias | `SIGTopLevelTargetSumLifetime32Dim64Base8` | `signature::generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized` |
 | Scheme parameters | `LIFETIME = 2^32`, `DIM = 64`, `BASE = 8`, `TARGET_SUM = 375` | leanSpec `xmss` `PROD_CONFIG` |
+| Gossip fork digest | `devnet0` | leanSpec@`0c9528ac6f403f913caf6d9c450879c36d361742`:`src/lean_spec/__main__.py:64` — bound into every topic string by `lean-wire::FORK_DIGEST` |
 | leanMetrics revision | `e077ac2a2190a4946e01737b27eb9a5636e6884e` | [leanEthereum/leanMetrics](https://github.com/leanEthereum/leanMetrics) |
 | Validator registry limit | `2^12` = `4096` | `config::DEVNET_CONFIG.validator_registry_limit` |
 | `Signature` | 3116 bytes | leanSpec `Signature` container |
@@ -126,6 +127,16 @@ different scheme and invalidate keys already generated against this one.
 The signature and public-key sizes above are the devnet-1 values confirmed
 against leanSpec. They are recorded, not frozen: confirmation against live
 cross-client traffic is still outstanding.
+
+The gossip fork digest is an interop-negotiated string, not a computed digest.
+The reference implementation hardcodes the same value with the note that it
+must match the fork string ream and other clients use, and a node whose digest
+differs subscribes to topics no peer is on — it meets nobody and reports no
+error. It has not been reconfirmed against pq-devnet-4: the reference code
+still says `devnet0` while its prose docs show `devnet3` for the devnet-3
+round. It is deliberately a single constant so that reconfirmation is a
+one-line change. The 4-byte ENR `eth2` fork digest is a different encoding of
+the same concept and is not yet implemented.
 
 ## Building and Testing
 
