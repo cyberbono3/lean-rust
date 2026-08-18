@@ -45,7 +45,9 @@ pub use gossipsub::{
     compute_gossipsub_message_id, MESSAGE_DOMAIN_INVALID_SNAPPY, MESSAGE_DOMAIN_VALID_SNAPPY,
 };
 pub use messages::{BlocksByRootRequest, BlocksByRootResponse, Status};
-pub use protocol_ids::{ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1};
+pub use protocol_ids::{
+    ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1, REQRESP_PROTOCOLS, STATUS_PROTOCOL_V1,
+};
 pub use topics::{
     GossipTopicRef, TopicKind, ALL_TOPICS, ATTESTATION_SUBNET_PREFIX, BLOCK_TOPIC_V1,
     ENCODING_POSTFIX, FORK_DIGEST, TOPIC_PREFIX, VOTE_TOPIC_V1,
