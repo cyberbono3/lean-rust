@@ -16,6 +16,9 @@
 //!   [`ssz::Encode`] / [`ssz::Decode`] type.
 //! - [`write_req_resp_frame`], [`read_req_resp_frame`] — length-prefixed
 //!   `Read`/`Write` stream framing.
+//! - [`BLOCK_TOPIC_V1`], [`VOTE_TOPIC_V1`] — full gossipsub topic strings,
+//!   composed from [`TOPIC_PREFIX`], [`FORK_DIGEST`], the topic name and
+//!   [`ENCODING_POSTFIX`].
 //! - [`NetworkingError`] — crate-level error enum.
 
 #![forbid(unsafe_code)]
@@ -41,4 +44,6 @@ pub use gossipsub::{
 };
 pub use messages::{BlocksByRootRequest, BlocksByRootResponse, Status};
 pub use protocol_ids::{ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1};
-pub use topics::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};
+pub use topics::{
+    ALL_TOPICS, BLOCK_TOPIC_V1, ENCODING_POSTFIX, FORK_DIGEST, TOPIC_PREFIX, VOTE_TOPIC_V1,
+};
