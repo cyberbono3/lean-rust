@@ -201,7 +201,7 @@ impl Engine {
         // returns with the store byte-equal. It needs `parent_state.validators` (just
         // materialized under this lock), so it follows the clone. Inert while no
         // verifier is injected; runs the full positional length/index/crypto check once
-        // a verifier is wired (a later Part).
+        // the composition root injects one.
         if policy.enforces() {
             if let Err(e) = self.run_verify_gate(&signed_block, &parent_state.validators) {
                 return reject(e);
@@ -316,8 +316,10 @@ impl Engine {
 ///
 /// The signature list is well-formed for the body when it holds at least
 /// `body.len()` entries. Local production emits a full positional list
-/// (`body.len() + 1`), so a short list means the sender is a peer that does not,
-/// and each unpaired attestation falls back to a placeholder.
+/// (`body.len() + 1`), so a short list means the list ARRIVED short — the
+/// originator built it short, a relaying peer truncated it (this list is outside
+/// `block_root`, so any hop can), or it came from a fixture. Each unpaired
+/// attestation falls back to a placeholder.
 ///
 /// That placeholder is no longer free. Fork-choice weight still does not read the
 /// signature — the store scores the vote's `data.head` checkpoint — but block

@@ -348,8 +348,14 @@ impl HashTreeRoot for Block {
 ///
 /// The spec bound is the validator-registry limit; [`MAX_ATTESTATIONS`] is that
 /// same limit (aliasing the single-source [`config::VALIDATOR_REGISTRY_LIMIT`]),
-/// so the list is capped on it — one signature per attesting validator plus the
-/// proposer never exceeds the registry size.
+/// so the list is capped on it.
+///
+/// That cap is one element SHORT of a maximally-full block: this list holds one
+/// signature per body attestation plus the proposer's, so a body at
+/// [`MAX_ATTESTATIONS`] would need [`MAX_ATTESTATIONS`]` + 1` signatures and could
+/// not be encoded. Producers reserve the final slot — see
+/// [`MAX_BODY_ATTESTATIONS`] — but that is producer-side policy, so a peer block
+/// with a full body remains valid and simply cannot carry a complete list.
 ///
 /// A bare fixed-element list: empty encodes to zero bytes, `k` elements to
 /// `k * Signature::LEN`. The offset that bounds these bytes lives in the parent

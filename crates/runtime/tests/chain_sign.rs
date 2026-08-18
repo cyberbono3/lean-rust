@@ -77,7 +77,7 @@ async fn produce_block_signs_only_proposer_attestation() {
 async fn no_placeholder_signature_on_production_path() {
     let engine = engine_at_genesis(ENGINE_VALIDATORS);
     let store = Arc::new(MemoryStore::new());
-    let (signer, _pubs) = common::signer_with_keys(&[0, 1]);
+    let (signer, pubs) = common::signer_with_keys(&[0, 1]);
     let service = Service::with_signer(engine, Arc::clone(&store) as Arc<dyn Store>, signer);
 
     // A loaded validator never yields an all-zero signature.
@@ -98,8 +98,18 @@ async fn no_placeholder_signature_on_production_path() {
     // The proposer's signature is the LAST element, not the first: this test
     // produces an attestation BEFORE the block, and `produce_attestation`
     // re-imports that vote, so the block carries it as a body attestation and
-    // `signature[0]` is the ATTESTER's signature. Pin the length too, so a future
-    // body change cannot silently re-point this assertion at another element.
+    // `signature[0]` is the ATTESTER's signature.
+    //
+    // Both facts are ASSERTED rather than asserted-in-prose: the body length pins
+    // that validator 0's re-imported vote really was includable, and the signature
+    // length pins the positional rule, so a future body change cannot silently
+    // re-point the check below at another element.
+    assert_eq!(
+        blk.message.block.body.attestations.len(),
+        1,
+        "the attestation produced above must be includable, or this test is \
+         asserting the positional rule against an empty body",
+    );
     assert_eq!(
         blk.signature.len(),
         blk.message.block.body.attestations.len() + 1
@@ -108,6 +118,21 @@ async fn no_placeholder_signature_on_production_path() {
         blk.signature[blk.signature.len() - 1],
         Signature::zero(),
         "block proposer signature must not be a zero placeholder",
+    );
+
+    // The headline claim of the positional list — that element i carries the
+    // signature its ATTESTER made — is only proven where real key material is
+    // loaded. `chain_produce.rs` covers length and pairing with an accept-all
+    // verifier, which by construction cannot detect a wrong signature; this is the
+    // one place both a real key and a non-empty body are available.
+    let body_att = blk.message.block.body.attestations[0];
+    assert_eq!(body_att.validator_id, ValidatorIndex::new(0));
+    let body_msg = body_att.hash_tree_root();
+    let body_epoch = u32::try_from(body_att.data.slot.get()).unwrap();
+    assert!(
+        crypto::verify::<crypto::ProdScheme>(&pubs[&0], body_epoch, &body_msg, &blk.signature[0])
+            .is_ok(),
+        "body signature 0 must verify under the attesting validator's key",
     );
 }
 

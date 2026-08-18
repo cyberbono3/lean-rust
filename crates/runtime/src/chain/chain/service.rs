@@ -69,7 +69,7 @@ use lean_wire::Status;
 use parking_lot::Mutex;
 use protocol::{
     Attestation, BlockSignatures, BlockWithAttestation, Checkpoint, SignedAttestation,
-    SignedBlockWithAttestation, Slot, ValidatorIndex,
+    SignedBlockWithAttestation, Slot, ValidatorIndex, MAX_ATTESTATIONS,
 };
 use storage::HeadInfo;
 use tokio_util::sync::CancellationToken;
@@ -375,6 +375,15 @@ impl Service {
             .into_iter()
             .chain(core::iter::once(signature))
             .collect();
+        // `Encode` applies no cap — only `Decode` does — so a producer that broke the
+        // reserved-slot discipline would emit a block that encodes here and fails to
+        // decode on every peer, with no local error at all. Assert the bound where it
+        // is cheap and local rather than discovering it as silent unreachability.
+        debug_assert!(
+            block_signatures.len() <= MAX_ATTESTATIONS,
+            "produced signature list exceeds the container cap: the producer's body \
+             bound must reserve the proposer's slot",
+        );
         let signed = SignedBlockWithAttestation {
             message: BlockWithAttestation {
                 block: prod.block,

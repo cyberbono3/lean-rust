@@ -19,8 +19,8 @@
 use std::cmp::Ordering;
 
 use protocol::{
-    is_proposer, AttestationData, Block, BlockBody, Checkpoint, SignedAttestation, Slot, State,
-    ValidatorIndex, MAX_BODY_ATTESTATIONS,
+    is_proposer, Attestation, AttestationData, Block, BlockBody, Checkpoint, SignedAttestation,
+    Slot, State, ValidatorIndex, MAX_BODY_ATTESTATIONS,
 };
 use ssz::HashTreeRoot;
 use types::{Bytes32, Signature};
@@ -50,15 +50,15 @@ pub struct ProducedBlock {
     /// `attestation_signatures[i]` is the signature the pooled vote carried
     /// for `block.body.attestations[i]`.
     ///
-    /// Both lists are projected from one stabilized slice of signed votes by
-    /// [`body_from`] and [`signatures_from`], so the correspondence is
-    /// structural rather than reconstructed. The runtime boundary appends the
-    /// proposer's own signature after these to form the block's positional
-    /// signature list.
+    /// This list and `block.body.attestations` are the two halves of one `unzip`
+    /// over the stabilized votes, so the correspondence is structural: there is
+    /// no second traversal that could order them differently. The runtime
+    /// boundary appends the proposer's own signature after these to form the
+    /// block's positional signature list.
     ///
     /// These bytes are UNVERIFIED: an on-chain vote enters the pool with
     /// whatever signature the block-import path paired with it. Closing that is
-    /// an ingress concern — see [`Store::collect_includable_votes`].
+    /// an ingress concern — see `Store::collect_includable_votes`.
     pub attestation_signatures: Vec<Signature>,
 }
 
@@ -127,7 +127,7 @@ impl Store {
 
         let (attestations, post_state) =
             self.converge_attestations(head_root, slot, validator, &head_state)?;
-        self.finalize_produced_block(head_root, slot, validator, &attestations, post_state)
+        self.finalize_produced_block(head_root, slot, validator, attestations, post_state)
     }
 
     /// Convergent attestation gathering: rebuild the candidate's post-state
@@ -165,16 +165,30 @@ impl Store {
         head_root: Bytes32,
         slot: Slot,
         validator: ValidatorIndex,
-        attestations: &[SignedAttestation],
+        attestations: Vec<SignedAttestation>,
         post_state: State,
     ) -> Result<ProducedBlock, ForkchoiceError> {
         let post_state_root: Bytes32 = post_state.hash_tree_root().into();
+        // Split the stabilized votes into the block body and the matching ordered
+        // signature list in ONE pass, by value. Taking ownership matters twice
+        // over: it moves each 3116-byte signature instead of deep-copying it —
+        // this runs under the engine's store lock, and at the registry cap a copy
+        // would be megabytes of memcpy while every reader waits — and it makes the
+        // two lists impossible to desync, because a single `unzip` cannot produce
+        // a different order for one half than the other.
+        let (body_attestations, attestation_signatures): (Vec<Attestation>, Vec<Signature>) =
+            attestations
+                .into_iter()
+                .map(|sv| (sv.message, sv.signature))
+                .unzip();
         let block = Block {
             slot,
             proposer_index: validator,
             parent_root: head_root,
             state_root: post_state_root,
-            body: body_from(attestations),
+            body: BlockBody {
+                attestations: body_attestations,
+            },
         };
         let root: Bytes32 = block.hash_tree_root().into();
         self.track_block(block.clone(), post_state.clone())?;
@@ -185,7 +199,7 @@ impl Store {
             parent_root: head_root,
             post_state,
             post_state_root,
-            attestation_signatures: signatures_from(attestations),
+            attestation_signatures,
         })
     }
 
@@ -296,7 +310,7 @@ impl Store {
     /// paired with it — peer-supplied, and covered by no block root, or a default
     /// when the list is short — and such a vote satisfies this filter cleanly.
     /// The producer DOES assemble that list and does NOT verify those bytes, so
-    /// the obligation is unmet and sits at ingress, in three places — none of which
+    /// the obligation is unmet. It sits at ingress, in three places — none of which
     /// this filter can stand in for:
     ///
     /// 1. The gossip block ingress, once its signature gate is armed.
@@ -305,10 +319,21 @@ impl Store {
     ///    folds the same peer-supplied pairs into this pool. Closing it needs
     ///    verify-on-sync or a checkpoint-bound trust anchor.
     ///
-    /// Verification cannot move here: it belongs at the runtime boundary, never in
-    /// `forkchoice`. Nor can it move to the assembly site — by then the body is
-    /// committed to `state_root` and the block is tracked, so dropping an
-    /// attestation would mean rebuilding and untracking it.
+    /// The three are NOT independent, and 2 dominates. `accept_new_votes` promotes
+    /// with `extend` — an unconditional overwrite, unlike the `insert_if_newer`
+    /// paths — and `evict_if_older` uses a strict `<`, so a pending gossip vote at
+    /// the SAME slot as a block-folded entry survives promotion and replaces it.
+    /// Arming the block gate therefore does not protect an entry that an unverified
+    /// same-slot gossip vote will clobber immediately afterwards. Close 2 first.
+    ///
+    /// Verification is not IMPOSSIBLE at the two nearer sites, only rejected here.
+    /// It could enter this crate as an injected predicate — a port, as the runtime's
+    /// verify seam already is — without creating a `crypto` edge; and the assembly
+    /// site could fail production outright rather than drop an attestation, which is
+    /// what would otherwise move `state_root` under an already-tracked block. Both
+    /// were declined because a producer-side filter cannot stop peer-controlled bytes
+    /// from entering the pool in the first place — only ingress can — and a filter
+    /// that silently drops honest votes is worse than one that never runs.
     ///
     /// The result is capped at `MAX_BODY_ATTESTATIONS - already_included.len()`,
     /// one BELOW the SSZ list bound: the block's positional signature list is
@@ -334,27 +359,17 @@ impl Store {
     }
 }
 
-/// Builds a [`BlockBody`] of plain attestations from pooled signed votes.
+/// Builds a [`BlockBody`] of plain attestations from pooled signed votes, for
+/// the candidate blocks the convergence loop builds and throws away.
 ///
-/// This projects the MESSAGE half; [`signatures_from`] projects the signature
-/// half of the same votes. The two together are the block's positional signature
-/// list, minus the proposer's own trailing element.
+/// The FINAL block does not use this: [`Store::finalize_produced_block`] splits
+/// the stabilized votes by value instead, so the body and its signature list come
+/// out of one `unzip` and cannot desync. Candidates need no signatures — they
+/// exist only to compute a post-state — so borrowing is right here.
 fn body_from(votes: &[SignedAttestation]) -> BlockBody {
     BlockBody {
         attestations: votes.iter().map(|sv| sv.message).collect(),
     }
-}
-
-/// Projects the signature half of the same stabilized votes [`body_from`]
-/// projects the message half from.
-///
-/// Called on the SAME slice, in the same order, so `body.attestations[i]` and
-/// `signatures[i]` describe one vote. That is what makes the positional pairing
-/// structural: neither list is rebuilt from the mutable vote pool, where a
-/// later-arriving vote for the same validator could pair a signature with an
-/// attestation it does not cover.
-fn signatures_from(votes: &[SignedAttestation]) -> Vec<Signature> {
-    votes.iter().map(|sv| sv.signature.clone()).collect()
 }
 
 /// Builds a candidate block + post-state for `(slot, validator)` over
@@ -495,6 +510,15 @@ mod tests {
     /// non-vacuous: `produce_setup`'s pool is EMPTY, and an empty pool returns an
     /// empty result under any cap — which is why asserting only the full half
     /// would prove nothing about the bound.
+    ///
+    /// The two fixtures materialize ~8k `SignedAttestation`s (tens of MB) to reach a
+    /// `saturating_sub` boundary. Deliberate: the cap is a compile-time constant with
+    /// no test seam, so the boundary can only be reached by filling to it.
+    ///
+    /// Named for the invariant it defends, not the function it calls. The
+    /// producer-level statement cannot be proven through `produce_block` at this
+    /// fixture size — the pool is keyed by validator, so a 4-validator store can
+    /// never hold 4095 distinct votes — so the cap arithmetic is the reachable proxy.
     #[test]
     fn producer_reserves_proposer_signature_slot() {
         const SEEDED: ValidatorIndex = ValidatorIndex::new(2);

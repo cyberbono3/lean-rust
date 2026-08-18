@@ -43,6 +43,29 @@ const IDENTIFY_PROTOCOL_VERSION: &str = "lean/0.1.0";
 /// traffic. One second matches the devnet0 reference profile.
 const GOSSIPSUB_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Largest gossip payload this node will publish or accept, in bytes.
+///
+/// Set EXPLICITLY because the libp2p default (64 KiB) is far too small for a
+/// block. Every body attestation travels with its own 3116-byte signature, so a
+/// block is `3352 + 3252 * N` bytes for `N` body attestations: the default caps
+/// a block at 19 attestations, and the 20th makes it unpublishable. That failure
+/// is quiet in the worst way — the block is already persisted and fork choice has
+/// already moved this node's head onto it, so the node advances on a block no
+/// peer ever receives. Leaving the default would make a routine validator-count
+/// change fork this node off the network.
+///
+/// 1 MiB carries ~330 body attestations — measured on the compressed wire form,
+/// where snappy recovers only about 4% against high-entropy signature bytes —
+/// well past any devnet validator count, while keeping the inbound allowance
+/// small enough not to be an amplification surface. It is NOT the protocol maximum: a block at the registry cap is
+/// ~13.3 MB, which no reasonable gossip limit accommodates and which the
+/// two-field signature container is what actually fixes.
+///
+/// Interop note: this bounds what this node ACCEPTS as well as what it sends, so
+/// peers must agree on it. A peer still on the 64 KiB default will drop anything
+/// larger regardless of what is set here.
+pub(crate) const MAX_GOSSIP_PAYLOAD_BYTES: usize = 1024 * 1024;
+
 /// Composite behaviour driven by the host swarm task.
 ///
 /// Field names double as gossipsub / `request_response` / identify / ping
@@ -91,6 +114,7 @@ impl DevnetBehaviour {
         let config = gossipsub::ConfigBuilder::default()
             .validation_mode(gossipsub::ValidationMode::Anonymous)
             .heartbeat_interval(GOSSIPSUB_HEARTBEAT_INTERVAL)
+            .max_transmit_size(MAX_GOSSIP_PAYLOAD_BYTES)
             .message_id_fn(gossipsub_message_id)
             .build()
             .map_err(Self::gossipsub_init_err)?;

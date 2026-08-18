@@ -613,9 +613,10 @@ impl Store {
     /// inside that preimage, so writing a resolved root back into the vote would
     /// leave a stored envelope whose signature verifies against nothing — and, since
     /// the producer assembles a full positional signature list from these stored
-    /// signatures, would publish that envelope in a block. The reference implementation substitutes on the
-    /// PRODUCER side (`forkchoice/store.py:1289-:1295 @ 0c9528ac`), before anything
-    /// is signed, and never edits a payload on ingress
+    /// signatures, would publish that envelope in a block. The reference
+    /// implementation substitutes on the PRODUCER side
+    /// (`forkchoice/store.py:1289-:1295 @ 0c9528ac`), before anything is signed,
+    /// and never edits a payload on ingress
     /// (`store.py:363`, `:388-:390`).
     ///
     /// The guard stays narrow: only an all-zero source on a SLOT-0 vote against a
