@@ -21,6 +21,10 @@
 //! They stay `const` because the gossip ingress router matches on them as
 //! pattern arms.
 
+use core::fmt;
+
+use crate::error::NetworkingError;
+
 /// Declares the gossip topic components and assembles the full topic
 /// strings from them at compile time.
 ///
@@ -101,7 +105,234 @@ lean_topics! {
     },
 }
 
+/// Upper bound on an inbound topic string, in bytes.
+///
+/// Topic strings arrive from peers. The longest string this client can
+/// legitimately see is a subnet topic with a 20-digit subnet id, well under
+/// this cap; the bound exists so a peer cannot make the parser walk an
+/// arbitrarily long buffer before rejecting it.
+const MAX_TOPIC_LEN: usize = 128;
+
+/// Prefix of an attestation-subnet topic name, before the subnet id.
+///
+/// leanSpec `networking/gossipsub/topic.py:100`
+/// (`ATTESTATION_SUBNET_TOPIC_PREFIX`). Note this is a PREFIX, not a topic
+/// name: the emitted name is `attestation_{subnet_id}`
+/// (`topic.py:170`), and a bare `attestation` cannot be re-emitted at all.
+pub const ATTESTATION_SUBNET_PREFIX: &str = "attestation";
+
+/// Which message type a parsed topic carries.
+///
+/// The spec's third kind, `aggregation`
+/// (`networking/gossipsub/topic.py:106`), is deliberately absent: this
+/// client neither publishes nor subscribes to it, so an inbound
+/// `aggregation` topic parses as [`NetworkingError::UnknownTopicName`]
+/// until the subnet-topology work adds the variant alongside the topic
+/// itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TopicKind {
+    /// Signed blocks with their attestation payload.
+    Block,
+    /// Attestations for one attestation subnet.
+    AttestationSubnet {
+        /// Subnet this topic carries. One subnet exists on this devnet.
+        subnet_id: u64,
+    },
+}
+
+/// A parsed gossip topic, borrowing its fork digest from the input.
+///
+/// Construct with [`GossipTopicRef::parse`]. [`fmt::Display`] re-emits the
+/// canonical four-component string, so `parse` then `to_string` is the
+/// identity on every string this client accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GossipTopicRef<'a> {
+    /// Message type carried by the topic.
+    pub kind: TopicKind,
+    /// Fork digest component as it appeared on the wire.
+    pub fork_digest: &'a str,
+}
+
+impl<'a> GossipTopicRef<'a> {
+    /// Parses a full topic string into its components.
+    ///
+    /// Validates the shape (exactly one leading `/`, exactly four
+    /// components, non-empty fork digest), the prefix and the encoding
+    /// postfix, and resolves the topic name. An empty prefix or encoding
+    /// fails its equality check rather than the shape check, and an empty
+    /// topic name resolves to nothing — see `# Errors` for which variant
+    /// each produces.
+    ///
+    /// The fork digest is NOT validated here — the spec splits the two as
+    /// well (`topic.py:192-:232` parses, `topic.py:179-:190` validates the
+    /// fork); use [`Self::parse_validated`] to do both.
+    ///
+    /// # Divergence from the spec parser
+    ///
+    /// leanSpec's `parse_topic_string` (`topic.py:294-:314`) is
+    /// `topic_str.lstrip("/").split("/")` with a component-count check and
+    /// nothing else. This parser is tighter in three ways:
+    ///
+    /// 1. It requires a leading `/`; the spec accepts a topic with none.
+    /// 2. It requires exactly one; the spec's `lstrip` accepts any number.
+    /// 3. It rejects an empty fork-digest component; the spec accepts one.
+    ///
+    /// None of the three can reject a conformant peer, because
+    /// `to_topic_id` (`topic.py:161-:173`) only ever emits the
+    /// single-leading-slash, non-empty form. See also the subnet-id
+    /// canonicalisation on [`parse_subnet_id`], which is tighter for a
+    /// stronger reason: without it, `parse` then [`fmt::Display`] would not
+    /// round-trip.
+    ///
+    /// # Errors
+    /// - [`NetworkingError::MalformedTopic`] — wrong component count,
+    ///   missing leading `/`, empty fork-digest component, or over
+    ///   [`MAX_TOPIC_LEN`].
+    /// - [`NetworkingError::TopicComponentMismatch`] — wrong prefix or
+    ///   wrong encoding postfix, empty ones included.
+    /// - [`NetworkingError::UnknownTopicName`] — a topic name this client
+    ///   does not route, including an empty one and a non-canonical subnet
+    ///   id.
+    pub fn parse(topic: &'a str) -> Result<Self, NetworkingError> {
+        if topic.len() > MAX_TOPIC_LEN {
+            return Err(NetworkingError::MalformedTopic {
+                reason: "topic exceeds maximum length",
+            });
+        }
+        let body = topic
+            .strip_prefix('/')
+            .ok_or(NetworkingError::MalformedTopic {
+                reason: "topic must start with '/'",
+            })?;
+
+        let mut parts = body.split('/');
+        let (Some(prefix), Some(fork_digest), Some(topic_name), Some(encoding), None) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) else {
+            return Err(NetworkingError::MalformedTopic {
+                reason: "topic must have exactly four components",
+            });
+        };
+
+        if fork_digest.is_empty() {
+            return Err(NetworkingError::MalformedTopic {
+                reason: "fork digest component is empty",
+            });
+        }
+        if prefix != TOPIC_PREFIX {
+            return Err(NetworkingError::TopicComponentMismatch {
+                component: "prefix",
+                expected: TOPIC_PREFIX,
+            });
+        }
+        if encoding != ENCODING_POSTFIX {
+            return Err(NetworkingError::TopicComponentMismatch {
+                component: "encoding",
+                expected: ENCODING_POSTFIX,
+            });
+        }
+
+        Ok(Self {
+            kind: parse_topic_name(topic_name).ok_or(NetworkingError::UnknownTopicName)?,
+            fork_digest,
+        })
+    }
+
+    /// Parses a topic and rejects it unless its fork digest matches.
+    ///
+    /// Mirrors leanSpec `from_string_validated`
+    /// (`networking/gossipsub/topic.py:234-:254`). A digest mismatch is
+    /// reported as [`NetworkingError::TopicComponentMismatch`] on the
+    /// `"fork digest"` component — a peer on another fork is not a
+    /// malformed peer, and acting on that distinction (refusing to dial)
+    /// belongs to the ENR work, not here.
+    ///
+    /// # Errors
+    /// Every error from [`Self::parse`], plus
+    /// [`NetworkingError::TopicComponentMismatch`] on a digest mismatch.
+    pub fn parse_validated(
+        topic: &'a str,
+        expected_fork_digest: &'static str,
+    ) -> Result<Self, NetworkingError> {
+        let parsed = Self::parse(topic)?;
+        if parsed.fork_digest != expected_fork_digest {
+            return Err(NetworkingError::TopicComponentMismatch {
+                component: "fork digest",
+                expected: expected_fork_digest,
+            });
+        }
+        Ok(parsed)
+    }
+}
+
+impl fmt::Display for GossipTopicRef<'_> {
+    /// Re-emits the canonical four-component string.
+    ///
+    /// Mirrors leanSpec `to_topic_id`
+    /// (`networking/gossipsub/topic.py:161-:173`).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "/{TOPIC_PREFIX}/{}/", self.fork_digest)?;
+        match self.kind {
+            TopicKind::Block => f.write_str("block")?,
+            TopicKind::AttestationSubnet { subnet_id } => {
+                write!(f, "{ATTESTATION_SUBNET_PREFIX}_{subnet_id}")?;
+            }
+        }
+        write!(f, "/{ENCODING_POSTFIX}")
+    }
+}
+
+/// Resolves a topic-name component to its [`TopicKind`].
+///
+/// Subnet topics are matched by prefix, as the spec does
+/// (`networking/gossipsub/topic.py:213-:225`), before the plain-name
+/// lookup. The prefix has one source — [`ATTESTATION_SUBNET_PREFIX`], the
+/// same constant [`fmt::Display`] emits — so the parse path and the emit
+/// path cannot drift.
+///
+/// The plain-name arm is an explicit `match`, NOT a lookup in
+/// [`ALL_TOPICS`]: that table maps names to full strings, and resolving any
+/// hit in it to a single kind would silently mis-route the moment a second
+/// plain-named topic exists.
+fn parse_topic_name(topic_name: &str) -> Option<TopicKind> {
+    if let Some(raw) = topic_name
+        .strip_prefix(ATTESTATION_SUBNET_PREFIX)
+        .and_then(|rest| rest.strip_prefix('_'))
+    {
+        return parse_subnet_id(raw).map(|subnet_id| TopicKind::AttestationSubnet { subnet_id });
+    }
+    match topic_name {
+        "block" => Some(TopicKind::Block),
+        _ => None,
+    }
+}
+
+/// Parses a subnet id, accepting only the canonical decimal form.
+///
+/// Deliberately stricter than the spec, which parses the component with
+/// Python's `int()` (`networking/gossipsub/topic.py:218`) and therefore
+/// accepts `007`, `+7`, `1_0` and non-ASCII digits. Rust's own
+/// `str::parse::<u64>` still accepts `007` and `+7`, and since the topic is
+/// re-emitted canonically as `attestation_7`, a permissive parse would
+/// break `parse` then [`fmt::Display`] round-tripping. Rejecting
+/// non-canonical forms cannot reject a conformant peer: the spec only ever
+/// EMITS the canonical form.
+fn parse_subnet_id(raw: &str) -> Option<u64> {
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if raw.len() > 1 && raw.starts_with('0') {
+        return None;
+    }
+    raw.parse::<u64>().ok()
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -138,6 +369,153 @@ mod tests {
                 "topic {name}: not the four-component form",
             );
         }
+    }
+
+    #[test]
+    fn block_topic_round_trips() {
+        let parsed = GossipTopicRef::parse(BLOCK_TOPIC_V1).expect("block topic parses");
+        assert_eq!(parsed.kind, TopicKind::Block);
+        assert_eq!(parsed.fork_digest, FORK_DIGEST);
+        assert_eq!(parsed.to_string(), BLOCK_TOPIC_V1);
+    }
+
+    #[test]
+    fn subnet_topic_round_trips() {
+        let topic = format!("/{TOPIC_PREFIX}/{FORK_DIGEST}/attestation_0/{ENCODING_POSTFIX}");
+        let parsed = GossipTopicRef::parse(&topic).expect("subnet topic parses");
+        assert_eq!(parsed.kind, TopicKind::AttestationSubnet { subnet_id: 0 });
+        assert_eq!(parsed.to_string(), topic);
+    }
+
+    /// Discriminates the correct `parse_topic_name` from one that resolves
+    /// every `ALL_TOPICS` hit to `TopicKind::Block`. `vote` is in the table
+    /// and is not a spec topic name, so it must NOT resolve.
+    #[test]
+    fn vote_topic_name_does_not_resolve() {
+        assert!(matches!(
+            GossipTopicRef::parse(VOTE_TOPIC_V1),
+            Err(NetworkingError::UnknownTopicName)
+        ));
+    }
+
+    #[test]
+    fn parser_rejects_malformed_shape() {
+        let cases = [
+            ("leanconsensus/devnet0/block/ssz_snappy", "no leading slash"),
+            ("/leanconsensus/devnet0/block", "three components"),
+            (
+                "/leanconsensus/devnet0/block/ssz_snappy/x",
+                "five components",
+            ),
+            ("/leanconsensus//block/ssz_snappy", "empty fork digest"),
+        ];
+        for (input, case) in cases {
+            assert!(
+                matches!(
+                    GossipTopicRef::parse(input),
+                    Err(NetworkingError::MalformedTopic { .. })
+                ),
+                "case {case}: expected MalformedTopic",
+            );
+        }
+    }
+
+    #[test]
+    fn parser_rejects_wrong_prefix_and_encoding() {
+        let cases = [
+            (
+                format!("/ethconsensus/{FORK_DIGEST}/block/{ENCODING_POSTFIX}"),
+                "prefix",
+            ),
+            (
+                format!("/{TOPIC_PREFIX}/{FORK_DIGEST}/block/ssz"),
+                "encoding",
+            ),
+        ];
+        for (input, component) in cases {
+            match GossipTopicRef::parse(&input) {
+                Err(NetworkingError::TopicComponentMismatch { component: got, .. }) => {
+                    assert_eq!(got, component);
+                }
+                other => panic!("case {component}: expected mismatch, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parser_rejects_unknown_topic_name() {
+        // `aggregation` is a real spec topic this client does not route
+        // (owned by the subnet-topology work); `nonsense` is not a topic at
+        // all; a bare `attestation` cannot be re-emitted and so is not one
+        // either.
+        for name in ["aggregation", "nonsense", "attestation"] {
+            let topic = format!("/{TOPIC_PREFIX}/{FORK_DIGEST}/{name}/{ENCODING_POSTFIX}");
+            assert!(
+                matches!(
+                    GossipTopicRef::parse(&topic),
+                    Err(NetworkingError::UnknownTopicName)
+                ),
+                "topic name {name} must not resolve",
+            );
+        }
+    }
+
+    /// The canonical-form guard: every accepted subnet component must
+    /// re-emit identically, so non-canonical spellings are rejected rather
+    /// than normalised. See the doc comment on `parse_subnet_id`.
+    #[test]
+    fn parser_rejects_non_canonical_subnet_ids() {
+        for raw in [
+            "007",
+            "+7",
+            "-1",
+            "1_0",
+            "\u{667}",
+            "",
+            " 7",
+            "18446744073709551616",
+        ] {
+            let topic =
+                format!("/{TOPIC_PREFIX}/{FORK_DIGEST}/attestation_{raw}/{ENCODING_POSTFIX}");
+            assert!(
+                matches!(
+                    GossipTopicRef::parse(&topic),
+                    Err(NetworkingError::UnknownTopicName)
+                ),
+                "subnet id {raw:?} must be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn parser_rejects_oversized_topic() {
+        let topic = format!(
+            "/{TOPIC_PREFIX}/{}/block/{ENCODING_POSTFIX}",
+            "d".repeat(MAX_TOPIC_LEN)
+        );
+        assert!(matches!(
+            GossipTopicRef::parse(&topic),
+            Err(NetworkingError::MalformedTopic { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_validated_rejects_foreign_fork_digest() {
+        let topic = format!("/{TOPIC_PREFIX}/devnet9/block/{ENCODING_POSTFIX}");
+        match GossipTopicRef::parse_validated(&topic, FORK_DIGEST) {
+            Err(NetworkingError::TopicComponentMismatch {
+                component,
+                expected,
+            }) => {
+                assert_eq!(component, "fork digest");
+                assert_eq!(expected, FORK_DIGEST);
+            }
+            other => panic!("expected fork-digest mismatch, got {other:?}"),
+        }
+        assert!(
+            GossipTopicRef::parse(&topic).is_ok(),
+            "parse alone must not validate the fork",
+        );
     }
 
     #[test]

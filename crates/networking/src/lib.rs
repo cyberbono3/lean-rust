@@ -19,6 +19,8 @@
 //! - [`BLOCK_TOPIC_V1`], [`VOTE_TOPIC_V1`] — full gossipsub topic strings,
 //!   composed from [`TOPIC_PREFIX`], [`FORK_DIGEST`], the topic name and
 //!   [`ENCODING_POSTFIX`].
+//! - [`GossipTopicRef`] — parses a topic string back into its four
+//!   components and re-emits the canonical form.
 //! - [`NetworkingError`] — crate-level error enum.
 
 #![forbid(unsafe_code)]
@@ -45,5 +47,6 @@ pub use gossipsub::{
 pub use messages::{BlocksByRootRequest, BlocksByRootResponse, Status};
 pub use protocol_ids::{ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1};
 pub use topics::{
-    ALL_TOPICS, BLOCK_TOPIC_V1, ENCODING_POSTFIX, FORK_DIGEST, TOPIC_PREFIX, VOTE_TOPIC_V1,
+    GossipTopicRef, TopicKind, ALL_TOPICS, ATTESTATION_SUBNET_PREFIX, BLOCK_TOPIC_V1,
+    ENCODING_POSTFIX, FORK_DIGEST, TOPIC_PREFIX, VOTE_TOPIC_V1,
 };
