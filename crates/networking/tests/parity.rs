@@ -30,9 +30,10 @@ use lean_wire::{
 };
 use protocol::{
     AttestationData, Block, BlockBody, BlockHeader, Checkpoint, SignedAttestation,
-    SignedBlockWithAttestation, State,
+    SignedBlockWithAttestation, Slot, State,
 };
 use ssz::{decode, encode, Decode, Encode, HashTreeRoot};
+use types::Bytes32;
 
 // =============================================================================
 // per-fixture entries
@@ -74,6 +75,10 @@ const FIXTURES: &[(&str, &[u8])] = &[
     (
         "slot7.attestationdata",
         include_bytes!("data/wire-parity/slot7.attestationdata.ssz"),
+    ),
+    (
+        "handshake.status",
+        include_bytes!("data/wire-parity/handshake.status.ssz"),
     ),
     (
         "validator3.signedattestation",
@@ -123,8 +128,7 @@ where
         "{name}: stream cursor must be exhausted",
     );
 
-    // (4) Generic value-level codec sanity (skip Status here — covered
-    // separately because it isn't in the fixture corpus).
+    // (4) Generic value-level codec sanity.
     let value_back: T = decode_req_resp(&encode_req_resp(&value)).expect("value decode");
     assert_eq!(value_back, value, "{name}: typed req/resp round-trip");
 }
@@ -188,6 +192,24 @@ fn signed_block_round_trip() {
 #[test]
 fn attestationdata_round_trip() {
     assert_round_trip::<AttestationData>("slot7.attestationdata", fixture("slot7.attestationdata"));
+}
+
+/// The 80-byte handshake container, byte-for-byte against a vector
+/// generated from the pinned spec. Length and round-trip alone would not
+/// catch a `finalized`/`head` swap, so the decoded fields are asserted
+/// against the known generator inputs.
+#[test]
+fn status_matches_spec_fixture() {
+    let bytes = fixture("handshake.status");
+    assert_eq!(bytes.len(), 80, "spec fixes Status at 80 bytes");
+
+    let status: Status = decode(bytes).expect("ssz decode");
+    assert_eq!(status.finalized.root, Bytes32::new([0x11; 32]));
+    assert_eq!(status.finalized.slot, Slot::new(7));
+    assert_eq!(status.head.root, Bytes32::new([0x22; 32]));
+    assert_eq!(status.head.slot, Slot::new(12));
+
+    assert_round_trip::<Status>("handshake.status", bytes);
 }
 
 #[test]
@@ -277,6 +299,9 @@ fn multi_chunk_stream_carries_independent_frames() {
     assert_eq!(read_req_resp_frame(&mut cursor, None).unwrap(), None);
 }
 
+/// Kept alongside `status_matches_spec_fixture`, which subsumes the
+/// round-trip half: this one exercises `Status::default()`, the all-zero
+/// container, which the fixture deliberately is not.
 #[test]
 fn generic_codec_round_trips_status() {
     let status = Status::default();
