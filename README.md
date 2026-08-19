@@ -130,7 +130,7 @@ cross-client traffic is still outstanding.
 
 The gossip fork digest is an interop-negotiated string, not a computed digest.
 The reference implementation hardcodes the same value with the note that it
-must match the fork string ream and other clients use, and a node whose digest
+must match the fork string that ream and other clients use, and a node whose digest
 differs subscribes to topics no peer is on — it meets nobody and reports no
 error. It has not been reconfirmed against pq-devnet-4: the reference code
 still says `devnet0` while its prose docs show `devnet3` for the devnet-3
