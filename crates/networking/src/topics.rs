@@ -430,10 +430,11 @@ mod tests {
     /// could only fail if someone edited one line and not the other.
     #[test]
     fn topics_are_composed_from_components() {
-        for (name, full) in ALL_TOPICS {
+        for &(name, full) in ALL_TOPICS {
+            let expected = format!("/{TOPIC_PREFIX}/{FORK_DIGEST}/{name}/{ENCODING_POSTFIX}");
             assert_eq!(
-                *full,
-                format!("/{TOPIC_PREFIX}/{FORK_DIGEST}/{name}/{ENCODING_POSTFIX}"),
+                full,
+                expected.as_str(),
                 "topic {name}: not the four-component form",
             );
         }
