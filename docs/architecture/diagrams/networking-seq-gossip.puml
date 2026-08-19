@@ -23,7 +23,7 @@ Host --> Producer : Ok(MessageId)
 == inbound ==
 Gossip -> Swarm : SwarmEvent Gossipsub::Message
 Swarm -> Handler : route_gossipsub_message(id, msg, block_tx, vote_tx)
-Handler -> Handler : match topic == BLOCK_TOPIC_V1 / VOTE_TOPIC_V1
+Handler -> Handler : match topic == BLOCK_TOPIC_V1 / ATTESTATION_SUBNET_TOPIC_V1
 Handler -> Wire : decode_gossip::<SignedBlock>(data)
 Wire --> Handler : SignedBlock
 Handler -> Rx : try_send(value)

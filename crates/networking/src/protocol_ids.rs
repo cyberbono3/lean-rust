@@ -41,15 +41,27 @@ impl PartialEq<&str> for ProtocolId {
     }
 }
 
-/// Protocol ID for the devnet0 status exchange.
+/// Protocol ID for the status handshake.
+///
+/// leanSpec `networking/reqresp/message.py:17`.
 pub const STATUS_PROTOCOL_V1: ProtocolId = ProtocolId("/leanconsensus/req/status/1/ssz_snappy");
 
 /// Protocol ID for block recovery by root.
 ///
-/// Resource name is `lean_blocks_by_root` (not `blocks_by_root`); the
-/// encoding suffix `ssz_snappy` is mandatory.
+/// leanSpec `networking/reqresp/message.py:43`. The resource name is
+/// `blocks_by_root` with no client-specific prefix, and the `ssz_snappy`
+/// encoding suffix is mandatory.
 pub const BLOCKS_BY_ROOT_PROTOCOL_V1: ProtocolId =
-    ProtocolId("/leanconsensus/req/lean_blocks_by_root/1/ssz_snappy");
+    ProtocolId("/leanconsensus/req/blocks_by_root/1/ssz_snappy");
+
+/// Every req/resp protocol this client serves.
+///
+/// Mirrors leanSpec `REQRESP_PROTOCOL_IDS`
+/// (`networking/reqresp/handler.py:225-:231`) — exactly `Status` and
+/// `BlocksByRoot`. Advertising anything else is a conformance break, which
+/// is why this is a single list rather than two call sites that could
+/// drift.
+pub const REQRESP_PROTOCOLS: &[ProtocolId] = &[STATUS_PROTOCOL_V1, BLOCKS_BY_ROOT_PROTOCOL_V1];
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -57,16 +69,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_protocol_v1_matches_canonical_string() {
-        assert_eq!(STATUS_PROTOCOL_V1, "/leanconsensus/req/status/1/ssz_snappy");
+    fn protocol_ids_match_spec() {
+        // leanSpec networking/reqresp/message.py:17 and :43.
+        let cases = [
+            (STATUS_PROTOCOL_V1, "/leanconsensus/req/status/1/ssz_snappy"),
+            (
+                BLOCKS_BY_ROOT_PROTOCOL_V1,
+                "/leanconsensus/req/blocks_by_root/1/ssz_snappy",
+            ),
+        ];
+        for (id, want) in cases {
+            assert_eq!(id, want);
+        }
     }
 
+    /// leanSpec `networking/reqresp/handler.py:225-:231` serves exactly
+    /// these two protocols. A third entry here is a conformance break.
     #[test]
-    fn blocks_by_root_protocol_v1_matches_canonical_string() {
-        assert_eq!(
-            BLOCKS_BY_ROOT_PROTOCOL_V1,
-            "/leanconsensus/req/lean_blocks_by_root/1/ssz_snappy",
-        );
+    fn served_protocol_set_matches_spec() {
+        assert_eq!(REQRESP_PROTOCOLS.len(), 2);
+        assert!(REQRESP_PROTOCOLS.contains(&STATUS_PROTOCOL_V1));
+        assert!(REQRESP_PROTOCOLS.contains(&BLOCKS_BY_ROOT_PROTOCOL_V1));
     }
 
     #[test]

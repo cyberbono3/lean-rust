@@ -39,7 +39,7 @@ impl Topic {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Block => lean_wire::BLOCK_TOPIC_V1,
-            Self::Vote => lean_wire::VOTE_TOPIC_V1,
+            Self::Vote => lean_wire::ATTESTATION_SUBNET_TOPIC_V1,
         }
     }
 
@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn as_str_matches_networking_constants() {
         assert_eq!(Topic::Block.as_str(), lean_wire::BLOCK_TOPIC_V1);
-        assert_eq!(Topic::Vote.as_str(), lean_wire::VOTE_TOPIC_V1);
+        assert_eq!(Topic::Vote.as_str(), lean_wire::ATTESTATION_SUBNET_TOPIC_V1);
     }
 
     #[test]

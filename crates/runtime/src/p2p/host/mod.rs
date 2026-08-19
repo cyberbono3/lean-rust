@@ -40,7 +40,7 @@ pub(crate) enum HostCommand {
     /// [`crate::p2p::Host::publish_vote`].
     Publish {
         /// Pre-built libp2p topic (constructed from the canonical
-        /// [`lean_wire::BLOCK_TOPIC_V1`] / [`lean_wire::VOTE_TOPIC_V1`]
+        /// [`lean_wire::BLOCK_TOPIC_V1`] / [`lean_wire::ATTESTATION_SUBNET_TOPIC_V1`]
         /// strings via [`gossipsub::IdentTopic::new`]).
         topic: gossipsub::IdentTopic,
         /// SSZ + Snappy-block-compressed payload — produced upstream by

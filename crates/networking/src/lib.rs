@@ -16,6 +16,11 @@
 //!   [`ssz::Encode`] / [`ssz::Decode`] type.
 //! - [`write_req_resp_frame`], [`read_req_resp_frame`] — length-prefixed
 //!   `Read`/`Write` stream framing.
+//! - [`BLOCK_TOPIC_V1`], [`ATTESTATION_SUBNET_TOPIC_V1`] — full gossipsub topic strings,
+//!   composed from [`TOPIC_PREFIX`], [`FORK_DIGEST`], the topic name and
+//!   [`ENCODING_POSTFIX`].
+//! - [`GossipTopicRef`] — parses a topic string back into its four
+//!   components and re-emits the canonical form.
 //! - [`NetworkingError`] — crate-level error enum.
 
 #![forbid(unsafe_code)]
@@ -40,5 +45,10 @@ pub use gossipsub::{
     compute_gossipsub_message_id, MESSAGE_DOMAIN_INVALID_SNAPPY, MESSAGE_DOMAIN_VALID_SNAPPY,
 };
 pub use messages::{BlocksByRootRequest, BlocksByRootResponse, Status};
-pub use protocol_ids::{ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1, STATUS_PROTOCOL_V1};
-pub use topics::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};
+pub use protocol_ids::{
+    ProtocolId, BLOCKS_BY_ROOT_PROTOCOL_V1, REQRESP_PROTOCOLS, STATUS_PROTOCOL_V1,
+};
+pub use topics::{
+    GossipTopicRef, TopicKind, ALL_TOPICS, ATTESTATION_SUBNET_PREFIX, ATTESTATION_SUBNET_TOPIC_V1,
+    BLOCK_TOPIC_NAME, BLOCK_TOPIC_V1, ENCODING_POSTFIX, FORK_DIGEST, TOPIC_PREFIX,
+};

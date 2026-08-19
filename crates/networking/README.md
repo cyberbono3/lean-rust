@@ -13,7 +13,8 @@ libp2p driver lives in `lean-p2p-host`).
 - [`STATUS_PROTOCOL_V1`], [`BLOCKS_BY_ROOT_PROTOCOL_V1`], [`ProtocolId`] —
   libp2p protocol-ID constants.
 - [`MAX_REQUEST_BLOCKS`] — `BlocksByRoot` list-length cap.
-- [`BLOCK_TOPIC_V1`], [`VOTE_TOPIC_V1`] — gossipsub topic names.
+- [`BLOCK_TOPIC_V1`], [`ATTESTATION_SUBNET_TOPIC_V1`] — gossipsub topic
+  strings, composed from named components.
 - [`compute_gossipsub_message_id`](./src/gossipsub.rs) — deterministic
   20-byte gossipsub message-id primitive.
 - [`encode_req_resp`] / [`decode_req_resp`] / [`encode_gossip`] /
@@ -30,7 +31,7 @@ libp2p driver lives in `lean-p2p-host`).
 [`ProtocolId`]: ./src/protocol_ids.rs
 [`MAX_REQUEST_BLOCKS`]: ./src/config.rs
 [`BLOCK_TOPIC_V1`]: ./src/topics.rs
-[`VOTE_TOPIC_V1`]: ./src/topics.rs
+[`ATTESTATION_SUBNET_TOPIC_V1`]: ./src/topics.rs
 [`encode_req_resp`]: ./src/codecs.rs
 [`decode_req_resp`]: ./src/codecs.rs
 [`encode_gossip`]: ./src/codecs.rs

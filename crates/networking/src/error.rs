@@ -57,4 +57,32 @@ pub enum NetworkingError {
     /// Length-prefix uvarint did not fit in `u64`.
     #[error("req/resp frame length prefix overflows u64")]
     UvarintOverflow,
+
+    /// A gossip topic string did not have the four-component shape.
+    ///
+    /// `reason` is a static description of the structural violation
+    /// (component count, length cap, empty fork digest).
+    #[error("malformed gossip topic: {reason}")]
+    MalformedTopic {
+        /// Static description of the structural violation.
+        reason: &'static str,
+    },
+
+    /// A gossip topic component did not match the expected constant.
+    ///
+    /// Raised for the prefix and the encoding postfix, which the spec fixes
+    /// for every topic, and for a fork-digest mismatch when the caller asked
+    /// for the digest to be validated.
+    #[error("gossip topic {component}: expected {expected}")]
+    TopicComponentMismatch {
+        /// Which component failed: `"prefix"`, `"encoding"` or
+        /// `"fork digest"`.
+        component: &'static str,
+        /// The value that component was required to carry.
+        expected: &'static str,
+    },
+
+    /// The topic-name component named no topic this client routes.
+    #[error("unknown gossip topic name")]
+    UnknownTopicName,
 }

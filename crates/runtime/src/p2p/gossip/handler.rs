@@ -80,7 +80,7 @@ impl<T> GossipReceiver<T> {
 pub type BlockReceiver = GossipReceiver<(AdmitGuard, SignedBlockWithAttestation)>;
 
 /// Inbound channel for [`SignedAttestation`] payloads received on
-/// [`lean_wire::VOTE_TOPIC_V1`]. Carries its [`AdmitGuard`] alongside the payload.
+/// [`lean_wire::ATTESTATION_SUBNET_TOPIC_V1`]. Carries its [`AdmitGuard`] alongside the payload.
 pub type VoteReceiver = GossipReceiver<(AdmitGuard, SignedAttestation)>;
 
 /// Routes an inbound `gossipsub::Message` to the matching per-topic
@@ -128,7 +128,7 @@ pub(crate) fn route_gossipsub_message(
                 "block",
             );
         }
-        lean_wire::VOTE_TOPIC_V1 => {
+        lean_wire::ATTESTATION_SUBNET_TOPIC_V1 => {
             forward::<SignedAttestation>(
                 &peer,
                 admission,
@@ -388,7 +388,7 @@ mod tests {
             &source_peer(),
             &admission(),
             &dummy_id(),
-            &synth_message(lean_wire::VOTE_TOPIC_V1, payload),
+            &synth_message(lean_wire::ATTESTATION_SUBNET_TOPIC_V1, payload),
             &block_tx,
             &vote_tx,
         );

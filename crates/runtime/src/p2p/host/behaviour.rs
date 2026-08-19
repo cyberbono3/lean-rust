@@ -245,9 +245,39 @@ pub(crate) fn take_decompressed_for(id: &gossipsub::MessageId) -> Option<Vec<u8>
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use super::codec::RpcProtocol;
     use super::*;
-    use lean_wire::{BLOCK_TOPIC_V1, VOTE_TOPIC_V1};
+    use lean_wire::{ATTESTATION_SUBNET_TOPIC_V1, BLOCK_TOPIC_V1};
     use libp2p::gossipsub::{Message, TopicHash};
+
+    /// The protocols this host builds behaviours for are exactly the set
+    /// leanSpec serves (`networking/reqresp/handler.py:225-:231`), and the
+    /// codec resolves every one of them.
+    ///
+    /// The set has one definition, [`lean_wire::REQRESP_PROTOCOLS`]; this
+    /// asserts the two ids `build` names against it rather than restating
+    /// the list a third time.
+    ///
+    /// What it does NOT do is introspect the libp2p swarm — nothing in this
+    /// repository can enumerate a built `NetworkBehaviour`'s advertised
+    /// protocols — so a `request_response` field added with a protocol
+    /// absent from the spec set is invisible here and has to be caught in
+    /// review.
+    #[test]
+    fn served_protocols_match_spec_set() {
+        let built = [STATUS_PROTOCOL_V1, BLOCKS_BY_ROOT_PROTOCOL_V1];
+        assert_eq!(built.len(), lean_wire::REQRESP_PROTOCOLS.len());
+        for id in built {
+            assert!(
+                lean_wire::REQRESP_PROTOCOLS.contains(&id),
+                "{id} is built but is not in the spec set",
+            );
+            assert!(
+                RpcProtocol::resolve(id.as_str()).is_some(),
+                "codec must resolve every built protocol",
+            );
+        }
+    }
 
     fn message(topic: &str, data: Vec<u8>) -> Message {
         Message {
@@ -280,7 +310,7 @@ mod tests {
             ),
             (
                 "valid_snappy",
-                VOTE_TOPIC_V1,
+                ATTESTATION_SUBNET_TOPIC_V1,
                 snappy_encode(b"hello world"),
                 MESSAGE_DOMAIN_VALID_SNAPPY,
             ),
@@ -349,7 +379,7 @@ mod tests {
         // id-keyed cache must still hit.
         let raw = b"cross-thread payload";
         let encoded = snappy_encode(raw);
-        let msg = message(VOTE_TOPIC_V1, encoded);
+        let msg = message(ATTESTATION_SUBNET_TOPIC_V1, encoded);
 
         // Populate from a separate thread.
         let id = std::thread::spawn(move || gossipsub_message_id(&msg))
